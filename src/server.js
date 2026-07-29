@@ -164,8 +164,12 @@ function sanitizeContact(c) {
   const name = String(c?.name ?? '').trim().slice(0, 40);
   const phone = String(c?.phone ?? '').trim().slice(0, 24);
   if (!name) throw new Error('name required');
-  if (phone.replace(/\D/g, '').length < 7) throw new Error('valid phone required');
-  return { name, phone };
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 7) throw new Error('valid phone required');
+  // the kiosk sends the country prefix split out; keep it if present
+  const phoneE164 = String(c?.phoneE164 ?? '').trim().slice(0, 24) || '+' + digits;
+  const country = String(c?.country ?? '').trim().slice(0, 40);
+  return { name, phone, phoneE164, country };
 }
 
 const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];

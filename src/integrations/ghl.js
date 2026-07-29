@@ -23,8 +23,9 @@ export function buildPayload(cfg, job, event) {
     // contact — mapped to GHL standard fields
     first_name: name.split(' ')[0] || name,
     full_name: name,
-    phone: job.contact.phone, // keep as entered (with +country if given)
-    phone_e164: toE164(job.contact.phone),
+    phone: job.contact.phone, // as entered, e.g. "+65 91234567"
+    phone_e164: job.contact.phoneE164 || toE164(job.contact.phone),
+    country: job.contact.country || '',
     // context — map to GHL custom fields / used in the template
     fair: g.eventName || 'Not So Little Fair',
     tags: g.tags || [],
