@@ -46,6 +46,12 @@
   input[type=text], input[type=tel] { display: block; width: 100%; margin-top: 8px; padding: 15px; font-size: 18px;
     font-family: inherit; color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px; outline: none; }
   input:focus { border-color: var(--accent); }
+  .phone-row { display: flex; gap: 8px; margin-top: 8px; }
+  .phone-row select { flex: 0 0 auto; width: auto; padding: 15px 10px; font-size: 17px; font-family: inherit; font-weight: 600;
+    color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px; outline: none;
+    -webkit-appearance: none; appearance: none; text-align: center; }
+  .phone-row select:focus { border-color: var(--accent); }
+  .phone-row input { flex: 1; min-width: 0; margin-top: 0 !important; }
   .consent { display: flex; gap: 11px; align-items: flex-start; font-weight: 500; color: var(--muted); font-size: 14px; }
   .consent input { width: 24px; height: 24px; margin: 1px 0 0; accent-color: var(--accent2); flex: none; }
 
@@ -139,7 +145,12 @@
     <h2>First, who's it for?</h2>
     <p class="sub">So we can message you the moment it's ready to collect.</p>
     <label>Name<input id="f-name" type="text" autocomplete="off" autocapitalize="words" maxlength="40" placeholder="Your name" /></label>
-    <label>Mobile (WhatsApp)<input id="f-phone" type="tel" inputmode="tel" autocomplete="off" maxlength="24" placeholder="+60 12 345 6789" /></label>
+    <label>Mobile (WhatsApp)
+      <div class="phone-row">
+        <select id="f-cc" aria-label="Country code"></select>
+        <input id="f-phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="18" placeholder="9123 4567" />
+      </div>
+    </label>
     <label class="consent"><input id="f-consent" type="checkbox" /><span>OK to WhatsApp me when my keychain is ready, and about future workshops.</span></label>
     <div class="nav">
       <button class="btn ghost" data-go="welcome">Back</button>
@@ -447,6 +458,29 @@ const SHAPE_ICONS={
 };
 const SHAPES=[['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart'],['custom','Custom']];
 
+/* Country codes for the mobile field. Singapore first (booth default); `len`
+   is the accepted national-number digit count, `ph` the example placeholder. */
+const COUNTRIES=[
+  {cc:'65',flag:'🇸🇬',name:'Singapore',len:[8,8],ph:'9123 4567'},
+  {cc:'60',flag:'🇲🇾',name:'Malaysia',len:[9,10],ph:'12 345 6789'},
+  {cc:'62',flag:'🇮🇩',name:'Indonesia',len:[9,12],ph:'812 3456 7890'},
+  {cc:'63',flag:'🇵🇭',name:'Philippines',len:[10,10],ph:'917 123 4567'},
+  {cc:'66',flag:'🇹🇭',name:'Thailand',len:[9,9],ph:'81 234 5678'},
+  {cc:'84',flag:'🇻🇳',name:'Vietnam',len:[9,9],ph:'912 345 678'},
+  {cc:'852',flag:'🇭🇰',name:'Hong Kong',len:[8,8],ph:'5123 4567'},
+  {cc:'86',flag:'🇨🇳',name:'China',len:[11,11],ph:'131 2345 6789'},
+  {cc:'91',flag:'🇮🇳',name:'India',len:[10,10],ph:'98765 43210'},
+  {cc:'81',flag:'🇯🇵',name:'Japan',len:[10,10],ph:'90 1234 5678'},
+  {cc:'82',flag:'🇰🇷',name:'South Korea',len:[9,10],ph:'10 1234 5678'},
+  {cc:'886',flag:'🇹🇼',name:'Taiwan',len:[9,9],ph:'912 345 678'},
+  {cc:'61',flag:'🇦🇺',name:'Australia',len:[9,9],ph:'412 345 678'},
+  {cc:'64',flag:'🇳🇿',name:'New Zealand',len:[8,10],ph:'21 123 4567'},
+  {cc:'44',flag:'🇬🇧',name:'United Kingdom',len:[10,10],ph:'7400 123456'},
+  {cc:'1',flag:'🇺🇸',name:'USA / Canada',len:[10,10],ph:'415 555 0123'},
+  {cc:'971',flag:'🇦🇪',name:'UAE',len:[9,9],ph:'50 123 4567'},
+];
+const DEFAULT_CC='65';
+
 const state={contact:{name:'',phone:''},shape:'rectangle',customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
   pen:1.6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/};
 let lastGen=null;
@@ -464,12 +498,31 @@ function wireNav(){$$('[data-go]').forEach(el=>el.addEventListener('click',()=>{
     if(el.dataset.go==='review'&&!goReview())return;
     show(el.dataset.go);}));
   $('#again').addEventListener('click',resetAll);$('#save-img').addEventListener('click',savePicture);}
+function buildCountries(){
+  const sel=$('#f-cc');sel.innerHTML='';
+  for(const c of COUNTRIES){const o=document.createElement('option');o.value=c.cc;o.textContent=`${c.flag} +${c.cc}`;o.title=c.name;sel.appendChild(o);}
+  sel.value=DEFAULT_CC;
+  sel.addEventListener('change',syncPhonePlaceholder);
+  // keep the national number to digits/spaces only as it's typed
+  $('#f-phone').addEventListener('input',e=>{const v=e.target.value.replace(/[^\d ]/g,'');if(v!==e.target.value)e.target.value=v;});
+  syncPhonePlaceholder();
+}
+function currentCountry(){return COUNTRIES.find(c=>c.cc===$('#f-cc').value)||COUNTRIES[0];}
+function syncPhonePlaceholder(){$('#f-phone').placeholder=currentCountry().ph;}
+
 function validate(step){
-  if(step==='contact'){const name=$('#f-name').value.trim(),phone=$('#f-phone').value.trim();
+  if(step==='contact'){
+    const name=$('#f-name').value.trim();
+    const c=currentCountry();
+    const digits=$('#f-phone').value.replace(/\D/g,'').replace(/^0+/,''); // drop a leading trunk 0
     if(name.length<1)return toast('Please enter a name',true),false;
-    if(phone.replace(/\D/g,'').length<7)return toast('Please enter a valid mobile number',true),false;
+    if(!digits)return toast('Please enter a mobile number',true),false;
+    const [lo,hi]=c.len;
+    if(digits.length<lo||digits.length>hi)
+      return toast(`A ${c.name} mobile number is ${lo===hi?lo:lo+'–'+hi} digits — e.g. ${c.ph}`,true),false;
     if(!$('#f-consent').checked)return toast('Please tick the consent box',true),false;
-    state.contact={name,phone};return true;}
+    state.contact={name,phone:`+${c.cc} ${digits}`,phoneE164:`+${c.cc}${digits}`,country:c.name};
+    return true;}
   return true;
 }
 function goReview(){ // validation before review
@@ -666,7 +719,7 @@ async function submit(){
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
 function resetAll(){state.contact={name:'',phone:''};state.shape='rectangle';state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
   state.pen=1.6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
-  $('#f-name').value='';$('#f-phone').value='';$('#f-consent').checked=false;$('#submit').disabled=false;
+  $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
   $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape('rectangle');show('welcome');}
 
 /* ---- utils ---- */
@@ -678,7 +731,7 @@ const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[
 const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 
 /* ---- boot (after all declarations) ---- */
-buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();setupCanvas();
+buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();setupCanvas();
 $('#submit').addEventListener('click',submit);
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape('rectangle');
 
