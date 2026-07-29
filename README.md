@@ -135,10 +135,46 @@ pill while anything is pending.
 - **Google Drive** (optional): `npm install googleapis`, set
   `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key, share the target folder with
   that service account, and set `integrations.drive.folderId`. Files always save locally too.
-- **Bambu LAN auto-send** (interface + stub): sending over LAN is FTPS-upload + MQTT-start
-  with each printer's Access Code. `src/integrations/bambu.js` documents the protocol and is
-  ready to wire (`npm install bambulabs-api`). Until then the dashboard drives printing
-  manually and the `.gcode` is available for download + on Drive.
+## Bambu LAN auto-send + status monitoring
+
+With LAN mode configured, a submitted design is uploaded to a free printer and started
+automatically, and the print's progress drives the job forward with no operator tap:
+
+| Printer state | Job becomes | Effect |
+| --- | --- | --- |
+| `RUNNING` | `printing` | shown live on the dashboard with % and ETA |
+| `PAUSE` | `colour_change` | card flags **SWAP NOW → load colour 2** |
+| `FINISH` | `ready` | **fires the pickup WhatsApp automatically** |
+| `FAILED` | `failed` | flagged red for the operator |
+
+**Setup**
+
+1. On each printer: **Settings → Network → LAN Mode ON**. Note its **Access Code** and **Serial**.
+2. Put the IP, serial and access code into `config.json → integrations.printers[]`,
+   and set `integrations.lan.enabled = true`.
+3. Verify before the fair:
+   ```bash
+   npm run test-printer            # checks every configured printer
+   npm run test-printer A1-2       # just one
+   npm run test-printer A1-2 send  # ALSO uploads a sample and starts a real print
+   ```
+   It checks port reachability, FTPS login (proves the access code), and MQTT state — and
+   tells you exactly which step failed.
+
+**How it works:** FTPS upload (implicit TLS, port 990, user `bblp`, password = access code)
+puts the `.gcode` on the printer's SD card, then an MQTT publish (TLS, port 8883) to
+`device/<SERIAL>/request` starts it. The printer's `device/<SERIAL>/report` topic is
+subscribed for status. Both use the printer's self-signed certificate, so TLS verification is
+disabled for these direct-to-printer connections — traffic stays on your booth LAN.
+
+> ⚠️ **Verify on real hardware before the fair.** The protocol implementation has not been
+> run against a physical A1 — `npm run test-printer` is there to prove it end to end in one
+> command. Bambu firmware versions differ in how strictly they gate LAN access; if a step
+> fails, the message tells you whether it was reachability, credentials, or the start command.
+
+**If it fails, nothing is lost:** the design is still generated, saved, and recorded as a lead;
+the job simply stays `queued` for manual dispatch from the dashboard, and the error is logged.
+With `lan.enabled = false` the booth runs fully manually, exactly as before.
 
 ## Operator dashboard
 
