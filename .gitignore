@@ -1,0 +1,8 @@
+node_modules/
+config.json
+.env
+output/
+*.log
+.DS_Store
+leads.csv
+leads/

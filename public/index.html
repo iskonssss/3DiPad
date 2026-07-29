@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>3DiPad — Design your keychain</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- 1. Welcome -->
+      <section class="screen active" data-screen="welcome">
+        <div class="hero">
+          <h1>Draw your own<br /><span>3D keychain</span></h1>
+          <p class="sub">Design it here — we print it while you browse the fair.</p>
+          <button class="btn big" data-go="contact">Start ✏️</button>
+        </div>
+      </section>
+
+      <!-- 2. Contact (lead gen) -->
+      <section class="screen" data-screen="contact">
+        <h2>Who's it for?</h2>
+        <p class="sub">So we can message you when your keychain is ready.</p>
+        <label>Name
+          <input id="f-name" type="text" autocomplete="off" maxlength="40" placeholder="Kid's name" />
+        </label>
+        <label>Mobile (WhatsApp)
+          <input id="f-phone" type="tel" inputmode="tel" autocomplete="off" maxlength="24" placeholder="e.g. +60 12 345 6789" />
+        </label>
+        <label class="consent">
+          <input id="f-consent" type="checkbox" />
+          <span>OK to WhatsApp me when it's ready and about future workshops.</span>
+        </label>
+        <div class="nav">
+          <button class="btn ghost" data-go="welcome">Back</button>
+          <button class="btn" data-go="colours" data-validate="contact">Next</button>
+        </div>
+      </section>
+
+      <!-- 3. Colours -->
+      <section class="screen" data-screen="colours">
+        <h2>Pick 2 colours</h2>
+        <div class="colour-block">
+          <h3>Backing <small>(the base)</small></h3>
+          <div class="swatches" id="sw-layer1"></div>
+        </div>
+        <div class="colour-block">
+          <h3>Drawing <small>(your design on top)</small></h3>
+          <div class="swatches" id="sw-layer2"></div>
+        </div>
+        <div class="nav">
+          <button class="btn ghost" data-go="contact">Back</button>
+          <button class="btn" data-go="hole" data-validate="colours">Next</button>
+        </div>
+      </section>
+
+      <!-- 4. Hole -->
+      <section class="screen" data-screen="hole">
+        <h2>Where's the keyring hole?</h2>
+        <div class="holes">
+          <button class="hole-opt" data-hole="left"><span class="pv pv-left"></span>Left</button>
+          <button class="hole-opt" data-hole="centre"><span class="pv pv-centre"></span>Top (bump)</button>
+          <button class="hole-opt" data-hole="right"><span class="pv pv-right"></span>Right</button>
+        </div>
+        <div class="nav">
+          <button class="btn ghost" data-go="colours">Back</button>
+          <button class="btn" data-go="draw" data-validate="hole">Next</button>
+        </div>
+      </section>
+
+      <!-- 5. Draw -->
+      <section class="screen draw-screen" data-screen="draw">
+        <div class="draw-head">
+          <h2>Draw your design</h2>
+          <div class="meter" title="How full the print is"><i id="fill-bar"></i></div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="pad" width="1000" height="400"></canvas>
+        </div>
+        <div class="tools">
+          <button class="btn ghost" id="undo">↶ Undo</button>
+          <button class="btn ghost" id="clear">Clear</button>
+          <div class="spacer"></div>
+          <button class="btn ghost" data-go="hole">Back</button>
+          <button class="btn" data-go="review">Preview →</button>
+        </div>
+      </section>
+
+      <!-- 6. Review -->
+      <section class="screen" data-screen="review">
+        <h2>Looking good?</h2>
+        <div class="review-card">
+          <canvas id="preview" width="1000" height="520"></canvas>
+          <ul class="summary" id="summary"></ul>
+        </div>
+        <div class="nav">
+          <button class="btn ghost" data-go="draw">Keep drawing</button>
+          <button class="btn" id="submit">Send to print 🖨️</button>
+        </div>
+      </section>
+
+      <!-- 7. Done -->
+      <section class="screen" data-screen="done">
+        <div class="hero">
+          <div class="tick">✓</div>
+          <h1 id="done-title">You're in the queue!</h1>
+          <p class="sub" id="done-msg"></p>
+          <button class="btn big" id="again">Design another</button>
+        </div>
+      </section>
+
+      <div id="toast" class="toast"></div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,86 @@
+{
+  "_comment": "Copy to config.json and edit for your booth. Nothing secret belongs in git; secrets go in .env (see .env.example).",
+
+  "build": {
+    "plateWidth": 100,
+    "plateHeight": 40,
+    "backingThickness": 2.0,
+    "designThickness": 2.0,
+    "layerHeight": 0.28,
+    "firstLayerHeight": 0.28,
+    "lineWidth": 0.45,
+    "beadWidth": 1.4,
+    "holeDiameter": 5.0,
+    "bulgeRadius": 13.0,
+    "holeInset": 9.0,
+    "solidLayers": 2,
+    "sparseSpacing": 3.5,
+    "filamentDiameter": 1.75,
+    "bedCenter": [90, 90],
+    "allowBackingDrawing": false
+  },
+
+  "speed": {
+    "infill": 12000,
+    "solidInfill": 9000,
+    "perimeter": 6000,
+    "bead": 3000,
+    "travel": 15000,
+    "firstLayer": 3000,
+    "zHopMm": 0.4,
+    "retractMm": 0.8,
+    "retractSpeed": 2400
+  },
+
+  "temp": {
+    "nozzle": 220,
+    "bed": 60,
+    "nozzleFirst": 220,
+    "bedFirst": 60
+  },
+
+  "limits": {
+    "maxPrintMinutes": 15,
+    "maxStrokeLengthMm": 5000,
+    "warnPrintMinutes": 13
+  },
+
+  "colourChange": {
+    "_comment": "Inserted at the backing->design transition. On a raw-Marlin flavour M600 works; on Bambu firmware grab the exact pause/change sequence from a Bambu Studio print that has a colour change and paste it here (one string per line as an array is also accepted).",
+    "gcode": ["M600 ; ===== MANUAL COLOUR CHANGE: load the LAYER-2 colour, then resume ====="]
+  },
+
+  "template": {
+    "_comment": "Replace start.gcode / end.gcode with the header+footer from a REAL sliced A1 mini file for your filament, so bed levelling / flow calibration run correctly. Placeholders {nozzle} {bed} {nozzleFirst} {bedFirst} are substituted.",
+    "startFile": "src/gcode/templates/a1mini.start.gcode",
+    "endFile": "src/gcode/templates/a1mini.end.gcode"
+  },
+
+  "palette": ["BLACK", "WHITE", "RED", "BLUE", "GREEN", "YELLOW", "PINK", "PURPLE", "ORANGE", "TEAL"],
+
+  "output": {
+    "dir": "output",
+    "filenamePattern": "{c1}-{c2}_{seq}.gcode"
+  },
+
+  "integrations": {
+    "notify": {
+      "_comment": "Who sends the WhatsApp: 'ghl' (GoHighLevel inbound webhook — recommended, GHL owns the message + nurture), 'meta' (direct WhatsApp Cloud API, see whatsapp block), or 'none'.",
+      "provider": "ghl"
+    },
+    "ghl": {
+      "_comment": "Inbound-webhook URLs go in .env (GHL_LEAD_WEBHOOK_URL / GHL_READY_WEBHOOK_URL) or here. One URL is fine — branch on payload.event in the GHL workflow.",
+      "eventName": "Not So Little Fair",
+      "tags": ["NSLF-2026", "3d-workshop-lead"],
+      "leadWebhookUrl": "",
+      "readyWebhookUrl": ""
+    },
+    "drive": { "enabled": false, "folderId": "" },
+    "whatsapp": { "enabled": false, "templateName": "print_ready", "languageCode": "en" },
+    "printers": [
+      { "id": "A1-1", "name": "Printer 1", "ip": "", "serial": "", "accessCode": "" },
+      { "id": "A1-2", "name": "Printer 2", "ip": "", "serial": "", "accessCode": "" },
+      { "id": "A1-3", "name": "Printer 3", "ip": "", "serial": "", "accessCode": "" }
+    ]
+  }
+}

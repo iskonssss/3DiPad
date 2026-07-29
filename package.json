@@ -1,0 +1,19 @@
+{
+  "name": "3dipad",
+  "version": "0.1.0",
+  "description": "Fair-booth kiosk: kids draw on a tablet, a two-colour keychain is generated as g-code and dispatched to a Bambu A1 mini.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "gen": "node src/gcode/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}

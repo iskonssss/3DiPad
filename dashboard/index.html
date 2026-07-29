@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3DiPad — Booth Operator</title>
+    <style>
+      :root { --bg:#0e1526; --panel:#16203a; --ink:#eaf0ff; --muted:#9fb0d6; --accent:#ffd23f; --ok:#34d399; --warn:#ff8a34; --danger:#ff6b6b; }
+      * { box-sizing: border-box; }
+      body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+      header { display:flex; align-items:center; gap:16px; padding:14px 20px; border-bottom:1px solid #ffffff12; position:sticky; top:0; background:var(--bg); z-index:5; flex-wrap:wrap; }
+      header h1 { font-size:20px; margin:0; }
+      .pill { font-size:12px; padding:4px 10px; border-radius:20px; background:var(--panel); color:var(--muted); }
+      .pill.on { color:#04371f; background:var(--ok); }
+      .pill.off { color:#fff; background:#3a2330; }
+      .stats { margin-left:auto; display:flex; gap:8px; font-size:13px; color:var(--muted); }
+      main { padding:18px; display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; }
+      .card { background:var(--panel); border-radius:16px; padding:14px; border:1px solid #ffffff10; }
+      .card.st-colour_change { border-color:var(--warn); box-shadow:0 0 0 2px #ff8a3455; }
+      .card.st-ready { border-color:var(--ok); }
+      .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+      .who { font-weight:700; font-size:17px; }
+      .seq { color:var(--muted); font-size:13px; }
+      .status { font-size:12px; text-transform:uppercase; letter-spacing:.5px; padding:3px 8px; border-radius:6px; background:#26324f; color:var(--muted); }
+      .status.printing { background:#1d3a5f; color:#7db9ff; }
+      .status.colour_change { background:var(--warn); color:#241203; }
+      .status.ready { background:var(--ok); color:#04371f; }
+      .status.queued { background:#2a2f45; color:#c7cbe0; }
+      .colours { display:flex; gap:8px; align-items:center; margin:10px 0; font-size:13px; }
+      .chip { display:inline-flex; align-items:center; gap:6px; background:#0e1730; padding:5px 10px; border-radius:8px; }
+      .dot { width:16px; height:16px; border-radius:4px; border:1px solid #ffffff30; }
+      .arrow { color:var(--muted); }
+      .prev { width:100%; background:#fff; border-radius:8px; margin:8px 0; }
+      .meta { font-size:12px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+      .actions { display:flex; flex-wrap:wrap; gap:8px; }
+      button { font:inherit; font-weight:600; font-size:14px; border:none; border-radius:9px; padding:9px 12px; cursor:pointer; background:#2b3a63; color:var(--ink); }
+      button.primary { background:var(--accent); color:#22252b; }
+      button.ok { background:var(--ok); color:#04371f; }
+      button.warn { background:var(--warn); color:#241203; }
+      button.ghost { background:#20294a; color:var(--muted); }
+      a.dl { font-size:12px; color:#7db9ff; text-decoration:none; }
+      .empty { color:var(--muted); padding:60px 20px; text-align:center; grid-column:1/-1; }
+      .swap-banner { background:var(--warn); color:#241203; font-weight:700; padding:8px; border-radius:8px; text-align:center; margin-bottom:8px; font-size:13px; }
+      select { font:inherit; padding:8px; border-radius:8px; background:#20294a; color:var(--ink); border:1px solid #ffffff20; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>🖨️ 3DiPad Booth</h1>
+      <span class="pill" id="p-drive">Drive</span>
+      <span class="pill" id="p-notify">Notify</span>
+      <span class="pill" id="p-outbox" style="display:none"></span>
+      <div class="stats" id="stats"></div>
+    </header>
+    <main id="board"><div class="empty">Loading…</div></main>
+
+    <script>
+      const COLOUR_HEX = { BLACK:'#1c1c1e',WHITE:'#f5f5f7',RED:'#e23b3b',BLUE:'#2f6fed',GREEN:'#34a853',YELLOW:'#f4c20d',PINK:'#ff5fa2',PURPLE:'#8b5cf6',ORANGE:'#ff8a34',TEAL:'#14b8a6',GREY:'#8e8e93',GRAY:'#8e8e93',GOLD:'#d4af37',SILVER:'#c0c4cc',BROWN:'#8b5a2b' };
+      let printers = [];
+
+      async function tick() {
+        try {
+          const r = await fetch('/api/jobs');
+          const d = await r.json();
+          printers = d.printers || [];
+          render(d);
+        } catch { document.getElementById('board').innerHTML = '<div class="empty">No connection to booth server…</div>'; }
+      }
+
+      function render(d) {
+        const drive = document.getElementById('p-drive');
+        const notifyEl = document.getElementById('p-notify');
+        const outbox = document.getElementById('p-outbox');
+        drive.className = 'pill ' + (d.integrations.drive ? 'on' : 'off');
+        drive.textContent = 'Drive ' + (d.integrations.drive ? 'on' : 'off');
+        const prov = d.integrations.notify || 'none';
+        notifyEl.className = 'pill ' + (prov === 'none' ? 'off' : 'on');
+        notifyEl.textContent = 'Notify: ' + (prov === 'ghl' ? 'GoHighLevel' : prov === 'meta' ? 'WhatsApp' : 'off');
+        const pend = d.integrations.outbox?.pending || 0;
+        outbox.style.display = pend ? '' : 'none';
+        outbox.className = 'pill off';
+        outbox.textContent = '⏳ ' + pend + ' queued (retrying)';
+        const s = d.stats.by;
+        document.getElementById('stats').innerHTML =
+          `<span>Leads: <b>${d.stats.leads}</b></span><span>Queued: ${s.queued||0}</span><span>Printing: ${s.printing||0}</span><span>Ready: ${s.ready||0}</span>`;
+
+        const board = document.getElementById('board');
+        if (!d.jobs.length) { board.innerHTML = '<div class="empty">No active jobs. Waiting for the next little artist ✏️</div>'; return; }
+        board.innerHTML = d.jobs.map(card).join('');
+      }
+
+      function dot(name) { return `<span class="dot" style="background:${COLOUR_HEX[name]||'#888'}"></span>`; }
+      function card(j) {
+        const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
+        const swap = j.status === 'colour_change'
+          ? `<div class="swap-banner">⚠️ SWAP NOW → load ${j.colours.layer2}, then Resume on the printer</div>` : '';
+        const notify = j.notify ? (j.notify.ok ? '✅ sent' : (j.notify.queued ? '⏳ retrying' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed'))) : '';
+        const lead = j.leadPush ? (j.leadPush.ok ? '· CRM ✓' : (j.leadPush.queued ? '· CRM ⏳' : '')) : '';
+        return `<div class="card st-${j.status}">
+          ${swap}
+          <div class="top">
+            <div><div class="who">${esc(j.name)}</div><div class="seq">#${String(j.seq).padStart(4,'0')} · ${j.phone}</div></div>
+            <span class="status ${j.status}">${j.status.replace('_',' ')}</span>
+          </div>
+          <div class="colours">
+            <span class="chip">${dot(j.colours.layer1)} ${j.colours.layer1}</span>
+            <span class="arrow">→</span>
+            <span class="chip">${dot(j.colours.layer2)} ${j.colours.layer2}</span>
+          </div>
+          <img class="prev" src="${j.previewUrl}" alt="design" onerror="this.style.display='none'"/>
+          <div class="meta">
+            <span>Hole: ${j.hole}</span><span>~${j.est} min</span>${pName?`<span>${pName}</span>`:''}
+            <a class="dl" href="${j.gcodeUrl}" download>⬇ ${j.filename}</a>
+            ${j.driveLink?`<a class="dl" href="${j.driveLink}" target="_blank">Drive</a>`:''}
+            ${notify?`<span>${notify}</span>`:''}${lead?`<span>${lead}</span>`:''}
+          </div>
+          ${actions(j)}
+        </div>`;
+      }
+
+      function actions(j) {
+        const assign = printers.length
+          ? `<select onchange="setStatus('${j.id}','${j.status==='queued'?'assigned':j.status}',this.value)">
+               <option value="">printer…</option>
+               ${printers.map(p=>`<option value="${p.id}" ${p.id===j.printerId?'selected':''}>${p.name}</option>`).join('')}
+             </select>` : '';
+        const btns = [];
+        if (j.status !== 'printing') btns.push(`<button class="primary" onclick="setStatus('${j.id}','printing')">Printing</button>`);
+        btns.push(`<button class="warn" onclick="setStatus('${j.id}','colour_change')">Colour swap</button>`);
+        if (j.status !== 'ready') btns.push(`<button class="ok" onclick="setStatus('${j.id}','ready')">Ready → WhatsApp</button>`);
+        else btns.push(`<button class="ghost" onclick="notify('${j.id}')">Resend WA</button>`);
+        btns.push(`<button class="ghost" onclick="setStatus('${j.id}','collected')">Collected</button>`);
+        return `<div class="actions">${assign}${btns.join('')}</div>`;
+      }
+
+      async function setStatus(id, status, printerId) {
+        await fetch(`/api/jobs/${id}/status`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status, printerId }) });
+        tick();
+      }
+      async function notify(id) {
+        const r = await (await fetch(`/api/jobs/${id}/notify`, { method:'POST' })).json();
+        alert(r.ok ? 'WhatsApp sent' : 'Failed: ' + (r.notify?.error || 'unknown'));
+        tick();
+      }
+      const esc = (s) => String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+      tick();
+      setInterval(tick, 4000);
+    </script>
+  </body>
+</html>
