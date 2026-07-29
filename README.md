@@ -63,6 +63,18 @@ the pencil is in use).
 Bring your **own travel router** — venue WiFi usually blocks device-to-device traffic, and
 LAN print dispatch needs the tablets, laptop, and printers on the same subnet.
 
+## Standalone single-file version (`public/standalone.html`)
+
+A fully self-contained build that needs **no server**: the g-code engine runs in the browser,
+so a kid can draw, preview, and **download the real `.gcode`** on any iPhone/iPad. Use it to
+demo the experience, or host it on any static host (GitHub Pages, Netlify) and open it on the
+tablets. Touch/iOS-optimised — responsive from iPhone portrait to iPad landscape, palm-rejected
+Apple Pencil, safe-area aware, add-to-home-screen full-screen.
+
+It's the same engine and flow as the full app; what it *doesn't* do (because there's no server)
+is auto-dispatch to printers, push to GoHighLevel, or upload to Drive — those need the booth
+server. Think of it as the client half, running offline.
+
 ## What you must provide before the fair
 
 1. **A real A1 mini start/end sequence.** Slice any simple print in Bambu Studio/OrcaSlicer
