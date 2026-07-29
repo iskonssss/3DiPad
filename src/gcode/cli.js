@@ -11,11 +11,12 @@ import { loadConfig, root } from '../config.js';
 import { generate } from './engine.js';
 
 const cfg = loadConfig();
-const arg = process.argv[2] || 'centre';
+const arg = process.argv[2] || 'rectangle';
+const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
 
 let design;
-if (['left', 'right', 'centre'].includes(arg)) {
-  design = sampleDesign(arg, cfg.build);
+if (SHAPES.includes(arg)) {
+  design = sampleDesign(arg);
 } else {
   design = JSON.parse(fs.readFileSync(arg, 'utf8'));
 }
@@ -23,54 +24,51 @@ if (['left', 'right', 'centre'].includes(arg)) {
 const { gcode, meta } = generate(design, cfg);
 const outDir = path.join(root, 'output');
 fs.mkdirSync(outDir, { recursive: true });
-const base = `sample_${design.hole}`;
+const base = `sample_${design.shape}`;
 fs.writeFileSync(path.join(outDir, base + '.gcode'), gcode);
-fs.writeFileSync(path.join(outDir, base + '.svg'), toSvg(gcode, cfg.build));
+fs.writeFileSync(path.join(outDir, base + '.svg'), toSvg(gcode));
 
 console.log(JSON.stringify(meta, null, 2));
 console.log(`wrote output/${base}.gcode  and  output/${base}.svg`);
 
-// A crude "HI" plus an underline, in plate-local mm (y-up).
-function sampleDesign(hole, b) {
-  const strokes = [
-    [{ x: 25, y: 10 }, { x: 25, y: 30 }],                 // H left
-    [{ x: 25, y: 20 }, { x: 38, y: 20 }],                 // H bar
-    [{ x: 38, y: 10 }, { x: 38, y: 30 }],                 // H right
-    [{ x: 55, y: 10 }, { x: 55, y: 30 }],                 // I stem
-    [{ x: 48, y: 30 }, { x: 62, y: 30 }],                 // I top
-    [{ x: 48, y: 10 }, { x: 62, y: 10 }],                 // I bottom
-    [{ x: 20, y: 6 }, { x: 80, y: 6 }],                   // underline
+// A crude "HI" in plate-local mm (y-up), two pen widths, for the chosen shape.
+function sampleDesign(shape) {
+  const design = [
+    { w: 1.4, pts: [{ x: 20, y: 12 }, { x: 20, y: 30 }] },
+    { w: 1.4, pts: [{ x: 20, y: 21 }, { x: 30, y: 21 }] },
+    { w: 1.4, pts: [{ x: 30, y: 12 }, { x: 30, y: 30 }] },
+    { w: 2.2, pts: [{ x: 40, y: 12 }, { x: 40, y: 30 }] },
   ];
-  return { hole, colours: { layer1: 'BLACK', layer2: 'WHITE' }, design: strokes };
+  const customOutline = [
+    { x: 5, y: 20 }, { x: 20, y: 55 }, { x: 45, y: 60 }, { x: 70, y: 45 }, { x: 60, y: 10 }, { x: 25, y: 5 },
+  ];
+  return { shape, colours: { layer1: 'BLACK', layer2: 'WHITE' }, holePos: 'top', customOutline, design };
 }
 
-// Parse g-code, draw extrusion segments; colour backing vs design by the marker.
-function toSvg(gcode, b) {
+// Parse g-code, draw extrusion segments (auto-fit); colour backing vs design.
+function toSvg(gcode) {
   const pad = 6;
-  const bulge = b.bulgeRadius;
-  const w = b.plateWidth + pad * 2;
-  const h = b.plateHeight + bulge + pad * 2;
-  const cx = b.bedCenter[0];
-  const cy = b.bedCenter[1];
-
   const segs = [];
   let pos = { x: 0, y: 0 };
   let colour = 'back';
+  let inBody = false;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const line of gcode.split('\n')) {
+    if (line.includes('BACKING (colour 1)')) inBody = true;
+    if (line.includes('GENERIC END') || line.includes('A1 mini END')) inBody = false;
     if (line.includes('COLOUR CHANGE')) colour = 'design';
-    const m = line.match(/^G1 /);
-    if (!m) continue;
-    const nx = num(line, 'X');
-    const ny = num(line, 'Y');
-    const e = num(line, 'E');
+    if (!line.startsWith('G1 ')) continue;
+    const nx = num(line, 'X'), ny = num(line, 'Y'), e = num(line, 'E');
     const to = { x: nx ?? pos.x, y: ny ?? pos.y };
-    if (e != null && e > 0 && (nx != null || ny != null)) segs.push({ a: pos, b: to, colour });
+    if (inBody && e != null && e > 0 && (nx != null || ny != null)) {
+      segs.push({ a: pos, b: to, colour });
+      for (const p of [pos, to]) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+    }
     pos = to;
   }
-
-  // bed -> plate-local -> svg (flip y for screen)
-  const X = (x) => (x - cx + b.plateWidth / 2 + pad).toFixed(2);
-  const Y = (y) => (h - (y - cy + b.plateHeight / 2 + pad)).toFixed(2);
+  const w = (maxX - minX) + pad * 2, h = (maxY - minY) + pad * 2;
+  const X = (x) => (x - minX + pad).toFixed(2);
+  const Y = (y) => (h - (y - minY + pad)).toFixed(2);
 
   const body = segs
     .map(
