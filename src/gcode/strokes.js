@@ -1,20 +1,15 @@
-// Stroke utilities: the kid's drawing arrives as polylines in plate-local mm.
-// We simplify them (fewer points => smaller/faster g-code) and clip anything
-// that strays outside the plate, then the engine extrudes each as a raised bead.
+// Stroke utilities. Each drawn stroke carries its own pen-tip width:
+//   { w: <bead mm>, pts: [ {x,y}, ... ] }   (plate-local mm, y-up)
+// We simplify the points and clip anything outside the backing polygon.
 
-import { insidePlate } from './geometry.js';
+import { pointInPolygon, distToBoundary } from './geometry.js';
 
-/** Euclidean distance between two points. */
-export function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+export function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
-/** Total drawn length across all polylines (mm). Used for the print-time budget. */
-export function totalLength(polylines) {
+/** Total drawn length across all strokes (mm). */
+export function totalLength(strokes) {
   let L = 0;
-  for (const line of polylines) {
-    for (let i = 1; i < line.length; i++) L += dist(line[i - 1], line[i]);
-  }
+  for (const s of strokes) for (let i = 1; i < s.pts.length; i++) L += dist(s.pts[i - 1], s.pts[i]);
   return L;
 }
 
@@ -23,66 +18,68 @@ export function simplify(points, tol = 0.3) {
   if (points.length < 3) return points.slice();
   const keep = new Array(points.length).fill(false);
   keep[0] = keep[points.length - 1] = true;
-
   const stack = [[0, points.length - 1]];
   while (stack.length) {
     const [s, e] = stack.pop();
-    let maxD = 0;
-    let idx = -1;
+    let maxD = 0, idx = -1;
     for (let i = s + 1; i < e; i++) {
       const d = perpDist(points[i], points[s], points[e]);
-      if (d > maxD) {
-        maxD = d;
-        idx = i;
-      }
+      if (d > maxD) { maxD = d; idx = i; }
     }
-    if (maxD > tol && idx !== -1) {
-      keep[idx] = true;
-      stack.push([s, idx], [idx, e]);
-    }
+    if (maxD > tol && idx !== -1) { keep[idx] = true; stack.push([s, idx], [idx, e]); }
   }
   return points.filter((_, i) => keep[i]);
 }
-
 function perpDist(p, a, b) {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.hypot(dx, dy);
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
   if (len === 0) return dist(p, a);
   return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
 }
 
 /**
- * Clip a polyline to the plate: split into sub-polylines wherever it leaves the
- * region, so beads never extrude off the plate edge or across the hole.
+ * Split a point list wherever it leaves the plate (staying `margin` inside the
+ * outline) OR enters the keyring hole, so beads stay on solid plate and never
+ * print over the void or hang off the edge. Uses the raw polygon (offset-free,
+ * robust on concave shapes).
  */
-export function clipToPlate(points, cfg, hole) {
+function clipToRegion(points, poly, margin, hole) {
+  const ok = (p) =>
+    pointInPolygon(p, poly) &&
+    distToBoundary(p, poly) >= margin &&
+    (!hole || Math.hypot(p.x - hole.cx, p.y - hole.cy) > hole.r);
   const out = [];
   let cur = [];
   for (const p of points) {
-    if (insidePlate(p, cfg, hole)) {
-      cur.push(p);
-    } else if (cur.length) {
-      out.push(cur);
-      cur = [];
-    }
+    if (ok(p)) cur.push(p);
+    else if (cur.length) { out.push(cur); cur = []; }
   }
   if (cur.length) out.push(cur);
   return out.filter((l) => l.length >= 1);
 }
 
 /**
- * Prepare drawn strokes for extrusion: simplify, clip, drop empties.
- * Input & output are arrays of polylines (arrays of {x,y}) in plate-local mm.
+ * Prepare drawn strokes for extrusion: simplify, clip inside the backing outline
+ * (by `edgeMargin`) and around the hole, keep each stroke's pen width.
+ * Strokes are {w, pts}.
  */
-export function prepareStrokes(polylines, cfg, hole) {
-  const prepared = [];
-  for (const line of polylines) {
-    if (!Array.isArray(line) || line.length === 0) continue;
-    const simplified = simplify(line, 0.3);
-    for (const seg of clipToPlate(simplified, cfg, hole)) {
-      if (seg.length >= 1) prepared.push(seg);
+export function prepareStrokes(strokes, poly, cfg, hole = null, edgeMargin = 0) {
+  if (!Array.isArray(strokes)) return [];
+  const holeGuard = hole ? { cx: hole.cx, cy: hole.cy, r: hole.r + cfg.build.penRange[1] / 2 } : null;
+  const out = [];
+  const defW = cfg.build.beadWidth;
+  for (const stroke of strokes) {
+    const pts = stroke && Array.isArray(stroke.pts) ? stroke.pts : Array.isArray(stroke) ? stroke : null;
+    if (!pts || !pts.length) continue;
+    const w = clampWidth(stroke && stroke.w != null ? stroke.w : defW, cfg);
+    for (const seg of clipToRegion(simplify(pts, 0.3), poly, edgeMargin, holeGuard)) {
+      if (seg.length >= 1) out.push({ w, pts: seg });
     }
   }
-  return prepared;
+  return out;
+}
+
+export function clampWidth(w, cfg) {
+  const [lo, hi] = cfg.build.penRange;
+  const v = +w;
+  return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : cfg.build.beadWidth;
 }

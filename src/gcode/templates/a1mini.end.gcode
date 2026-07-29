@@ -1,10 +1,13 @@
 ; ============================================================================
-; GENERIC END SEQUENCE — REPLACE with the footer from your sliced A1 mini file.
+; A1 mini END — retract, lift clear, park at the back, cool down.
 ; ============================================================================
+G1 E-0.8 F2100
+G91
+G1 Z15 F1200
+G90
+G1 X10 Y170 F12000
 M104 S0
 M140 S0
-G91
-G1 Z10 F600
-G90
-G1 X0 Y180 F6000
+M106 S0
 M84
+M117 Print complete

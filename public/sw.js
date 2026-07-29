@@ -1,7 +1,7 @@
 // Minimal offline shell so the kiosk keeps drawing even if WiFi hiccups.
 // API calls always go to the network; only static assets are cached.
-const CACHE = '3dipad-v1';
-const ASSETS = ['.', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = '3dipad-v2';
+const ASSETS = ['.', 'index.html', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

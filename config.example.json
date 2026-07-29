@@ -2,22 +2,24 @@
   "_comment": "Copy to config.json and edit for your booth. Nothing secret belongs in git; secrets go in .env (see .env.example).",
 
   "build": {
-    "plateWidth": 100,
-    "plateHeight": 40,
+    "_comment": "shapeSizes are the backing bounding boxes in mm; kept modest so prints stay under the 15-min budget. customMax bounds the free-draw shape.",
+    "shapeSizes": { "rectangle": [100, 40], "square": [60, 60], "circle": [60], "heart": [58, 54] },
+    "customMax": [80, 80],
     "backingThickness": 2.0,
     "designThickness": 2.0,
     "layerHeight": 0.28,
     "firstLayerHeight": 0.28,
     "lineWidth": 0.45,
     "beadWidth": 1.4,
+    "penRange": [0.8, 2.6],
     "holeDiameter": 5.0,
-    "bulgeRadius": 13.0,
-    "holeInset": 9.0,
+    "holeWallMin": 2.5,
+    "chamferMm": 0.8,
+    "designEdgeMargin": 1.5,
     "solidLayers": 2,
     "sparseSpacing": 3.5,
     "filamentDiameter": 1.75,
-    "bedCenter": [90, 90],
-    "allowBackingDrawing": false
+    "bedCenter": [90, 90]
   },
 
   "speed": {
@@ -46,8 +48,8 @@
   },
 
   "colourChange": {
-    "_comment": "Inserted at the backing->design transition. On a raw-Marlin flavour M600 works; on Bambu firmware grab the exact pause/change sequence from a Bambu Studio print that has a colour change and paste it here (one string per line as an array is also accepted).",
-    "gcode": ["M600 ; ===== MANUAL COLOUR CHANGE: load the LAYER-2 colour, then resume ====="]
+    "_comment": "Inserted at the backing->design transition. M400 U1 is the Bambu A1 pause: it finishes moves and pauses so the operator uses the printer screen's filament menu to unload colour 1 / load colour 2, then Resume.",
+    "gcode": ["M400 U1 ; ===== COLOUR CHANGE: unload colour 1, load colour 2 on the printer screen, then Resume ====="]
   },
 
   "template": {
