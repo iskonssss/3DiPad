@@ -1,0 +1,12 @@
+{
+  "name": "3DiPad — Keychain Designer",
+  "short_name": "3DiPad",
+  "start_url": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0e1526",
+  "theme_color": "#0e1526",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
