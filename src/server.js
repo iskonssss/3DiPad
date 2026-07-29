@@ -77,14 +77,15 @@ app.post('/api/submit', async (req, res) => {
     createdAt: new Date().toISOString(),
     contact,
     colours: design.colours,
-    hole: design.hole,
+    shape: design.shape,
+    hole: meta.hole,
     filename,
     meta,
     printerId: null,
     notify: null,
   });
 
-  try { saveLead(root, job, design); } catch (e) { console.error('lead save failed', e); }
+  try { saveLead(root, job, design, cfg); } catch (e) { console.error('lead save failed', e); }
 
   // push the lead to the CRM the moment they submit (captures them even if they
   // never collect the print). Best-effort + retried by the outbox.
@@ -150,7 +151,7 @@ app.post('/api/jobs/:id/notify', async (req, res) => {
 function publicJob(j) {
   return {
     id: j.id, seq: j.seq, name: j.contact.name, phone: j.contact.phone,
-    colours: j.colours, hole: j.hole, filename: j.filename, status: j.status,
+    colours: j.colours, shape: j.shape, hole: j.hole, filename: j.filename, status: j.status,
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
     driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',
@@ -167,16 +168,24 @@ function sanitizeContact(c) {
   return { name, phone };
 }
 
+const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
+
 function sanitizeDesign(body) {
   const b = cfg.build;
-  const hole = ['left', 'right', 'centre'].includes(body?.hole) ? body.hole : 'centre';
+  const shape = SHAPES.includes(body?.shape) ? body.shape : 'rectangle';
   const colours = {
     layer1: pickColour(body?.colours?.layer1),
     layer2: pickColour(body?.colours?.layer2),
   };
-  const design = cleanStrokes(body?.design, b);
-  const backing = b.allowBackingDrawing ? cleanStrokes(body?.backing, b) : [];
-  return { hole, colours, design, backing };
+  // the drawing area is bounded by the largest shape we allow
+  const lim = Math.max(b.customMax[0], b.customMax[1], ...Object.values(b.shapeSizes).flat());
+  const design = cleanStrokes(body?.design, lim);
+  const customOutline = shape === 'custom' ? cleanPoints(body?.customOutline, b.customMax[0], b.customMax[1]) : null;
+  const holePos = ['left', 'right', 'top'].includes(body?.holePos) ? body.holePos : null;
+  const hole = body?.hole && Number.isFinite(+body.hole.x) && Number.isFinite(+body.hole.y)
+    ? { x: clamp(+body.hole.x, 0, lim), y: clamp(+body.hole.y, 0, lim) }
+    : null;
+  return { shape, colours, design, customOutline, hole, holePos: holePos || 'top' };
 }
 
 function pickColour(name) {
@@ -185,18 +194,31 @@ function pickColour(name) {
   return up;
 }
 
-function cleanStrokes(strokes, b, maxStrokes = 400, maxPts = 4000) {
+function cleanPoints(pts, maxX, maxY, maxN = 4000) {
+  if (!Array.isArray(pts)) return null;
+  const out = [];
+  for (const p of pts.slice(0, maxN)) {
+    const x = clamp(+p?.x, 0, maxX), y = clamp(+p?.y, 0, maxY);
+    if (Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
+  }
+  return out.length >= 3 ? out : null;
+}
+
+// Strokes arrive as { w, pts:[{x,y}] }; legacy flat arrays are accepted too.
+function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
   if (!Array.isArray(strokes)) return [];
+  const [pLo, pHi] = cfg.build.penRange;
   const out = [];
   for (const s of strokes.slice(0, maxStrokes)) {
-    if (!Array.isArray(s)) continue;
+    const pts = Array.isArray(s?.pts) ? s.pts : Array.isArray(s) ? s : null;
+    if (!pts) continue;
+    const w = clamp(+(s?.w ?? cfg.build.beadWidth), pLo, pHi);
     const line = [];
-    for (const p of s.slice(0, maxPts)) {
-      const x = clamp(+p?.x, 0, b.plateWidth);
-      const y = clamp(+p?.y, 0, b.plateHeight);
+    for (const p of pts.slice(0, maxPts)) {
+      const x = clamp(+p?.x, 0, lim), y = clamp(+p?.y, 0, lim);
       if (Number.isFinite(x) && Number.isFinite(y)) line.push({ x, y });
     }
-    if (line.length) out.push(line);
+    if (line.length) out.push({ w: Number.isFinite(w) ? w : cfg.build.beadWidth, pts: line });
   }
   return out;
 }
