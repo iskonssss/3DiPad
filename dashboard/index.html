@@ -48,7 +48,8 @@
     <header>
       <h1>🖨️ 3DiPad Booth</h1>
       <span class="pill" id="p-drive">Drive</span>
-      <span class="pill" id="p-wa">WhatsApp</span>
+      <span class="pill" id="p-notify">Notify</span>
+      <span class="pill" id="p-outbox" style="display:none"></span>
       <div class="stats" id="stats"></div>
     </header>
     <main id="board"><div class="empty">Loading…</div></main>
@@ -68,11 +69,17 @@
 
       function render(d) {
         const drive = document.getElementById('p-drive');
-        const wa = document.getElementById('p-wa');
+        const notifyEl = document.getElementById('p-notify');
+        const outbox = document.getElementById('p-outbox');
         drive.className = 'pill ' + (d.integrations.drive ? 'on' : 'off');
         drive.textContent = 'Drive ' + (d.integrations.drive ? 'on' : 'off');
-        wa.className = 'pill ' + (d.integrations.whatsapp ? 'on' : 'off');
-        wa.textContent = 'WhatsApp ' + (d.integrations.whatsapp ? 'on' : 'off');
+        const prov = d.integrations.notify || 'none';
+        notifyEl.className = 'pill ' + (prov === 'none' ? 'off' : 'on');
+        notifyEl.textContent = 'Notify: ' + (prov === 'ghl' ? 'GoHighLevel' : prov === 'meta' ? 'WhatsApp' : 'off');
+        const pend = d.integrations.outbox?.pending || 0;
+        outbox.style.display = pend ? '' : 'none';
+        outbox.className = 'pill off';
+        outbox.textContent = '⏳ ' + pend + ' queued (retrying)';
         const s = d.stats.by;
         document.getElementById('stats').innerHTML =
           `<span>Leads: <b>${d.stats.leads}</b></span><span>Queued: ${s.queued||0}</span><span>Printing: ${s.printing||0}</span><span>Ready: ${s.ready||0}</span>`;
@@ -87,7 +94,8 @@
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
         const swap = j.status === 'colour_change'
           ? `<div class="swap-banner">⚠️ SWAP NOW → load ${j.colours.layer2}, then Resume on the printer</div>` : '';
-        const notify = j.notify ? (j.notify.ok ? '✅ sent' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed')) : '';
+        const notify = j.notify ? (j.notify.ok ? '✅ sent' : (j.notify.queued ? '⏳ retrying' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed'))) : '';
+        const lead = j.leadPush ? (j.leadPush.ok ? '· CRM ✓' : (j.leadPush.queued ? '· CRM ⏳' : '')) : '';
         return `<div class="card st-${j.status}">
           ${swap}
           <div class="top">
@@ -104,7 +112,7 @@
             <span>Hole: ${j.hole}</span><span>~${j.est} min</span>${pName?`<span>${pName}</span>`:''}
             <a class="dl" href="${j.gcodeUrl}" download>⬇ ${j.filename}</a>
             ${j.driveLink?`<a class="dl" href="${j.driveLink}" target="_blank">Drive</a>`:''}
-            ${notify?`<span>${notify}</span>`:''}
+            ${notify?`<span>${notify}</span>`:''}${lead?`<span>${lead}</span>`:''}
           </div>
           ${actions(j)}
         </div>`;

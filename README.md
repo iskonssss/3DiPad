@@ -11,7 +11,7 @@ WhatsApp when the print is ready.
  │ contact ▸ colours │ ──────────────▶ │ g-code engine            │ ─────────▶ │ Printer 1│
  │ ▸ hole ▸ draw     │   (local WiFi)  │ lead capture (CSV+SVG)   │  LAN/USB   │ Printer 2│
  │ ▸ preview ▸ send  │ ◀────────────── │ queue + operator board   │            │ Printer 3│
- └───────────────────┘   "in queue!"   │ Drive + WhatsApp         │            └──────────┘
+ └───────────────────┘   "in queue!"   │ Drive · CRM/WhatsApp      │──▶ GoHighLevel (lead+ready)
                                         └──────────────────────────┘
 ```
 
@@ -90,12 +90,36 @@ LAN print dispatch needs the tablets, laptop, and printers on the same subnet.
 | `output.filenamePattern` | Default `{c1}-{c2}_{seq}.gcode` |
 | `integrations.*` | Drive folder, WhatsApp template, per-printer LAN details |
 
-## Integrations
+## Notifications & CRM
 
-- **WhatsApp** (fully wired): set `integrations.whatsapp.enabled=true`, put
+The notify layer is pluggable — `config.integrations.notify.provider`:
+
+- **`ghl` — GoHighLevel (recommended for lead-gen).** The booth fires two Inbound-Webhook
+  events; GHL upserts the contact, tags it, sends the WhatsApp, and runs the nurture. GHL
+  owns all messaging.
+  - **On submit** → `event: "lead"` (captures the parent even if they never collect the print).
+  - **On Ready** → `event: "ready"` (fires the pickup WhatsApp).
+  - Setup: in GHL create a workflow with an **Inbound Webhook** trigger, copy its URL into
+    `.env` (`GHL_LEAD_WEBHOOK_URL`, optionally a separate `GHL_READY_WEBHOOK_URL` — or branch
+    on `payload.event` in one workflow). Map the payload to contact fields, add your tags, and
+    add a **Send WhatsApp** action using your **approved template** (business-initiated messages
+    require one — GHL manages it). Payload fields:
+    ```
+    event, status, first_name, full_name, phone, phone_e164,
+    fair, tags[], job_id, seq, filename, colours, layer1, layer2,
+    hole, est_minutes, drive_link, submitted_at
+    ```
+- **`meta` — WhatsApp Cloud API direct.** Set `integrations.whatsapp.enabled=true`, put
   `WHATSAPP_PHONE_NUMBER_ID` + `WHATSAPP_ACCESS_TOKEN` in `.env`, and create an **approved**
-  template in Meta WhatsApp Manager (name in config, e.g. body
-  `Hi {{1}}, your 3D print is ready for pickup!`). Fires when a job is marked **Ready**.
+  template in Meta WhatsApp Manager. Fires on **Ready** only (no lead-capture step).
+- **`none`** — no messaging; run the queue manually from the dashboard.
+
+Every webhook/notification goes through a **persistent retry outbox** — if the booth WiFi
+blips, the lead is queued to disk and retried, not lost. The dashboard shows a "⏳ N queued"
+pill while anything is pending.
+
+## Other integrations
+
 - **Google Drive** (optional): `npm install googleapis`, set
   `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key, share the target folder with
   that service account, and set `integrations.drive.folderId`. Files always save locally too.

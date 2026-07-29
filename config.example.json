@@ -64,6 +64,17 @@
   },
 
   "integrations": {
+    "notify": {
+      "_comment": "Who sends the WhatsApp: 'ghl' (GoHighLevel inbound webhook — recommended, GHL owns the message + nurture), 'meta' (direct WhatsApp Cloud API, see whatsapp block), or 'none'.",
+      "provider": "ghl"
+    },
+    "ghl": {
+      "_comment": "Inbound-webhook URLs go in .env (GHL_LEAD_WEBHOOK_URL / GHL_READY_WEBHOOK_URL) or here. One URL is fine — branch on payload.event in the GHL workflow.",
+      "eventName": "Not So Little Fair",
+      "tags": ["NSLF-2026", "3d-workshop-lead"],
+      "leadWebhookUrl": "",
+      "readyWebhookUrl": ""
+    },
     "drive": { "enabled": false, "folderId": "" },
     "whatsapp": { "enabled": false, "templateName": "print_ready", "languageCode": "en" },
     "printers": [

@@ -10,13 +10,15 @@ import { loadConfig } from './config.js';
 import { generate } from './gcode/engine.js';
 import { Queue } from './dispatch/queue.js';
 import { saveLead } from './leads.js';
-import { sendReady } from './integrations/whatsapp.js';
+import * as notify from './integrations/notify.js';
+import * as outbox from './integrations/outbox.js';
 import { uploadGcode } from './integrations/drive.js';
 import { sendToPrinter } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = loadConfig();
 const queue = new Queue(root);
+outbox.init(root);
 const app = express();
 app.use(express.json({ limit: '4mb' }));
 
@@ -84,6 +86,10 @@ app.post('/api/submit', async (req, res) => {
 
   try { saveLead(root, job, design); } catch (e) { console.error('lead save failed', e); }
 
+  // push the lead to the CRM the moment they submit (captures them even if they
+  // never collect the print). Best-effort + retried by the outbox.
+  notify.onLead(cfg, job).then((r) => queue.setStatus(job.id, job.status, { leadPush: r })).catch(() => {});
+
   // best-effort Drive upload (never blocks the kid)
   uploadGcode(cfg, filePath).then((r) => { if (r.ok) queue.setStatus(job.id, job.status, { driveLink: r.link }); }).catch(() => {});
 
@@ -113,7 +119,8 @@ app.get('/api/jobs', (_req, res) => {
     stats: queue.stats(),
     integrations: {
       drive: !!cfg.integrations?.drive?.enabled,
-      whatsapp: !!cfg.integrations?.whatsapp?.enabled,
+      notify: cfg.integrations?.notify?.provider || 'none',
+      outbox: outbox.stats(),
     },
   });
 });
@@ -123,9 +130,9 @@ app.post('/api/jobs/:id/status', async (req, res) => {
   const job = queue.setStatus(req.params.id, status, printerId ? { printerId } : {});
   if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
 
-  // reaching "ready" fires the WhatsApp notification
+  // reaching "ready" fires the pickup notification via the configured provider
   if (status === 'ready') {
-    const r = await sendReady(cfg, job);
+    const r = await notify.onReady(cfg, job);
     queue.setStatus(job.id, 'ready', { notify: r });
     return res.json({ ok: true, job: publicJob(job), notify: r });
   }
@@ -135,7 +142,7 @@ app.post('/api/jobs/:id/status', async (req, res) => {
 app.post('/api/jobs/:id/notify', async (req, res) => {
   const job = queue.get(req.params.id);
   if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
-  const r = await sendReady(cfg, job);
+  const r = await notify.onReady(cfg, job);
   queue.setStatus(job.id, job.status, { notify: r });
   res.json({ ok: r.ok, notify: r });
 });
@@ -145,7 +152,7 @@ function publicJob(j) {
     id: j.id, seq: j.seq, name: j.contact.name, phone: j.contact.phone,
     colours: j.colours, hole: j.hole, filename: j.filename, status: j.status,
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
-    driveLink: j.driveLink || null, notify: j.notify || null,
+    driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',
     gcodeUrl: '/output/' + j.filename,
   };
