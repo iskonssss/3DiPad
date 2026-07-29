@@ -6,14 +6,18 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test",
-    "gen": "node src/gcode/cli.js"
+    "test": "node --test \"test/**/*.test.js\"",
+    "gen": "node src/gcode/cli.js",
+    "build": "node tools/build-kiosk.mjs",
+    "test-printer": "node tools/test-printer.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "basic-ftp": "^6.0.2",
+    "express": "^4.19.2",
+    "mqtt": "^5.15.2"
   },
   "license": "MIT"
 }

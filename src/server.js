@@ -14,6 +14,7 @@ import * as notify from './integrations/notify.js';
 import * as outbox from './integrations/outbox.js';
 import { uploadGcode } from './integrations/drive.js';
 import { sendToPrinter } from './integrations/bambu.js';
+import { startMonitor } from './dispatch/monitor.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = loadConfig();
@@ -94,18 +95,22 @@ app.post('/api/submit', async (req, res) => {
   // best-effort Drive upload (never blocks the kid)
   uploadGcode(cfg, filePath).then((r) => { if (r.ok) queue.setStatus(job.id, job.status, { driveLink: r.link }); }).catch(() => {});
 
-  // best-effort auto-dispatch to a free printer
+  // best-effort auto-dispatch to a free printer over LAN
   let printerName = null;
   const printers = cfg.integrations?.printers || [];
   const free = queue.freePrinter(printers);
   if (free) {
-    const r = await sendToPrinter(free, filePath).catch((e) => ({ ok: false, error: String(e) }));
+    const r = await sendToPrinter(free, filePath, cfg, { sequenceId: seq }).catch((e) => ({ ok: false, error: String(e) }));
     if (r.sent) {
-      queue.setStatus(job.id, 'printing', { printerId: free.id });
+      queue.setStatus(job.id, 'printing', { printerId: free.id, dispatch: { ok: true, remotePath: r.remotePath } });
       printerName = free.name;
     } else if (r.manual) {
-      queue.setStatus(job.id, 'assigned', { printerId: free.id });
+      queue.setStatus(job.id, 'assigned', { printerId: free.id, dispatch: { ok: false, manual: true, reason: r.reason } });
       printerName = free.name;
+    } else {
+      // LAN send failed — keep the job queued and surface it on the dashboard
+      queue.setStatus(job.id, 'queued', { dispatch: { ok: false, stage: r.stage, error: r.error } });
+      console.error(`LAN dispatch to ${free.id} failed at ${r.stage}: ${r.error}`);
     }
   }
 
@@ -116,11 +121,15 @@ app.post('/api/submit', async (req, res) => {
 app.get('/api/jobs', (_req, res) => {
   res.json({
     jobs: queue.active().map(publicJob),
-    printers: (cfg.integrations?.printers || []).map((p) => ({ id: p.id, name: p.name, configured: !!p.ip })),
+    printers: (cfg.integrations?.printers || []).map((p) => ({
+      id: p.id, name: p.name, configured: !!(p.ip && p.serial && p.accessCode),
+      live: monitor.states()[p.id] || null,
+    })),
     stats: queue.stats(),
     integrations: {
       drive: !!cfg.integrations?.drive?.enabled,
       notify: cfg.integrations?.notify?.provider || 'none',
+      lan: !!cfg.integrations?.lan?.enabled,
       outbox: outbox.stats(),
     },
   });
@@ -228,10 +237,23 @@ function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
 }
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
 
+// Watch the printers so prints advance (and notify) with no operator tap.
+const monitor = startMonitor(cfg, queue, async (job) => {
+  const r = await notify.onReady(cfg, job);
+  queue.setStatus(job.id, 'ready', { notify: r });
+});
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`3DiPad booth server on http://localhost:${port}`);
   console.log(`  kiosk:     http://localhost:${port}/`);
   console.log(`  dashboard: http://localhost:${port}/dashboard/`);
   console.log(`  config:    ${cfg._configPath}`);
+  const lan = cfg.integrations?.lan?.enabled;
+  const ready = (cfg.integrations?.printers || []).filter((p) => p.ip && p.serial && p.accessCode).length;
+  console.log(`  printers:  LAN ${lan ? 'ON' : 'off'}, ${ready} configured`);
 });
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { monitor.stop(); server.close(() => process.exit(0)); });
+}

@@ -42,6 +42,17 @@
       .empty { color:var(--muted); padding:60px 20px; text-align:center; grid-column:1/-1; }
       .swap-banner { background:var(--warn); color:#241203; font-weight:700; padding:8px; border-radius:8px; text-align:center; margin-bottom:8px; font-size:13px; }
       select { font:inherit; padding:8px; border-radius:8px; background:#20294a; color:var(--ink); border:1px solid #ffffff20; }
+      .printers { display:flex; gap:8px; flex-wrap:wrap; width:100%; margin-top:6px; }
+      .pcard { display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid #ffffff12; border-radius:10px; padding:7px 11px; font-size:12px; }
+      .pcard .nm { font-weight:700; }
+      .pcard .st { color:var(--muted); text-transform:uppercase; letter-spacing:.4px; font-size:11px; }
+      .pcard.running { border-color:#1d3a5f; } .pcard.running .st { color:#7db9ff; }
+      .pcard.pause { border-color:var(--warn); } .pcard.pause .st { color:var(--warn); }
+      .pcard.finish .st { color:var(--ok); }
+      .pcard.failed { border-color:var(--danger); } .pcard.failed .st { color:var(--danger); }
+      .pcard.offline { opacity:.5; }
+      .bar { width:54px; height:5px; background:#0e1730; border-radius:4px; overflow:hidden; }
+      .bar i { display:block; height:100%; background:#7db9ff; }
     </style>
   </head>
   <body>
@@ -49,7 +60,9 @@
       <h1>🖨️ 3DiPad Booth</h1>
       <span class="pill" id="p-drive">Drive</span>
       <span class="pill" id="p-notify">Notify</span>
+      <span class="pill" id="p-lan">LAN</span>
       <span class="pill" id="p-outbox" style="display:none"></span>
+      <div class="printers" id="printer-strip"></div>
       <div class="stats" id="stats"></div>
     </header>
     <main id="board"><div class="empty">Loading…</div></main>
@@ -76,10 +89,14 @@
         const prov = d.integrations.notify || 'none';
         notifyEl.className = 'pill ' + (prov === 'none' ? 'off' : 'on');
         notifyEl.textContent = 'Notify: ' + (prov === 'ghl' ? 'GoHighLevel' : prov === 'meta' ? 'WhatsApp' : 'off');
+        const lanEl = document.getElementById('p-lan');
+        lanEl.className = 'pill ' + (d.integrations.lan ? 'on' : 'off');
+        lanEl.textContent = 'LAN ' + (d.integrations.lan ? 'auto-send' : 'off');
         const pend = d.integrations.outbox?.pending || 0;
         outbox.style.display = pend ? '' : 'none';
         outbox.className = 'pill off';
         outbox.textContent = '⏳ ' + pend + ' queued (retrying)';
+        renderPrinters(d.printers || []);
         const s = d.stats.by;
         document.getElementById('stats').innerHTML =
           `<span>Leads: <b>${d.stats.leads}</b></span><span>Queued: ${s.queued||0}</span><span>Printing: ${s.printing||0}</span><span>Ready: ${s.ready||0}</span>`;
@@ -89,6 +106,23 @@
         board.innerHTML = d.jobs.map(card).join('');
       }
 
+      function renderPrinters(list) {
+        const strip = document.getElementById('printer-strip');
+        if (!list.length) { strip.innerHTML = ''; return; }
+        strip.innerHTML = list.map(p => {
+          const live = p.live || {};
+          const state = (live.state || (p.configured ? 'idle' : 'not set up')).toLowerCase();
+          const cls = ['running','pause','finish','failed'].includes(state) ? state : (p.configured ? '' : 'offline');
+          const pct = typeof live.percent === 'number' ? live.percent : null;
+          const eta = typeof live.remainingMin === 'number' && live.remainingMin > 0 ? ` · ${live.remainingMin}m left` : '';
+          const label = state === 'pause' ? 'swap filament' : state;
+          return `<div class="pcard ${cls}">
+            <span class="nm">${esc(p.name)}</span>
+            <span class="st">${esc(label)}${eta}</span>
+            ${pct !== null ? `<span class="bar"><i style="width:${pct}%"></i></span><span class="st">${pct}%</span>` : ''}
+          </div>`;
+        }).join('');
+      }
       function dot(name) { return `<span class="dot" style="background:${COLOUR_HEX[name]||'#888'}"></span>`; }
       function card(j) {
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';

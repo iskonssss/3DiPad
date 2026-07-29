@@ -79,6 +79,13 @@
     },
     "drive": { "enabled": false, "folderId": "" },
     "whatsapp": { "enabled": false, "templateName": "print_ready", "languageCode": "en" },
+    "lan": {
+      "_comment": "Bambu LAN-mode auto-send + status monitoring. Turn LAN Mode ON on each printer (Settings > Network) and copy its Access Code + Serial below. Verify with: npm run test-printer",
+      "enabled": false,
+      "uploadDir": "",
+      "sdPrefix": "/sdcard",
+      "timeoutMs": 30000
+    },
     "printers": [
       { "id": "A1-1", "name": "Printer 1", "ip": "", "serial": "", "accessCode": "" },
       { "id": "A1-2", "name": "Printer 2", "ip": "", "serial": "", "accessCode": "" },
