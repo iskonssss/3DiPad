@@ -49,7 +49,10 @@
       90,
       90
     ],
-    "designLayers": 2
+    "designLayers": 2,
+    "wallLoops": 2,
+    "infillWallOverlap": 0.15,
+    "_wall_comment": "wallLoops: number of perimeters (Bambu default 2). infillWallOverlap: fraction of a line width the infill reaches into the innermost wall, which prevents a groove at the edges."
   },
   "speed": {
     "infill": 12000,
