@@ -19,6 +19,7 @@ import {
   toBed, presetHole, holeIsValid, pointInPolygon,
 } from './geometry.js';
 import { prepareStrokes, totalLength } from './strokes.js';
+import { insetPolygon } from './outline.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
 const ACCEL_FUDGE = 1.6;
@@ -44,6 +45,15 @@ export function generate(design, cfg) {
   const nBack = backingZs.length;
   em.comment(`===== BACKING (colour 1) — ${shape}, ${nBack} layers =====`);
 
+  // Inset outlines are rasterised, so cache them by distance — several layers
+  // share the same inset and each computation is not free.
+  const insetCache = new Map();
+  const insetAt = (d) => {
+    const key = d.toFixed(3);
+    if (!insetCache.has(key)) insetCache.set(key, insetPolygon(poly, d, { cell: 0.25 }));
+    return insetCache.get(key);
+  };
+
   backingZs.forEach((z, i) => {
     const layerH = i === 0 ? b.firstLayerHeight : b.layerHeight;
     const first = i === 0;
@@ -52,18 +62,26 @@ export function generate(design, cfg) {
     const infillFeed = first ? s.firstLayer : solid ? s.solidInfill : s.infill;
     const perimFeed = first ? s.firstLayer : s.perimeter;
 
-    // chamfer: over the top `chamferMm`, inset the solid region (and widen the
-    // hole) to bevel the top rim. Done by inset-of-spans (robust on concave shapes).
+    // Chamfer: over the top `chamferMm` the layer is inset so the rim bevels.
+    // Every layer still gets a real perimeter — without one the top layers are
+    // just ragged infill ends, which is what a missing wall looks like in PLA.
     const cham = Math.max(0, b.chamferMm - (b.backingThickness - z));
-    const perimOn = cham < 1e-6;
-    const inset = perimOn ? b.lineWidth : cham;
     const holeR = hole.r + cham;
 
-    em.comment(`; layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ' chamfer' : ''}`);
+    // perimeter centreline sits half a line width inside the nominal edge, so
+    // the printed part measures the size the kid actually drew
+    const wallPoly = insetAt(cham + b.lineWidth / 2);
+    const fillPoly = insetAt(cham + b.lineWidth * 1.5);
+
+    em.comment(`; layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
     em.setZ(z);
-    if (perimOn) perimeterLoop(em, cfg, bbox, poly, perimFeed, layerH); // raw outline
+    if (wallPoly.length >= 3) perimeterLoop(em, cfg, bbox, wallPoly, perimFeed, layerH);
     holePerimeter(em, cfg, bbox, hole, holeR, perimFeed, layerH);
-    infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, infillFeed, layerH, (i % 2) * (spacing / 2), inset);
+    if (fillPoly.length >= 3) {
+      // alternate the fill axis each layer: better bonding, and it stops the
+      // top surface reading as one direction of banding
+      infillLayer(em, cfg, bbox, fillPoly, hole, holeR, spacing, infillFeed, layerH, (i % 2) * (spacing / 2), i % 2 === 1);
+    }
   });
 
   // ---- colour change ----
@@ -72,7 +90,11 @@ export function generate(design, cfg) {
 
   // ---- design (colour 2), raised beads ----
   const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
-  const designZs = layerZs(b.backingThickness + b.layerHeight, b.layerHeight, b.backingThickness + b.designThickness);
+  // Design height is counted in layers, not mm — 2 layers reads as a raised
+  // line you can feel without looking like a slab on top of the plate.
+  const nDesign = Math.max(1, b.designLayers ?? Math.round((b.designThickness ?? 0.56) / b.layerHeight));
+  const designZs = [];
+  for (let k = 1; k <= nDesign; k++) designZs.push(+(b.backingThickness + k * b.layerHeight).toFixed(3));
   em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
   designZs.forEach((z) => {
     em.setZ(z);
@@ -150,29 +172,41 @@ function holePerimeter(em, cfg, bbox, hole, r, feed, layerH) {
   }
 }
 
-function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, phase, inset) {
+/**
+ * Scanline fill of `poly` (already inset), with the hole carved out.
+ *
+ * `vertical` rotates the fill 90 degrees for this layer. Adjacent lines are
+ * joined with a plain move instead of retract + Z-hop + travel: on a part this
+ * small that removes hundreds of retractions per layer, which is most of the
+ * stringing and a good chunk of the print time.
+ */
+function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, phase, vertical = false) {
   const b = cfg.build;
-  const { yMin, yMax } = boundsY(poly);
+  // Fill along one axis by transposing the geometry, then transposing back.
+  const T = (p) => (vertical ? { x: p.y, y: p.x } : p);
+  const work = vertical ? poly.map(T) : poly;
+  const holeC = vertical ? { cx: hole.cy, cy: hole.cx } : { cx: hole.cx, cy: hole.cy };
+  const { yMin, yMax } = boundsY(work);
+
   let dir = 1;
+  const jumpLimit = spacing * 2.5; // beyond this, retract properly
   for (let y = yMin + spacing * 0.5 + phase; y <= yMax - 0.001; y += spacing) {
-    if (y < yMin + inset || y > yMax - inset) continue; // vertical inset (wall/chamfer)
-    let spans = scanlineSpans(poly, y)
-      .map(([a, c]) => [a + inset, c - inset])
-      .filter(([a, c]) => c - a > 0.2);
+    let spans = scanlineSpans(work, y).filter(([a, c]) => c - a > 0.2);
     if (!spans.length) continue;
-    // carve the hole out of this scanline
-    if (Math.abs(y - hole.cy) < holeR) {
-      const dx = Math.sqrt(holeR * holeR - (y - hole.cy) * (y - hole.cy));
+    if (Math.abs(y - holeC.cy) < holeR) {
+      const dx = Math.sqrt(holeR * holeR - (y - holeC.cy) * (y - holeC.cy));
       let cut = [];
-      for (const sp of spans) cut = cut.concat(subtractInterval([sp], hole.cx - dx, hole.cx + dx));
-      spans = cut;
+      for (const sp of spans) cut = cut.concat(subtractInterval([sp], holeC.cx - dx, holeC.cx + dx));
+      spans = cut.filter(([a, c]) => c - a > 0.2);
     }
+    if (!spans.length) continue;
     if (dir === -1) spans = spans.slice().reverse();
     for (let [a, c] of spans) {
       if (dir === -1) { const t = a; a = c; c = t; }
-      const p0 = toBed({ x: a, y }, bbox, cfg);
-      const p1 = toBed({ x: c, y }, bbox, cfg);
-      em.travelTo(p0.x, p0.y);
+      const p0 = toBed(T({ x: a, y }), bbox, cfg);
+      const p1 = toBed(T({ x: c, y }), bbox, cfg);
+      if (em.distanceTo(p0.x, p0.y) <= jumpLimit) em.moveTo(p0.x, p0.y);
+      else em.travelTo(p0.x, p0.y);
       em.extrudeTo(p1.x, p1.y, feed, b.lineWidth, layerH);
     }
     dir *= -1;
@@ -203,6 +237,15 @@ function makeEmitter(cfg, crossSection) {
     comment: (t) => lines.push('; ' + t),
     raw: (t) => { if (t && t.length) lines.push(t); },
     setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; },
+    distanceTo(x, y) { return Math.hypot(x - pos.x, y - pos.y); },
+    /** Short hop with no retract or Z-hop — for joining adjacent infill lines. */
+    moveTo(x, y) {
+      const L = Math.hypot(x - pos.x, y - pos.y);
+      if (L < 1e-4) return;
+      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`);
+      timeMin += L / s.travel;
+      pos.x = x; pos.y = y;
+    },
     retract() { if (s.retractMm > 0) lines.push(`G1 E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
     unretract() { if (s.retractMm > 0) lines.push(`G1 E${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
     travelTo(x, y) {

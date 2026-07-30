@@ -169,6 +169,18 @@
         <div class="swatches" id="swatches"></div>
       </div>
       <div class="ctl">
+        <h4>Tool</h4>
+        <div class="seg" id="tool-seg">
+          <button data-tool="pen" class="sel">✏️ Draw</button>
+          <button data-tool="eraser">🧽 Erase</button>
+        </div>
+        <div class="penrow" id="eraser-row" style="margin-top:10px;display:none">
+          <span style="font-size:12px;color:var(--dim)">Size</span>
+          <input id="eraser-range" type="range" min="3" max="14" step="1" value="6" />
+          <span id="eraser-mm" style="font-size:12px;color:var(--muted)">6 mm</span>
+        </div>
+      </div>
+      <div class="ctl">
         <h4>Pen tip <span id="pen-mm" style="color:var(--muted)">1.6 mm</span></h4>
         <div class="seg" id="pen-seg">
           <button data-pen="1.0">Fine</button>
@@ -332,7 +344,7 @@ const COUNTRIES=[
 const DEFAULT_CC='65';
 
 const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
-  pen:1.6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/};
+  pen:1.6,tool:'pen',eraser:6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/};
 let lastGen=null;
 
 function bboxFor(shape){
@@ -411,7 +423,43 @@ function updateLayerDots(){$('#dot1').style.background=COLOUR_HEX[state.colours.
 function wirePen(){
   $$('#pen-seg button').forEach(b=>b.addEventListener('click',()=>setPen(+b.dataset.pen)));
   $('#pen-range').addEventListener('input',e=>setPen(+e.target.value,true));
-  setPen(1.6);
+  $$('#tool-seg button').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
+  $('#eraser-range').addEventListener('input',e=>setEraser(e.target.value));
+  setPen(1.6);setEraser(6);setTool('pen');
+}
+function setTool(t){
+  state.tool=t;
+  $$('#tool-seg button').forEach(b=>b.classList.toggle('sel',b.dataset.tool===t));
+  $('#eraser-row').style.display=t==='eraser'?'':'none';
+  if(t==='eraser'&&state.mode==='hole'){state.mode='design';updateHoleButtons();}
+  updateBanner();redraw();
+}
+function setEraser(mm){
+  state.eraser=Math.max(3,Math.min(14,+mm||6));
+  $('#eraser-range').value=state.eraser;
+  $('#eraser-mm').textContent=state.eraser+' mm';
+  redraw();
+}
+/**
+ * Rub out the parts of strokes within `r` of the eraser. Strokes are split
+ * rather than deleted whole, so you can erase the middle of a line and keep
+ * both ends — that's what an eraser does.
+ */
+function eraseAt(p){
+  const r=state.eraser/2;
+  const out=[];
+  let changed=false;
+  for(const st of state.strokes){
+    let cur=[];
+    for(const q of st.pts){
+      if(Math.hypot(q.x-p.x,q.y-p.y)<=r){changed=true;if(cur.length>1)out.push({w:st.w,pts:cur});cur=[];}
+      else cur.push(q);
+    }
+    if(cur.length>1)out.push({w:st.w,pts:cur});
+    else if(cur.length===1&&st.pts.length===1)out.push({w:st.w,pts:cur});
+  }
+  if(changed){state.strokes=out;outsideWarned=false;}
+  return changed;
 }
 function setPen(w,fromRange){state.pen=clampWidth(w,CFG);$('#pen-range').value=state.pen;$('#pen-mm').textContent=state.pen.toFixed(1)+' mm';
   const px=Math.max(8,state.pen/CFG.build.penRange[1]*22);$('#pendot').style.width=px+'px';$('#pendot').style.height=px+'px';
@@ -469,19 +517,21 @@ function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:f
 function syncClearBase(){
   const b=$('#clear-base');if(!b)return;
   b.classList.toggle('dim',state.shape!=='custom');}
-function resizeCanvas(){const bb=bboxFor(state.shape);const scale=Math.min(20,700/Math.max(bb.w,bb.h));pad.width=Math.round(bb.w*scale);pad.height=Math.round(bb.h*scale);redraw();}
+function resizeCanvas(){if(!pad)return;const bb=bboxFor(state.shape);const scale=Math.min(20,700/Math.max(bb.w,bb.h));pad.width=Math.round(bb.w*scale);pad.height=Math.round(bb.h*scale);redraw();}
 function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.shape);
   let x=(ev.clientX-rect.left)/rect.width*bb.w, y=bb.h-(ev.clientY-rect.top)/rect.height*bb.h;
   return {x:Math.max(0,Math.min(bb.w,x)),y:Math.max(0,Math.min(bb.h,y))};}
 function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;if(penSeen&&ev.pointerType==='touch')return;
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
+  if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
   else state.strokes.push({w:state.pen,pts:[p]});
   redraw();}
 function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefault();
   const evs=ev.getCoalescedEvents?ev.getCoalescedEvents():[ev];
+  if(state.tool==='eraser'&&state.mode!=='outline'){for(const e of evs)eraseAt(toMM(e));redraw();return;}
   if(state.mode==='outline'){for(const e of evs)outlinePts.push(toMM(e));}
   else{const st=state.strokes[state.strokes.length-1];for(const e of evs)st.pts.push(toMM(e));}
   redraw();}
@@ -509,10 +559,12 @@ function placeHole(p){
 function updateBanner(){const b=$('#banner');
   if(state.shape==='custom'&&state.mode==='outline'){b.style.display='';b.textContent='✏️ Draw the outline of your shape';}
   else if(state.mode==='hole'){b.style.display='';b.textContent='📍 Tap where the keyring hole goes';}
+  else if(state.tool==='eraser'){b.style.display='';b.textContent='🧽 Rub over your drawing to erase';}
   else b.style.display='none';}
 
 function canvasPx(){const bb=bboxFor(state.shape);const sx=pad.width/bb.w,sy=pad.height/bb.h;return {bb,px:p=>[p.x*sx,pad.height-p.y*sy],sx,sy};}
 function redraw(){
+  if(!pad||!ctx)return; // called before the canvas is wired up during boot
   const W=pad.width,H=pad.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
   const {bb,px}=canvasPx();
   // shape guide
@@ -622,7 +674,7 @@ async function submit(){
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
 function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
-  state.pen=1.6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
+  state.pen=1.6;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
   $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape(DEFAULT_SHAPE);show('welcome');}
 
@@ -635,7 +687,7 @@ const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[
 const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 
 /* ---- boot (after all declarations) ---- */
-buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();setupCanvas();
+setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();
 $('#submit').addEventListener('click',submit);
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);
 

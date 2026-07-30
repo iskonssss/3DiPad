@@ -1,18 +1,38 @@
 {
   "_comment": "Copy to config.json and edit for your booth. Nothing secret belongs in git; secrets go in .env (see .env.example).",
-
   "build": {
     "_comment": "shapeSizes are the backing bounding boxes in mm; kept modest so prints stay under the 15-min budget. customMax bounds the free-draw shape.",
-    "shapeSizes": { "rectangle": [100, 40], "square": [60, 60], "circle": [60], "heart": [58, 54] },
-    "customMax": [80, 80],
-    "backingThickness": 2.0,
-    "designThickness": 2.0,
+    "shapeSizes": {
+      "rectangle": [
+        100,
+        40
+      ],
+      "square": [
+        60,
+        60
+      ],
+      "circle": [
+        60
+      ],
+      "heart": [
+        58,
+        54
+      ]
+    },
+    "customMax": [
+      80,
+      80
+    ],
+    "backingThickness": 2,
     "layerHeight": 0.28,
     "firstLayerHeight": 0.28,
     "lineWidth": 0.45,
     "beadWidth": 1.4,
-    "penRange": [0.8, 2.6],
-    "holeDiameter": 5.0,
+    "penRange": [
+      0.8,
+      2.6
+    ],
+    "holeDiameter": 5,
     "holeWallMin": 2.5,
     "chamferMm": 0.8,
     "designEdgeMargin": 1.5,
@@ -25,9 +45,12 @@
     "solidLayers": 2,
     "sparseSpacing": 3.5,
     "filamentDiameter": 1.75,
-    "bedCenter": [90, 90]
+    "bedCenter": [
+      90,
+      90
+    ],
+    "designLayers": 2
   },
-
   "speed": {
     "infill": 12000,
     "solidInfill": 9000,
@@ -39,38 +62,44 @@
     "retractMm": 0.8,
     "retractSpeed": 2400
   },
-
   "temp": {
     "nozzle": 220,
     "bed": 60,
     "nozzleFirst": 220,
     "bedFirst": 60
   },
-
   "limits": {
     "maxPrintMinutes": 15,
     "maxStrokeLengthMm": 5000,
     "warnPrintMinutes": 13
   },
-
   "colourChange": {
     "_comment": "Inserted at the backing->design transition. M400 U1 is the Bambu A1 pause: it finishes moves and pauses so the operator uses the printer screen's filament menu to unload colour 1 / load colour 2, then Resume.",
-    "gcode": ["M400 U1 ; ===== COLOUR CHANGE: unload colour 1, load colour 2 on the printer screen, then Resume ====="]
+    "gcode": [
+      "M400 U1 ; ===== COLOUR CHANGE: unload colour 1, load colour 2 on the printer screen, then Resume ====="
+    ]
   },
-
   "template": {
     "_comment": "Replace start.gcode / end.gcode with the header+footer from a REAL sliced A1 mini file for your filament, so bed levelling / flow calibration run correctly. Placeholders {nozzle} {bed} {nozzleFirst} {bedFirst} are substituted.",
     "startFile": "src/gcode/templates/a1mini.start.gcode",
     "endFile": "src/gcode/templates/a1mini.end.gcode"
   },
-
-  "palette": ["BLACK", "WHITE", "RED", "BLUE", "GREEN", "YELLOW", "PINK", "PURPLE", "ORANGE", "TEAL"],
-
+  "palette": [
+    "BLACK",
+    "WHITE",
+    "RED",
+    "BLUE",
+    "GREEN",
+    "YELLOW",
+    "PINK",
+    "PURPLE",
+    "ORANGE",
+    "TEAL"
+  ],
   "output": {
     "dir": "output",
     "filenamePattern": "{c1}-{c2}_{seq}.gcode"
   },
-
   "integrations": {
     "notify": {
       "_comment": "Who sends the WhatsApp: 'ghl' (GoHighLevel inbound webhook — recommended, GHL owns the message + nurture), 'meta' (direct WhatsApp Cloud API, see whatsapp block), or 'none'.",
@@ -79,12 +108,22 @@
     "ghl": {
       "_comment": "Inbound-webhook URLs go in .env (GHL_LEAD_WEBHOOK_URL / GHL_READY_WEBHOOK_URL) or here. One URL is fine — branch on payload.event in the GHL workflow.",
       "eventName": "Not So Little Fair",
-      "tags": ["NSLF-2026", "3d-workshop-lead"],
+      "tags": [
+        "NSLF-2026",
+        "3d-workshop-lead"
+      ],
       "leadWebhookUrl": "",
       "readyWebhookUrl": ""
     },
-    "drive": { "enabled": false, "folderId": "" },
-    "whatsapp": { "enabled": false, "templateName": "print_ready", "languageCode": "en" },
+    "drive": {
+      "enabled": false,
+      "folderId": ""
+    },
+    "whatsapp": {
+      "enabled": false,
+      "templateName": "print_ready",
+      "languageCode": "en"
+    },
     "lan": {
       "_comment": "Bambu LAN-mode auto-send + status monitoring. Turn LAN Mode ON on each printer (Settings > Network) and copy its Access Code + Serial below. Verify with: npm run test-printer",
       "enabled": false,
@@ -93,9 +132,27 @@
       "timeoutMs": 30000
     },
     "printers": [
-      { "id": "A1-1", "name": "Printer 1", "ip": "", "serial": "", "accessCode": "" },
-      { "id": "A1-2", "name": "Printer 2", "ip": "", "serial": "", "accessCode": "" },
-      { "id": "A1-3", "name": "Printer 3", "ip": "", "serial": "", "accessCode": "" }
+      {
+        "id": "A1-1",
+        "name": "Printer 1",
+        "ip": "",
+        "serial": "",
+        "accessCode": ""
+      },
+      {
+        "id": "A1-2",
+        "name": "Printer 2",
+        "ip": "",
+        "serial": "",
+        "accessCode": ""
+      },
+      {
+        "id": "A1-3",
+        "name": "Printer 3",
+        "ip": "",
+        "serial": "",
+        "accessCode": ""
+      }
     ]
   }
 }

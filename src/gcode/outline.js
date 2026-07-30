@@ -65,22 +65,83 @@ export function healOutline(points, opts = {}) {
   const smoothIters = opts.smooth ?? 2;
   if (!Array.isArray(points) || points.length < 3) return [];
 
-  // --- bounds with padding so morphology has room to work ---
-  const pad = Math.ceil((closeR + openR) / cell) + 2;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-  }
-  const w = Math.ceil((maxX - minX) / cell) + pad * 2;
-  const h = Math.ceil((maxY - minY) / cell) + pad * 2;
-  if (w < 4 || h < 4 || w * h > 4_000_000) return [];
-  const gx = (x) => (x - minX) / cell + pad;
-  const gy = (y) => (y - minY) / cell + pad;
+  // --- 1. rasterise the closed path (padding leaves room for morphology) ---
+  const r = new Raster(points, cell, Math.ceil((closeR + openR) / cell) + 2);
+  if (!r.ok) return [];
+  const { w, h } = r;
+  let mask = r.mask;
 
-  // --- 1. rasterise the closed path (even-odd scanline fill) ---
-  const poly = points.map((p) => ({ x: gx(p.x), y: gy(p.y) }));
-  let mask = new Uint8Array(w * h);
+  // --- 2. close (dilate then erode): bridges an unclosed loop ---
+  mask = dilate(mask, w, h, closeR / cell);
+  mask = erode(mask, w, h, closeR / cell);
+  // --- 3. open (erode then dilate): removes thin spikes/needles ---
+  mask = erode(mask, w, h, openR / cell);
+  mask = dilate(mask, w, h, openR / cell);
+
+  // --- 4. keep the largest blob ---
+  const blob = largestBlob(mask, w, h);
+  if (!blob) return [];
+
+  // --- 5. trace + smooth ---
+  const traced = traceBoundary(blob, w, h);
+  if (traced.length < 8) return [];
+  let out = r.toMm(traced);
+  out = decimate(out, cell * 1.5);
+  out = smooth(out, smoothIters, false);
+  // keep it smooth but not needlessly dense — long perimeters would bloat the
+  // g-code and slow the print with thousands of micro-segments
+  out = decimate(out, opts.minSeg ?? cell * 2.5);
+  return out;
+}
+
+/**
+ * Shrink a polygon inward by `d` mm. Done on a raster (erode + re-trace) rather
+ * than by offsetting edges, because edge-offset self-intersects on concave
+ * shapes — the heart's cleft and any hand-drawn outline. Returns [] if nothing
+ * survives (the shape is thinner than 2*d).
+ */
+export function insetPolygon(points, d, opts = {}) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  if (d <= 1e-6) return points.slice();
+  const cell = opts.cell ?? 0.25;
+  const r = new Raster(points, cell, Math.ceil(d / cell) + 3);
+  if (!r.ok) return [];
+  const eroded = erode(r.mask, r.w, r.h, d / cell);
+  const blob = largestBlob(eroded, r.w, r.h);
+  if (!blob) return [];
+  const traced = traceBoundary(blob, r.w, r.h);
+  if (traced.length < 8) return [];
+  let out = r.toMm(traced);
+  out = decimate(out, cell * 1.5);
+  out = smooth(out, opts.smooth ?? 1, false);
+  return decimate(out, opts.minSeg ?? cell * 2.5);
+}
+
+/** Rasterise a closed polygon into a bitmask, remembering how to map back. */
+class Raster {
+  constructor(points, cell, pad) {
+    this.cell = cell; this.pad = pad;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    this.minX = minX; this.minY = minY;
+    this.w = Math.ceil((maxX - minX) / cell) + pad * 2;
+    this.h = Math.ceil((maxY - minY) / cell) + pad * 2;
+    this.ok = this.w >= 4 && this.h >= 4 && this.w * this.h <= 4_000_000;
+    if (!this.ok) return;
+    const poly = points.map((p) => ({ x: (p.x - minX) / cell + pad, y: (p.y - minY) / cell + pad }));
+    this.mask = fillPolygon(poly, this.w, this.h);
+  }
+  toMm(cells) {
+    return cells.map((c) => ({ x: (c.x - this.pad) * this.cell + this.minX, y: (c.y - this.pad) * this.cell + this.minY }));
+  }
+}
+
+/** Even-odd scanline fill of a closed polygon in grid coordinates. */
+function fillPolygon(poly, w, h) {
+  const mask = new Uint8Array(w * h);
   for (let row = 0; row < h; row++) {
     const yc = row + 0.5;
     const xs = [];
@@ -97,28 +158,7 @@ export function healOutline(points, opts = {}) {
       for (let col = from; col <= to; col++) mask[row * w + col] = 1;
     }
   }
-
-  // --- 2. close (dilate then erode): bridges an unclosed loop ---
-  mask = dilate(mask, w, h, closeR / cell);
-  mask = erode(mask, w, h, closeR / cell);
-  // --- 3. open (erode then dilate): removes thin spikes/needles ---
-  mask = erode(mask, w, h, openR / cell);
-  mask = dilate(mask, w, h, openR / cell);
-
-  // --- 4. keep the largest blob ---
-  const blob = largestBlob(mask, w, h);
-  if (!blob) return [];
-
-  // --- 5. trace + smooth ---
-  const traced = traceBoundary(blob, w, h);
-  if (traced.length < 8) return [];
-  let out = traced.map((c) => ({ x: (c.x - pad) * cell + minX, y: (c.y - pad) * cell + minY }));
-  out = decimate(out, cell * 1.5);
-  out = smooth(out, smoothIters, false);
-  // keep it smooth but not needlessly dense — long perimeters would bloat the
-  // g-code and slow the print with thousands of micro-segments
-  out = decimate(out, opts.minSeg ?? cell * 2.5);
-  return out;
+  return mask;
 }
 
 /* ---------------- morphology via chamfer distance transform ---------------- */
