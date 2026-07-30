@@ -52,20 +52,81 @@
   .nav { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
   .nav .last { margin-left: auto; }
 
-  /* studio */
-  .studio-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  /* ---------- studio: fills the viewport exactly, never scrolls ---------- */
+  .screen.studio.active {
+    position: fixed; inset: 0; max-width: none; display: flex; flex-direction: column; gap: 8px;
+    padding: calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 12px)
+             calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 12px);
+    overflow: hidden;
+  }
+  .studio-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 auto; }
+  .studio-bar h2 { margin: 0; font-size: clamp(17px, 2.4vw, 24px); }
+  .studio-grid { flex: 1 1 auto; min-height: 0; display: grid; gap: 12px;
+    grid-template-columns: clamp(268px, 30%, 340px) 1fr; }
+  /* Safety net: if a screen is too short for the controls they scroll inside
+     this panel rather than being clipped and unreachable. */
+  .side { min-height: 0; display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .side .ctl { flex: 0 0 auto; }
+  .side-actions { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .side-actions .go { grid-column: 1 / -1; }
+  .btn.sm { font-size: 14px; padding: 11px 8px; border-radius: 10px; }
+  .canvas-col { min-width: 0; min-height: 0; display: flex; }
+  .mini { font-size: 12px; color: var(--muted); font-weight: 600; }
+
+  /* Short screens (1024x768 iPads, laptops in landscape): tighten everything so
+     the controls and the Preview button still fit without scrolling. */
+  @media (max-height: 830px) {
+    .swatches { grid-template-columns: repeat(5, 26px); }
+    .screen.studio.active { gap: 6px; }
+    .studio-grid { gap: 10px; }
+    .side { gap: 6px; }
+    .ctl { padding: 8px 10px; }
+    .ctl h4 { margin-bottom: 6px; font-size: 11px; }
+    .seg button, .holebtns button, .layerpick button { padding: 7px 5px; font-size: 12px; }
+    .chip { padding: 6px 9px; font-size: 12px; }
+    .chip svg { width: 15px; height: 15px; }
+    .btn.sm { padding: 9px 6px; font-size: 13px; }
+    .side-actions { gap: 6px; }
+  }
+  @media (max-height: 790px) {
+    .swatches { grid-template-columns: repeat(5, 24px); }
+    .side { gap: 5px; }
+    .studio-bar h2 { font-size: 15px; }
+    .ctl { padding: 5px 9px; }
+    .ctl h4 { margin-bottom: 4px; }
+    .seg button, .holebtns button, .layerpick button, .chip { padding: 6px 5px; font-size: 11.5px; }
+    .btn.sm { padding: 8px 5px; font-size: 12.5px; }
+  }
+
+  /* Portrait / phone: stack, canvas on top, controls under it. */
+  @media (max-width: 700px) {
+    .studio-grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 38vh) auto; gap: 8px; }
+    .canvas-col { grid-row: 1; }
+    .side { grid-row: 2; overflow-y: auto; }
+    .side-actions { grid-template-columns: 1fr 1fr 1fr; }
+    .side-actions .go { grid-column: 1 / -1; }
+    .side { gap: 6px; }
+    .swatches { grid-template-columns: repeat(5, 26px); }
+  }
+
   .meter { flex: 0 1 180px; height: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
   .meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .15s; }
   .meter i.hot { background: linear-gradient(90deg, var(--accent), var(--danger)); }
 
-  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 8px; -webkit-overflow-scrolling: touch; }
-  .chip { flex: 0 0 auto; background: var(--panel); border: 2px solid var(--line); border-radius: 11px; color: var(--ink);
-    font-weight: 700; font-size: 14px; padding: 9px 14px; cursor: pointer; display: flex; align-items: center; gap: 7px; }
+  /* shape chips wrap inside the side panel instead of scrolling sideways */
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { flex: 0 0 auto; background: var(--panel2); border: 2px solid transparent; border-radius: 10px; color: var(--ink);
+    font-weight: 700; font-size: 13px; padding: 8px 10px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
   .chip.sel { border-color: var(--accent); background: #221f10; }
-  .chip svg { width: 20px; height: 20px; }
+  .chip svg { width: 17px; height: 17px; }
 
-  .canvas-wrap { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; }
-  #pad { width: 100%; height: auto; display: block; border-radius: 10px; background: #fff; touch-action: none; }
+  /* The canvas is sized in JS to the largest box that fits this panel while
+     keeping the plate's aspect ratio, so nothing ever needs scrolling. */
+  .canvas-wrap { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px;
+    display: flex; align-items: center; justify-content: center; }
+  #pad { display: block; border-radius: 10px; background: #fff; touch-action: none; }
   .canvas-banner { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); background: #0b1120e0; color: var(--ink);
     font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); pointer-events: none;
     max-width: 92%; text-align: center; }
@@ -78,8 +139,9 @@
   .seg button { flex: 1; background: var(--panel2); border: 2px solid transparent; color: var(--ink); font-family: inherit; font-weight: 700;
     font-size: 13px; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
   .seg button.sel { border-color: var(--accent); }
-  .swatches { display: flex; gap: 7px; flex-wrap: wrap; }
-  .swatch { width: 30px; height: 30px; border-radius: 8px; border: 3px solid transparent; cursor: pointer; }
+  /* fixed 5-per-row so the palette is always two tidy rows */
+  .swatches { display: grid; grid-template-columns: repeat(5, 28px); gap: 6px; justify-content: start; }
+  .swatch { width: auto; height: auto; aspect-ratio: 1; border-radius: 8px; border: 3px solid transparent; cursor: pointer; }
   .swatch.sel { border-color: var(--accent); box-shadow: 0 0 0 3px #ffd23f33; }
   .layerpick { display: flex; gap: 6px; margin-bottom: 9px; }
   .layerpick button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--panel2);
@@ -88,7 +150,7 @@
   .dot { width: 15px; height: 15px; border-radius: 4px; border: 1px solid #ffffff40; }
   .penrow { display: flex; align-items: center; gap: 10px; }
   .penrow input[type=range] { flex: 1; accent-color: var(--accent); }
-  .pendot { border-radius: 50%; background: var(--ink); flex: none; }
+  .pendot { border-radius: 50%; background: var(--ink); flex: none; width: 14px; height: 14px; }
   .holebtns { display: flex; gap: 6px; flex-wrap: wrap; }
   .holebtns button { flex: 1 1 auto; min-width: 60px; background: var(--panel2); border: 2px solid transparent; color: var(--ink);
     font-family: inherit; font-weight: 700; font-size: 13px; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
@@ -148,69 +210,79 @@
     </div>
   </section>
 
-  <section class="screen" data-screen="studio">
-    <div class="studio-head">
+  <section class="screen studio" data-screen="studio">
+    <div class="studio-bar">
       <h2>Design your keychain</h2>
       <div class="meter" title="How full the print is"><i id="fill-bar"></i></div>
     </div>
-    <div class="chips" id="shape-chips"></div>
-    <div class="canvas-wrap">
-      <canvas id="pad" width="1000" height="600"></canvas>
-      <div class="canvas-banner" id="banner"></div>
-    </div>
 
-    <div class="controls">
-      <div class="ctl">
-        <h4>Colours</h4>
-        <div class="layerpick" id="layerpick">
-          <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
-          <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
+    <div class="studio-grid">
+      <aside class="side">
+        <div class="ctl">
+          <h4>Shape</h4>
+          <div class="chips" id="shape-chips"></div>
         </div>
-        <div class="swatches" id="swatches"></div>
-      </div>
-      <div class="ctl">
-        <h4>Tool</h4>
-        <div class="seg" id="tool-seg">
-          <button data-tool="pen" class="sel">✏️ Draw</button>
-          <button data-tool="eraser">🧽 Erase</button>
-        </div>
-        <div class="penrow" id="eraser-row" style="margin-top:10px;display:none">
-          <span style="font-size:12px;color:var(--dim)">Size</span>
-          <input id="eraser-range" type="range" min="3" max="14" step="1" value="6" />
-          <span id="eraser-mm" style="font-size:12px;color:var(--muted)">6 mm</span>
-        </div>
-      </div>
-      <div class="ctl">
-        <h4>Pen tip <span id="pen-mm" style="color:var(--muted)">1.6 mm</span></h4>
-        <div class="seg" id="pen-seg">
-          <button data-pen="1.0">Fine</button>
-          <button data-pen="1.6" class="sel">Medium</button>
-          <button data-pen="2.4">Thick</button>
-        </div>
-        <div class="penrow" style="margin-top:10px">
-          <span class="pendot" id="pendot" style="width:16px;height:16px"></span>
-          <input id="pen-range" type="range" min="0.8" max="2.6" step="0.1" value="1.6" />
-        </div>
-      </div>
-      <div class="ctl" style="grid-column:1/-1">
-        <h4>Keyring hole <span id="hole-state" style="color:var(--danger)">not placed</span></h4>
-        <div class="holebtns" id="holebtns">
-          <button data-hole="left">Left</button>
-          <button data-hole="top">Top</button>
-          <button data-hole="right">Right</button>
-          <button data-hole="tap" id="tap-btn">📍 Tap to place</button>
-        </div>
-      </div>
-    </div>
 
-    <div class="toolrow tight">
-      <button class="btn ghost" id="undo">↶ Undo</button>
-      <button class="btn ghost" id="clear-drawing">Clear drawing</button>
-      <button class="btn ghost" id="clear-base">Clear base</button>
-    </div>
-    <div class="toolrow">
-      <button class="btn ghost" data-go="contact">Back</button>
-      <button class="btn" data-go="review">Preview →</button>
+        <div class="ctl">
+          <h4>Tool</h4>
+          <div class="seg" id="tool-seg">
+            <button data-tool="pen" class="sel">✏️ Draw</button>
+            <button data-tool="eraser">🧽 Erase</button>
+          </div>
+          <div class="penrow" id="eraser-row" style="display:none">
+            <span class="mini">Size</span>
+            <input id="eraser-range" type="range" min="3" max="14" step="1" value="6" />
+            <span id="eraser-mm" class="mini">6 mm</span>
+          </div>
+        </div>
+
+        <div class="ctl">
+          <h4>Colours</h4>
+          <div class="layerpick" id="layerpick">
+            <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
+            <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
+          </div>
+          <div class="swatches" id="swatches"></div>
+        </div>
+
+        <div class="ctl">
+          <h4>Pen tip <span id="pen-mm" class="mini">1.6 mm</span></h4>
+          <div class="seg" id="pen-seg">
+            <button data-pen="1.0">Fine</button>
+            <button data-pen="1.6" class="sel">Medium</button>
+            <button data-pen="2.4">Thick</button>
+          </div>
+          <div class="penrow">
+            <span class="pendot" id="pendot"></span>
+            <input id="pen-range" type="range" min="0.8" max="2.6" step="0.1" value="1.6" />
+          </div>
+        </div>
+
+        <div class="ctl">
+          <h4>Keyring hole <span id="hole-state" class="mini">not placed</span></h4>
+          <div class="holebtns" id="holebtns">
+            <button data-hole="left">Left</button>
+            <button data-hole="top">Top</button>
+            <button data-hole="right">Right</button>
+            <button data-hole="tap" id="tap-btn">📍 Tap</button>
+          </div>
+        </div>
+
+        <div class="side-actions">
+          <button class="btn ghost sm" id="undo">↶ Undo</button>
+          <button class="btn ghost sm" id="clear-drawing">Clear drawing</button>
+          <button class="btn ghost sm" id="clear-base">Clear base</button>
+          <button class="btn ghost sm" data-go="contact">Back</button>
+          <button class="btn sm go" data-go="review">Preview →</button>
+        </div>
+      </aside>
+
+      <div class="canvas-col">
+        <div class="canvas-wrap">
+          <canvas id="pad" width="1000" height="1000"></canvas>
+          <div class="canvas-banner" id="banner"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -354,7 +426,7 @@ function bboxFor(shape){
 function polyFor(){ return shapePolygon(state.shape,CFG,state.customOutline).poly; }
 
 /* ---- nav ---- */
-function show(name){$$('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===name));if(name==='review')enterReview();if(name==='studio')redraw();window.scrollTo(0,0);}
+function show(name){$$('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===name));if(name==='review')enterReview();if(name==='studio'){requestAnimationFrame(()=>{fitCanvas();redraw();});}window.scrollTo(0,0);}
 function wireNav(){$$('[data-go]').forEach(el=>el.addEventListener('click',()=>{
     const v=el.dataset.validate;if(v&&!validate(v))return;
     if(el.dataset.go==='review'&&!goReview())return;
@@ -517,7 +589,37 @@ function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:f
 function syncClearBase(){
   const b=$('#clear-base');if(!b)return;
   b.classList.toggle('dim',state.shape!=='custom');}
-function resizeCanvas(){if(!pad)return;const bb=bboxFor(state.shape);const scale=Math.min(20,700/Math.max(bb.w,bb.h));pad.width=Math.round(bb.w*scale);pad.height=Math.round(bb.h*scale);redraw();}
+/**
+ * Size the canvas twice over:
+ *  - the bitmap (pad.width/height) at a fixed mm-to-pixel scale, for drawing detail
+ *  - the CSS box to the largest rectangle that fits the panel at the plate's
+ *    aspect ratio, so the studio always fits the screen without scrolling
+ * toMM() works off getBoundingClientRect, so the two can differ safely.
+ */
+function resizeCanvas(){
+  if(!pad)return;
+  const bb=bboxFor(state.shape);
+  const scale=Math.min(20,900/Math.max(bb.w,bb.h));
+  pad.width=Math.round(bb.w*scale);
+  pad.height=Math.round(bb.h*scale);
+  fitCanvas();
+  redraw();
+}
+function fitCanvas(){
+  if(!pad)return;
+  const wrap=pad.parentElement;
+  if(!wrap)return;
+  const cs=getComputedStyle(wrap);
+  const availW=wrap.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
+  const availH=wrap.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
+  if(!(availW>0&&availH>0))return;
+  const bb=bboxFor(state.shape);
+  const aspect=bb.w/bb.h;
+  let w=availW,h=w/aspect;
+  if(h>availH){h=availH;w=h*aspect;}
+  pad.style.width=Math.floor(w)+'px';
+  pad.style.height=Math.floor(h)+'px';
+}
 function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.shape);
   let x=(ev.clientX-rect.left)/rect.width*bb.w, y=bb.h-(ev.clientY-rect.top)/rect.height*bb.h;
   return {x:Math.max(0,Math.min(bb.w,x)),y:Math.max(0,Math.min(bb.h,y))};}
@@ -691,5 +793,7 @@ setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wireP
 $('#submit').addEventListener('click',submit);
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);
 
+addEventListener('resize',()=>{fitCanvas();redraw();});
+addEventListener('orientationchange',()=>setTimeout(()=>{fitCanvas();redraw();},250));
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
