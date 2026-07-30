@@ -77,7 +77,7 @@ export function generate(design, cfg) {
     const wallPoly = insetAt(cham + b.lineWidth / 2);
     const fillPoly = insetAt(cham + b.lineWidth * 1.5);
 
-    em.comment(`; layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
+    em.comment(`layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
     marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
     // Part cooling: off for the first layer so it sticks, then on for the rest.
@@ -240,17 +240,67 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
   }
 }
 
+/**
+ * Draw one pen stroke as a raised bead.
+ *
+ * A 0.4mm nozzle can only lay about 0.8mm of plastic in a single pass. Asking
+ * it for the full pen width in one go over-extrudes badly — the line comes out
+ * lumpy and domed instead of a flat raised bead. So a wide pen is drawn as
+ * several parallel passes at normal line width, side by side, walked in a
+ * serpentine so the passes join without retracting.
+ */
 function beadStroke(em, cfg, bbox, stroke, feed, layerH) {
   const pts = stroke.pts;
   if (!pts.length) return;
-  const width = stroke.w;
-  const p0 = toBed(pts[0], bbox, cfg);
-  em.travelTo(p0.x, p0.y);
-  if (pts.length === 1) { em.extrudeTo(p0.x + width * 0.5, p0.y, feed, width, layerH); return; }
-  for (let i = 1; i < pts.length; i++) {
-    const p = toBed(pts[i], bbox, cfg);
-    em.extrudeTo(p.x, p.y, feed, width, layerH);
+  const lw = cfg.build.lineWidth;
+  const width = Math.max(lw, stroke.w);
+  const passes = Math.max(1, Math.round(width / lw));
+
+  if (pts.length === 1) {
+    // a dot: a few short side-by-side dabs of the right overall width
+    const c = pts[0];
+    for (let k = 0; k < passes; k++) {
+      const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
+      const a = toBed({ x: c.x - lw * 0.5, y: c.y + off }, bbox, cfg);
+      const b = toBed({ x: c.x + lw * 0.5, y: c.y + off }, bbox, cfg);
+      if (em.distanceTo(a.x, a.y) <= lw * 2.5) em.moveTo(a.x, a.y); else em.travelTo(a.x, a.y);
+      em.extrudeTo(b.x, b.y, feed, lw, layerH);
+    }
+    return;
   }
+
+  const normals = strokeNormals(pts);
+  for (let k = 0; k < passes; k++) {
+    const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
+    // serpentine: reverse every other pass so the end of one is beside the
+    // start of the next, letting them join with a plain move
+    const order = k % 2 === 0 ? [...pts.keys()] : [...pts.keys()].reverse();
+    let started = false;
+    for (const idx of order) {
+      const p = pts[idx], n = normals[idx];
+      const q = toBed({ x: p.x + n.x * off, y: p.y + n.y * off }, bbox, cfg);
+      if (!started) {
+        if (em.distanceTo(q.x, q.y) <= Math.max(lw * 2.5, 1.0)) em.moveTo(q.x, q.y);
+        else em.travelTo(q.x, q.y);
+        started = true;
+      } else {
+        em.extrudeTo(q.x, q.y, feed, lw, layerH);
+      }
+    }
+  }
+}
+
+/** Unit normal at each point of an open polyline (average of adjacent segments). */
+function strokeNormals(pts) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    let tx = b.x - a.x, ty = b.y - a.y;
+    const len = Math.hypot(tx, ty) || 1;
+    tx /= len; ty /= len;
+    out.push({ x: -ty, y: tx });
+  }
+  return out;
 }
 
 function makeEmitter(cfg, crossSection) {
