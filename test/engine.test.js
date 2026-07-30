@@ -48,7 +48,8 @@ for (const shape of SHAPES) {
     assert.ok(gcode.includes('G29'), 'auto bed levelling present');
     assert.ok(gcode.includes('M83'), 'relative extrusion');
     assert.ok(gcode.includes('M400 U1'), 'M400 U1 colour-change pause');
-    assert.ok(meta.backingLayers >= 5 && meta.designLayers >= 5);
+    assert.ok(meta.backingLayers >= 5, 'backing has several layers');
+    assert.equal(meta.designLayers, cfg.build.designLayers, 'design height is the configured layer count');
     assert.ok(meta.strokeCount >= 1, 'strokes survived');
   });
 
@@ -77,9 +78,24 @@ for (const shape of SHAPES) {
     for (const p of dz) assert.ok(p.z > cfg.build.backingThickness - 1e-6, `design z=${p.z} not above backing`);
   });
 
-  test(`${shape}: top layers carry a chamfer`, () => {
+  test(`${shape}: chamfered top layers still get a real perimeter`, () => {
     const { gcode } = generate(design(shape), cfg);
     assert.ok(gcode.includes('chamfer'), 'chamfer applied on top backing layers');
+    // Regression: chamfer layers used to skip the perimeter, leaving the top
+    // rim as ragged infill ends instead of a clean bevel.
+    const layers = gcode.split(/^; ; layer /m).slice(1);
+    const chamfered = layers.filter((L) => L.split('\n')[0].includes('chamfer'));
+    assert.ok(chamfered.length >= 2, 'several layers are chamfered');
+    for (const L of chamfered) {
+      // a perimeter is a long unbroken run of extrusions with no retract
+      const body = L.split('\n');
+      let run = 0, best = 0;
+      for (const line of body) {
+        if (/^G1 X[-\d.]+ Y[-\d.]+ E[\d.]+/.test(line)) { run++; best = Math.max(best, run); }
+        else if (/E-/.test(line)) run = 0;
+      }
+      assert.ok(best >= 20, `chamfer layer has no perimeter loop (longest run ${best})`);
+    }
   });
 
   test(`${shape}: stays under the print-time limit`, () => {
