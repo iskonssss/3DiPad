@@ -1054,10 +1054,14 @@ function generate(design, cfg) {
     const cham = Math.max(0, b.chamferMm - (b.backingThickness - z));
     const holeR = hole.r + cham;
 
-    // perimeter centreline sits half a line width inside the nominal edge, so
-    // the printed part measures the size the kid actually drew
-    const wallPoly = insetAt(cham + b.lineWidth / 2);
-    const fillPoly = insetAt(cham + b.lineWidth * 1.5);
+    // Walls: two loops, like a real slicer. The outer centreline sits half a
+    // line width inside the nominal edge so the part measures what was drawn.
+    const lw = b.lineWidth;
+    const walls = Math.max(1, b.wallLoops ?? 2);
+    const overlap = lw * (b.infillWallOverlap ?? 0.15);
+    // infill starts just inside the innermost wall and overlaps into it, which
+    // is what stops a visible groove appearing between the wall and the fill
+    const fillInset = cham + lw * (walls + 0.5) - overlap;
 
     em.comment(`layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
     marks.push({ at: em.lines.length, t: em.timeNow() });
@@ -1066,12 +1070,26 @@ function generate(design, cfg) {
     // Printing the whole part with the fan off is what causes drooping and the
     // fine strings between travel moves.
     if (i === 1) em.raw(`M106 S${Math.round(cfg.fan?.other ?? 255)} ; part cooling on`);
-    if (wallPoly.length >= 3) perimeterLoop(em, cfg, bbox, wallPoly, perimFeed, layerH);
-    holePerimeter(em, cfg, bbox, hole, holeR, perimFeed, layerH);
+
+    // inner walls first, outer wall last — the order Bambu Studio uses
+    for (let wIdx = walls - 1; wIdx >= 0; wIdx--) {
+      const loop = insetAt(cham + lw * (wIdx + 0.5));
+      if (loop.length >= 3) {
+        em.comment(wIdx === 0 ? 'outer wall' : 'inner wall');
+        perimeterLoop(em, cfg, bbox, loop, perimFeed, layerH);
+      }
+    }
+    // hole wall centreline sits a half width OUTSIDE the void, so the finished
+    // hole is the full 5mm rather than 5mm minus a wall
+    holePerimeter(em, cfg, bbox, hole, holeR + lw / 2, perimFeed, layerH);
+
+    const fillPoly = insetAt(fillInset);
     if (fillPoly.length >= 3) {
-      // alternate the fill axis each layer: better bonding, and it stops the
-      // top surface reading as one direction of banding
-      infillLayer(em, cfg, bbox, fillPoly, hole, holeR, spacing, infillFeed, layerH, (i % 2) * (spacing / 2), i % 2 === 1);
+      em.comment(solid ? 'solid infill' : 'sparse infill');
+      // 45 degrees, alternating per layer — diagonal to the walls, so lines
+      // bond better and the surface doesn't read as one direction of banding
+      infillLayer(em, cfg, bbox, fillPoly, hole, holeR + lw - overlap, spacing, infillFeed, layerH,
+        (i % 2) * (spacing / 2), i % 2 === 0 ? 45 : 135);
     }
   });
 
@@ -1189,36 +1207,80 @@ function holePerimeter(em, cfg, bbox, hole, r, feed, layerH) {
  * small that removes hundreds of retractions per layer, which is most of the
  * stringing and a good chunk of the print time.
  */
-function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, phase, vertical = false) {
+/**
+ * Scanline fill of `poly` (already inset), with the hole carved out.
+ *
+ * Two things matter here beyond just covering the area:
+ *
+ *  - `angleDeg` rotates the fill so it runs diagonally to the walls. The
+ *    geometry is rotated into the scan frame and the emitted points rotated
+ *    back, so the rest of the code needn't care.
+ *
+ *  - Spans are chained into connected regions before being drawn. A concave
+ *    shape (a bat, a star) produces several separate spans on one scanline —
+ *    filling row by row makes the head dash from one side of the part to the
+ *    other and back for every line. Chaining fills one region completely,
+ *    then moves on, which is how a slicer behaves.
+ */
+function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, phase, angleDeg = 45) {
   const b = cfg.build;
-  // Fill along one axis by transposing the geometry, then transposing back.
-  const T = (p) => (vertical ? { x: p.y, y: p.x } : p);
-  const work = vertical ? poly.map(T) : poly;
-  const holeC = vertical ? { cx: hole.cy, cy: hole.cx } : { cx: hole.cx, cy: hole.cy };
+  const a = (angleDeg * Math.PI) / 180;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const toScan = (p) => ({ x: p.x * ca + p.y * sa, y: -p.x * sa + p.y * ca });
+  const fromScan = (p) => ({ x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca });
+
+  const work = poly.map(toScan);
+  const holeC = toScan({ x: hole.cx, y: hole.cy });
   const { yMin, yMax } = boundsY(work);
 
-  let dir = 1;
-  const jumpLimit = spacing * 2.5; // beyond this, retract properly
+  // 1. gather the spans of every scanline
+  const rows = [];
   for (let y = yMin + spacing * 0.5 + phase; y <= yMax - 0.001; y += spacing) {
-    let spans = scanlineSpans(work, y).filter(([a, c]) => c - a > 0.2);
-    if (!spans.length) continue;
-    if (Math.abs(y - holeC.cy) < holeR) {
-      const dx = Math.sqrt(holeR * holeR - (y - holeC.cy) * (y - holeC.cy));
+    let spans = scanlineSpans(work, y).filter(([p, q]) => q - p > 0.2);
+    if (spans.length && Math.abs(y - holeC.y) < holeR) {
+      const dx = Math.sqrt(holeR * holeR - (y - holeC.y) * (y - holeC.y));
       let cut = [];
-      for (const sp of spans) cut = cut.concat(subtractInterval([sp], holeC.cx - dx, holeC.cx + dx));
-      spans = cut.filter(([a, c]) => c - a > 0.2);
+      for (const sp of spans) cut = cut.concat(subtractInterval([sp], holeC.x - dx, holeC.x + dx));
+      spans = cut.filter(([p, q]) => q - p > 0.2);
     }
-    if (!spans.length) continue;
-    if (dir === -1) spans = spans.slice().reverse();
-    for (let [a, c] of spans) {
-      if (dir === -1) { const t = a; a = c; c = t; }
-      const p0 = toBed(T({ x: a, y }), bbox, cfg);
-      const p1 = toBed(T({ x: c, y }), bbox, cfg);
+    if (spans.length) rows.push({ y, spans });
+  }
+
+  // 2. chain spans that overlap between consecutive scanlines into regions
+  const done = [];
+  let open = [];
+  for (const row of rows) {
+    const claimed = new Array(open.length).fill(false);
+    const next = [];
+    for (const [sa2, sb2] of row.spans) {
+      let hit = -1;
+      for (let k = 0; k < open.length; k++) {
+        if (claimed[k]) continue;
+        const last = open[k].segs[open[k].segs.length - 1];
+        if (Math.min(sb2, last.b) - Math.max(sa2, last.a) > 0) { hit = k; break; }
+      }
+      if (hit >= 0) { claimed[hit] = true; open[hit].segs.push({ y: row.y, a: sa2, b: sb2 }); next.push(open[hit]); }
+      else next.push({ segs: [{ y: row.y, a: sa2, b: sb2 }] });
+    }
+    for (let k = 0; k < open.length; k++) if (!claimed[k]) done.push(open[k]);
+    open = next;
+  }
+  done.push(...open);
+
+  // 3. draw each region as one continuous serpentine
+  const jumpLimit = spacing * 2.5;
+  for (const region of done) {
+    let dir = 1;
+    for (const seg of region.segs) {
+      const x0 = dir === 1 ? seg.a : seg.b;
+      const x1 = dir === 1 ? seg.b : seg.a;
+      const p0 = toBed(fromScan({ x: x0, y: seg.y }), bbox, cfg);
+      const p1 = toBed(fromScan({ x: x1, y: seg.y }), bbox, cfg);
       if (em.distanceTo(p0.x, p0.y) <= jumpLimit) em.moveTo(p0.x, p0.y);
       else em.travelTo(p0.x, p0.y);
       em.extrudeTo(p1.x, p1.y, feed, b.lineWidth, layerH);
+      dir *= -1;
     }
-    dir *= -1;
   }
 }
 
