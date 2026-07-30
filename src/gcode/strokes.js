@@ -3,6 +3,7 @@
 // We simplify the points and clip anything outside the backing polygon.
 
 import { pointInPolygon, distToBoundary } from './geometry.js';
+import { smooth, decimate } from './outline.js';
 
 export function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
@@ -65,14 +66,18 @@ function clipToRegion(points, poly, margin, hole) {
 export function prepareStrokes(strokes, poly, cfg, hole = null, edgeMargin = 0) {
   if (!Array.isArray(strokes)) return [];
   const holeGuard = hole ? { cx: hole.cx, cy: hole.cy, r: hole.r + cfg.build.penRange[1] / 2 } : null;
+  const iters = cfg.build.strokeSmooth ?? 2;
   const out = [];
   const defW = cfg.build.beadWidth;
   for (const stroke of strokes) {
     const pts = stroke && Array.isArray(stroke.pts) ? stroke.pts : Array.isArray(stroke) ? stroke : null;
     if (!pts || !pts.length) continue;
     const w = clampWidth(stroke && stroke.w != null ? stroke.w : defW, cfg);
-    for (const seg of clipToRegion(simplify(pts, 0.3), poly, edgeMargin, holeGuard)) {
-      if (seg.length >= 1) out.push({ w, pts: seg });
+    // light simplify to shed jitter, then Chaikin so the bead flows like a pen
+    // line instead of a chain of straight segments
+    const tidy = pts.length > 2 ? smooth(simplify(pts, 0.25), iters, true) : pts;
+    for (const seg of clipToRegion(tidy, poly, edgeMargin, holeGuard)) {
+      if (seg.length >= 1) out.push({ w, pts: decimate(seg, 0.25, false) });
     }
   }
   return out;

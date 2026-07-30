@@ -295,154 +295,789 @@ M117 Print complete`,
 const COLOUR_HEX = { BLACK:'#1c1c1e', WHITE:'#f5f5f7', RED:'#e23b3b', BLUE:'#2f6fed', GREEN:'#34a853',
   YELLOW:'#f4c20d', PINK:'#ff5fa2', PURPLE:'#8b5cf6', ORANGE:'#ff8a34', TEAL:'#14b8a6' };
 
-/* ============================ GEOMETRY ============================ */
+/* ===== g-code engine — inlined from src/gcode/*.js at build time ===== */
+/* ===== src/gcode/outline.js ===== */
+// Turning a kid's freehand loop into a printable outline.
+//
+// A finger/pencil loop is never clean: it doesn't close exactly, it crosses
+// itself, and it has hair-thin spikes where the stroke doubled back. Naively
+// closing the path leaves needles the nozzle cannot print.
+//
+// So instead of editing the polyline, we work on the *area* it encloses:
+//
+//   1. rasterise the closed path into a bitmask (even-odd fill)
+//   2. morphological CLOSE  — bridges the gap where the loop didn't meet
+//   3. morphological OPEN   — deletes spikes/needles thinner than the nozzle
+//   4. keep the largest blob — drops stray islands from a crossed stroke
+//   5. trace its boundary, then Chaikin-smooth it into flowing curves
+//
+// The result is a clean, smooth, printable polygon that still reads as the
+// shape the kid drew.
+
+const ORTH = 1.0;
+const DIAG = Math.SQRT2;
+
+/** Chaikin corner-cutting. Closed curves by default; set open=true for strokes. */
+function smooth(points, iterations = 2, open = false) {
+  let pts = points;
+  for (let it = 0; it < iterations; it++) {
+    if (pts.length < 3) return pts;
+    const out = [];
+    if (open) out.push(pts[0]);
+    const n = pts.length;
+    const last = open ? n - 1 : n;
+    for (let i = 0; i < last; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    if (open) out.push(pts[n - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
+/** Drop points closer together than `min` mm (keeps the last point). */
+function decimate(points, min, closed = true) {
+  if (points.length < 3) return points.slice();
+  const out = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i], q = out[out.length - 1];
+    if (Math.hypot(p.x - q.x, p.y - q.y) >= min) out.push(p);
+  }
+  if (closed && out.length > 2) {
+    const a = out[0], b = out[out.length - 1];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < min) out.pop();
+  }
+  return out;
+}
+
+/**
+ * Heal a freehand loop into a smooth printable polygon.
+ * `points` are plate-local mm. Returns a new point array (may be empty if the
+ * drawing enclosed no printable area).
+ */
+function healOutline(points, opts = {}) {
+  const cell = opts.cell ?? 0.4;          // raster resolution, mm
+  const closeR = opts.closeR ?? 1.4;      // bridge gaps up to ~2x this
+  const openR = opts.openR ?? 1.6;        // delete features thinner than ~2x this
+  const smoothIters = opts.smooth ?? 2;
+  if (!Array.isArray(points) || points.length < 3) return [];
+
+  // --- bounds with padding so morphology has room to work ---
+  const pad = Math.ceil((closeR + openR) / cell) + 2;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const w = Math.ceil((maxX - minX) / cell) + pad * 2;
+  const h = Math.ceil((maxY - minY) / cell) + pad * 2;
+  if (w < 4 || h < 4 || w * h > 4_000_000) return [];
+  const gx = (x) => (x - minX) / cell + pad;
+  const gy = (y) => (y - minY) / cell + pad;
+
+  // --- 1. rasterise the closed path (even-odd scanline fill) ---
+  const poly = points.map((p) => ({ x: gx(p.x), y: gy(p.y) }));
+  let mask = new Uint8Array(w * h);
+  for (let row = 0; row < h; row++) {
+    const yc = row + 0.5;
+    const xs = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length]; // closes the loop
+      if ((a.y <= yc && b.y > yc) || (b.y <= yc && a.y > yc)) {
+        xs.push(a.x + ((yc - a.y) / (b.y - a.y)) * (b.x - a.x));
+      }
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const from = Math.max(0, Math.ceil(xs[k] - 0.5));
+      const to = Math.min(w - 1, Math.floor(xs[k + 1] - 0.5));
+      for (let col = from; col <= to; col++) mask[row * w + col] = 1;
+    }
+  }
+
+  // --- 2. close (dilate then erode): bridges an unclosed loop ---
+  mask = dilate(mask, w, h, closeR / cell);
+  mask = erode(mask, w, h, closeR / cell);
+  // --- 3. open (erode then dilate): removes thin spikes/needles ---
+  mask = erode(mask, w, h, openR / cell);
+  mask = dilate(mask, w, h, openR / cell);
+
+  // --- 4. keep the largest blob ---
+  const blob = largestBlob(mask, w, h);
+  if (!blob) return [];
+
+  // --- 5. trace + smooth ---
+  const traced = traceBoundary(blob, w, h);
+  if (traced.length < 8) return [];
+  let out = traced.map((c) => ({ x: (c.x - pad) * cell + minX, y: (c.y - pad) * cell + minY }));
+  out = decimate(out, cell * 1.5);
+  out = smooth(out, smoothIters, false);
+  // keep it smooth but not needlessly dense — long perimeters would bloat the
+  // g-code and slow the print with thousands of micro-segments
+  out = decimate(out, opts.minSeg ?? cell * 2.5);
+  return out;
+}
+
+/* ---------------- morphology via chamfer distance transform ---------------- */
+
+function distanceTo(mask, w, h, target) {
+  const INF = 1e9;
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < d.length; i++) d[i] = mask[i] === target ? 0 : INF;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (d[i] === 0) continue;
+      let v = d[i];
+      if (x > 0) v = Math.min(v, d[i - 1] + ORTH);
+      if (y > 0) v = Math.min(v, d[i - w] + ORTH);
+      if (x > 0 && y > 0) v = Math.min(v, d[i - w - 1] + DIAG);
+      if (x < w - 1 && y > 0) v = Math.min(v, d[i - w + 1] + DIAG);
+      d[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let v = d[i];
+      if (x < w - 1) v = Math.min(v, d[i + 1] + ORTH);
+      if (y < h - 1) v = Math.min(v, d[i + w] + ORTH);
+      if (x < w - 1 && y < h - 1) v = Math.min(v, d[i + w + 1] + DIAG);
+      if (x > 0 && y < h - 1) v = Math.min(v, d[i + w - 1] + DIAG);
+      d[i] = v;
+    }
+  }
+  return d;
+}
+
+function erode(mask, w, h, r) {
+  if (r <= 0) return mask;
+  const d = distanceTo(mask, w, h, 0); // distance to background
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = d[i] > r ? 1 : 0;
+  return out;
+}
+function dilate(mask, w, h, r) {
+  if (r <= 0) return mask;
+  const d = distanceTo(mask, w, h, 1); // distance to foreground
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = d[i] <= r ? 1 : 0;
+  return out;
+}
+
+/** Flood-fill labelling; returns a mask containing only the biggest region. */
+function largestBlob(mask, w, h) {
+  const seen = new Uint8Array(w * h);
+  let best = null, bestSize = 0;
+  const stack = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    stack.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    const cells = [];
+    while (stack.length) {
+      const i = stack.pop();
+      cells.push(i);
+      const x = i % w, y = (i - x) / w;
+      if (x > 0 && mask[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack.push(i - 1); }
+      if (x < w - 1 && mask[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack.push(i + 1); }
+      if (y > 0 && mask[i - w] && !seen[i - w]) { seen[i - w] = 1; stack.push(i - w); }
+      if (y < h - 1 && mask[i + w] && !seen[i + w]) { seen[i + w] = 1; stack.push(i + w); }
+    }
+    if (cells.length > bestSize) { bestSize = cells.length; best = cells; }
+  }
+  if (!best || bestSize < 12) return null;
+  const out = new Uint8Array(w * h);
+  for (const i of best) out[i] = 1;
+  return out;
+}
+
+// 8-neighbour offsets in clockwise order, used by the tracer below.
+const CW = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
+
+/**
+ * Moore-neighbour boundary tracing. Returns ordered cell coordinates.
+ *
+ * The correct algorithm tracks the cell we arrived *from* (always a background
+ * cell) and sweeps clockwise from there — guessing a direction index instead
+ * silently fails on some shapes, so keep `from` explicit.
+ */
+function traceBoundary(mask, w, h) {
+  let startI = -1;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) { startI = i; break; }
+  if (startI < 0) return [];
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+
+  const sx = startI % w, sy = (startI - sx) / w;
+  // row-major scan guarantees the cell to the west is background
+  let bx = sx, by = sy, fx = sx - 1, fy = sy;
+  const contour = [{ x: bx, y: by }];
+  const maxSteps = w * h * 4;
+
+  for (let step = 0; step < maxSteps; step++) {
+    // index of the "from" cell in the clockwise ring around b
+    let idx = CW.findIndex(([dx, dy]) => bx + dx === fx && by + dy === fy);
+    if (idx < 0) idx = 7;
+    let moved = false;
+    for (let k = 1; k <= 8; k++) {
+      const j = (idx + k) % 8;
+      const nx = bx + CW[j][0], ny = by + CW[j][1];
+      if (at(nx, ny)) {
+        // we came into the new cell from the previous (background) neighbour
+        const prev = (j - 1 + 8) % 8;
+        fx = bx + CW[prev][0]; fy = by + CW[prev][1];
+        bx = nx; by = ny;
+        contour.push({ x: bx, y: by });
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) break;                                    // isolated cell
+    if (bx === sx && by === sy && contour.length > 3) break; // closed the loop
+  }
+  return contour;
+}
+
+/* ===== src/gcode/geometry.js ===== */
+// Plate geometry — polygon-based so every backing shape shares one code path.
+//
+// Coordinate frame: plate-local millimetres, origin at the bottom-left of the
+// shape's bounding box, y-up (matches the drawing canvas after its y-flip).
+//
+// A backing shape is just a closed polygon. Rectangle/Square/Circle/Heart are
+// generated; "custom" is the kid's own drawn outline. Everything downstream —
+// perimeters, infill, the 0.8 mm top chamfer, hole placement — is derived from:
+//   - shapePolygon()  : the outline
+//   - offsetPolygon() : inward/outward offset (chamfer, walls, hole margin)
+//   - scanlineSpans() : solid x-intervals of a polygon at height y
+
+/** Build the backing outline polygon (closed ring, CCW) + its bounding box. */
 function shapePolygon(shape, cfg, customOutline) {
   const s = cfg.build.shapeSizes;
   switch (shape) {
-    case 'rectangle': return rectPoly(s.rectangle[0], s.rectangle[1]);
-    case 'square': return rectPoly(s.square[0], s.square[1]);
-    case 'circle': return ellipsePoly(s.circle[0], s.circle[0]);
-    case 'heart': return heartPoly(s.heart[0], s.heart[1]);
-    case 'custom': return customPoly(customOutline, cfg);
-    default: return rectPoly(s.rectangle[0], s.rectangle[1]);
+    case 'rectangle': return rect(s.rectangle[0], s.rectangle[1]);
+    case 'square': return rect(s.square[0], s.square[1]);
+    case 'circle': return ellipse(s.circle[0], s.circle[0]);
+    case 'heart': return heart(s.heart[0], s.heart[1]);
+    case 'custom': return customShape(customOutline, cfg);
+    default: return rect(s.rectangle[0], s.rectangle[1]);
   }
 }
-function finalizePoly(pts) {
+
+function finalize(pts) {
   let poly = ensureCCW(dedupe(pts));
-  const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+  const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y);
   const minX = Math.min(...xs), minY = Math.min(...ys);
-  poly = poly.map(p => ({ x: p.x - minX, y: p.y - minY }));
-  return { poly, bbox: { w: Math.max(...xs) - minX, h: Math.max(...ys) - minY } };
+  // shift so bbox starts at origin
+  poly = poly.map((p) => ({ x: p.x - minX, y: p.y - minY }));
+  const w = Math.max(...xs) - minX, h = Math.max(...ys) - minY;
+  return { poly, bbox: { w, h } };
 }
-function rectPoly(w, h) { return finalizePoly([{x:0,y:0},{x:w,y:0},{x:w,y:h},{x:0,y:h}]); }
-function ellipsePoly(w, h, seg=96) { const p=[]; for(let i=0;i<seg;i++){const a=2*Math.PI*i/seg; p.push({x:w/2*(1+Math.cos(a)),y:h/2*(1+Math.sin(a))});} return finalizePoly(p); }
-function heartPoly(w, h, seg=120) {
-  const p=[]; for(let i=0;i<seg;i++){const t=2*Math.PI*i/seg;
-    p.push({x:16*Math.pow(Math.sin(t),3), y:13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t)});}
-  const xs=p.map(q=>q.x),ys=p.map(q=>q.y);const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
-  const sx=w/(maxX-minX),sy=h/(maxY-minY);
-  return finalizePoly(p.map(q=>({x:(q.x-minX)*sx,y:(q.y-minY)*sy})));
-}
-function customPoly(outline, cfg) {
-  const [mw,mh]=cfg.build.customMax;
-  if(!Array.isArray(outline)||outline.length<3) return rectPoly(60,40);
-  const pts=outline.filter(p=>p&&isFinite(+p.x)&&isFinite(+p.y)).map(p=>({x:Math.max(0,Math.min(mw,+p.x)),y:Math.max(0,Math.min(mh,+p.y))}));
-  return finalizePoly(pts.length>=3?pts:[{x:0,y:0},{x:60,y:0},{x:60,y:40},{x:0,y:40}]);
-}
-function dedupe(pts){const o=[];for(const p of pts){const q=o[o.length-1];if(!q||Math.hypot(p.x-q.x,p.y-q.y)>1e-4)o.push({x:p.x,y:p.y});}
-  if(o.length>1){const a=o[0],b=o[o.length-1];if(Math.hypot(a.x-b.x,a.y-b.y)<1e-4)o.pop();}return o;}
-function signedArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y;}return a/2;}
-function ensureCCW(poly){return signedArea(poly)<0?poly.slice().reverse():poly;}
-function scanlineSpans(poly,y){const xs=[];const n=poly.length;
-  for(let i=0;i<n;i++){const a=poly[i],b=poly[(i+1)%n];if((a.y<=y&&b.y>y)||(b.y<=y&&a.y>y)){const t=(y-a.y)/(b.y-a.y);xs.push(a.x+t*(b.x-a.x));}}
-  xs.sort((p,q)=>p-q);const sp=[];for(let i=0;i+1<xs.length;i+=2)if(xs[i+1]-xs[i]>0.05)sp.push([xs[i],xs[i+1]]);return sp;}
-function subtractInterval(iv,lo,hi){const o=[];for(const [a,b] of iv){if(hi<=a||lo>=b)o.push([a,b]);else{if(a<lo)o.push([a,lo]);if(hi<b)o.push([hi,b]);}}return o;}
-function boundsY(poly){let yMin=Infinity,yMax=-Infinity;for(const p of poly){if(p.y<yMin)yMin=p.y;if(p.y>yMax)yMax=p.y;}return{yMin,yMax};}
-function pointInPolygon(pt,poly){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];
-  if((a.y>pt.y)!==(b.y>pt.y)&&pt.x<((b.x-a.x)*(pt.y-a.y))/(b.y-a.y)+a.x)inside=!inside;}return inside;}
-function distToBoundary(pt,poly){let m=Infinity;for(let i=0;i<poly.length;i++)m=Math.min(m,segDist(pt,poly[i],poly[(i+1)%poly.length]));return m;}
-function segDist(p,a,b){const dx=b.x-a.x,dy=b.y-a.y,l2=dx*dx+dy*dy;let t=l2?((p.x-a.x)*dx+(p.y-a.y)*dy)/l2:0;t=Math.max(0,Math.min(1,t));return Math.hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));}
-function holeEdgeMargin(cfg){return cfg.build.holeDiameter/2+cfg.build.holeWallMin;}
-function holeIsValid(pt,poly,cfg){return pointInPolygon(pt,poly)&&distToBoundary(pt,poly)>=holeEdgeMargin(cfg);}
-function presetHole(pos,bbox,cfg){const m=holeEdgeMargin(cfg)+1;
-  if(pos==='left')return{x:m,y:bbox.h/2};if(pos==='right')return{x:bbox.w-m,y:bbox.h/2};return{x:bbox.w/2,y:bbox.h-m};}
-function toBed(pt,bbox,cfg){const[bx,by]=cfg.build.bedCenter;return{x:pt.x-bbox.w/2+bx,y:pt.y-bbox.h/2+by};}
-function centroidOf(poly){let x=0,y=0;for(const p of poly){x+=p.x;y+=p.y;}return{x:x/poly.length,y:y/poly.length};}
 
-/* ============================ STROKES ============================ */
-function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
-function totalLength(strokes){let L=0;for(const s of strokes)for(let i=1;i<s.pts.length;i++)L+=dist(s.pts[i-1],s.pts[i]);return L;}
-function simplify(points,tol){if(points.length<3)return points.slice();const keep=new Array(points.length).fill(false);keep[0]=keep[points.length-1]=true;
-  const st=[[0,points.length-1]];while(st.length){const[s,e]=st.pop();let mx=0,idx=-1;
-    for(let i=s+1;i<e;i++){const d=perpDist(points[i],points[s],points[e]);if(d>mx){mx=d;idx=i;}}
-    if(mx>tol&&idx!==-1){keep[idx]=true;st.push([s,idx],[idx,e]);}}return points.filter((_,i)=>keep[i]);}
-function perpDist(p,a,b){const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy);if(len===0)return dist(p,a);return Math.abs((p.x-a.x)*dy-(p.y-a.y)*dx)/len;}
-function clampWidth(w,cfg){const[lo,hi]=cfg.build.penRange;const v=+w;return isFinite(v)?Math.max(lo,Math.min(hi,v)):cfg.build.beadWidth;}
-function clipToRegion(points,poly,margin,hole){
-  const ok=p=>pointInPolygon(p,poly)&&distToBoundary(p,poly)>=margin&&(!hole||Math.hypot(p.x-hole.cx,p.y-hole.cy)>hole.r);
-  const out=[];let cur=[];for(const p of points){if(ok(p))cur.push(p);else if(cur.length){out.push(cur);cur=[];}}if(cur.length)out.push(cur);
-  return out.filter(l=>l.length>=1);}
-function prepareStrokes(strokes,poly,cfg,hole,edgeMargin){
-  if(!Array.isArray(strokes))return[];const hg=hole?{cx:hole.cx,cy:hole.cy,r:hole.r+cfg.build.penRange[1]/2}:null;const out=[];const defW=cfg.build.beadWidth;
-  for(const stroke of strokes){const pts=stroke&&Array.isArray(stroke.pts)?stroke.pts:null;if(!pts||!pts.length)continue;
-    const w=clampWidth(stroke.w!=null?stroke.w:defW,cfg);
-    for(const seg of clipToRegion(simplify(pts,0.3),poly,edgeMargin||0,hg))if(seg.length>=1)out.push({w,pts:seg});}
-  return out;}
-
-/* ============================ ENGINE ============================ */
-const FILAMENT_DENSITY=0.00124,ACCEL_FUDGE=1.6,STARTUP_MIN=2.5;
-function generate(design,cfg){
-  const b=cfg.build,s=cfg.speed,shape=design.shape||'rectangle';
-  const crossSection=Math.PI*Math.pow(b.filamentDiameter/2,2);
-  const {poly,bbox}=shapePolygon(shape,cfg,design.customOutline);
-  const hole=resolveHole(design,poly,bbox,cfg);
-  const em=makeEmitter(cfg,crossSection);
-  em.comment(`3DiPad keychain shape:${shape} ${bbox.w.toFixed(0)}x${bbox.h.toFixed(0)}mm`);
-  em.comment(`layer1: ${design.colours?.layer1??'?'}  layer2: ${design.colours?.layer2??'?'}`);
-  em.raw(applyTemplate(cfg.template.startResolved,cfg));em.raw('G90');em.raw('M83');
-  const backingZs=layerZs(b.firstLayerHeight,b.layerHeight,b.backingThickness),nBack=backingZs.length;
-  em.comment(`===== BACKING (colour 1) — ${shape}, ${nBack} layers =====`);
-  backingZs.forEach((z,i)=>{
-    const layerH=i===0?b.firstLayerHeight:b.layerHeight,first=i===0;
-    const solid=first||i<b.solidLayers||i>=nBack-b.solidLayers;
-    const spacing=solid?b.lineWidth:b.sparseSpacing;
-    const infillFeed=first?s.firstLayer:solid?s.solidInfill:s.infill;
-    const perimFeed=first?s.firstLayer:s.perimeter;
-    const cham=Math.max(0,b.chamferMm-(b.backingThickness-z)),perimOn=cham<1e-6,inset=perimOn?b.lineWidth:cham,holeR=hole.r+cham;
-    em.comment(`; layer ${i+1}/${nBack} z=${z.toFixed(2)} ${solid?'solid':'sparse'}${cham>0?' chamfer':''}`);
-    em.setZ(z);
-    if(perimOn)perimeterLoop(em,cfg,bbox,poly,perimFeed,layerH);
-    holePerimeter(em,cfg,bbox,hole,holeR,perimFeed,layerH);
-    infillLayer(em,cfg,bbox,poly,hole,holeR,spacing,infillFeed,layerH,(i%2)*(spacing/2),inset);
+function rect(w, h) {
+  return finalize([{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }]);
+}
+function ellipse(w, h, seg = 96) {
+  const pts = [];
+  for (let i = 0; i < seg; i++) {
+    const a = (2 * Math.PI * i) / seg;
+    pts.push({ x: (w / 2) * (1 + Math.cos(a)), y: (h / 2) * (1 + Math.sin(a)) });
+  }
+  return finalize(pts);
+}
+// Classic parametric heart, scaled to fit w x h, point at the bottom.
+function heart(w, h, seg = 120) {
+  const pts = [];
+  for (let i = 0; i < seg; i++) {
+    const t = (2 * Math.PI * i) / seg;
+    const x = 16 * Math.pow(Math.sin(t), 3);
+    const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    pts.push({ x, y });
+  }
+  // normalise to bbox
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const sx = w / (maxX - minX), sy = h / (maxY - minY);
+  return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
+}
+function customShape(outline, cfg) {
+  const [maxW, maxH] = cfg.build.customMax;
+  if (!Array.isArray(outline) || outline.length < 3) return rect(60, 40);
+  // clamp to the allowed boundary, drop stray points
+  const pts = outline
+    .filter((p) => p && Number.isFinite(+p.x) && Number.isFinite(+p.y))
+    .map((p) => ({ x: Math.max(0, Math.min(maxW, +p.x)), y: Math.max(0, Math.min(maxH, +p.y)) }));
+  if (pts.length < 3) return rect(60, 40);
+  // Heal the freehand loop: bridge the gap where it didn't close, delete
+  // hair-thin spikes the nozzle can't print, and smooth it into curves.
+  const healed = healOutline(pts, {
+    cell: cfg.build.outlineCell,
+    closeR: cfg.build.outlineCloseMm,
+    openR: cfg.build.outlineOpenMm,
+    smooth: cfg.build.outlineSmooth,
   });
-  em.comment('===== COLOUR CHANGE (M400 U1): load layer-2 colour, then Resume =====');
-  for(const line of asLines(cfg.colourChange.gcode))em.raw(line);
-  const strokes=prepareStrokes(design.design||[],poly,cfg,hole,b.designEdgeMargin);
-  const designZs=layerZs(b.backingThickness+b.layerHeight,b.layerHeight,b.backingThickness+b.designThickness);
-  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
-  designZs.forEach(z=>{em.setZ(z);for(const st of strokes)beadStroke(em,cfg,bbox,st,s.bead,b.layerHeight);});
-  em.raw(applyTemplate(cfg.template.endResolved,cfg));
-  const raw=em.meta();const estMinutes=raw.timeMin*ACCEL_FUDGE+STARTUP_MIN;const grams=raw.filamentMm*crossSection*FILAMENT_DENSITY;
-  return {gcode:em.lines.join('\n')+'\n',meta:{shape,bbox,hole:{x:+hole.cx.toFixed(1),y:+hole.cy.toFixed(1)},colours:design.colours,
-    backingLayers:nBack,designLayers:designZs.length,strokeCount:strokes.length,drawnLengthMm:Math.round(totalLength(strokes)),
-    estMinutes:+estMinutes.toFixed(1),estGrams:+grams.toFixed(1),
-    overBudget:estMinutes>cfg.limits.maxPrintMinutes,nearBudget:estMinutes>cfg.limits.warnPrintMinutes}};
+  return finalize(healed.length >= 3 ? healed : pts);
 }
-function resolveHole(design,poly,bbox,cfg){const r=cfg.build.holeDiameter/2;
-  let pt=design.hole&&isFinite(+design.hole.x)?{x:+design.hole.x,y:+design.hole.y}:presetHole(design.holePos||'top',bbox,cfg);
-  if(!holeIsValid(pt,poly,cfg))pt=nudgeInside(pt,poly,cfg);return{cx:pt.x,cy:pt.y,r};}
-function nudgeInside(pt,poly,cfg){const c=centroidOf(poly);for(let t=0;t<=1.001;t+=0.05){const q={x:pt.x+(c.x-pt.x)*t,y:pt.y+(c.y-pt.y)*t};if(holeIsValid(q,poly,cfg))return q;}return pointInPolygon(c,poly)?c:pt;}
-function layerZs(first,step,top){const zs=[];let z=first;while(z<=top+1e-6){zs.push(+z.toFixed(3));z+=step;}if(!zs.length)zs.push(+first.toFixed(3));return zs;}
-function perimeterLoop(em,cfg,bbox,poly,feed,layerH){if(poly.length<3)return;const p0=toBed(poly[0],bbox,cfg);em.travelTo(p0.x,p0.y);
-  for(let i=1;i<=poly.length;i++){const p=toBed(poly[i%poly.length],bbox,cfg);em.extrudeTo(p.x,p.y,feed,cfg.build.lineWidth,layerH);}}
-function holePerimeter(em,cfg,bbox,hole,r,feed,layerH){if(r<=0.2)return;const seg=32;const p0=toBed({x:hole.cx+r,y:hole.cy},bbox,cfg);em.travelTo(p0.x,p0.y);
-  for(let i=1;i<=seg;i++){const a=2*Math.PI*i/seg;const p=toBed({x:hole.cx+r*Math.cos(a),y:hole.cy+r*Math.sin(a)},bbox,cfg);em.extrudeTo(p.x,p.y,feed,cfg.build.lineWidth,layerH);}}
-function infillLayer(em,cfg,bbox,poly,hole,holeR,spacing,feed,layerH,phase,inset){
-  const b=cfg.build,{yMin,yMax}=boundsY(poly);let dir=1;
-  for(let y=yMin+spacing*0.5+phase;y<=yMax-0.001;y+=spacing){
-    if(y<yMin+inset||y>yMax-inset)continue;
-    let spans=scanlineSpans(poly,y).map(([a,c])=>[a+inset,c-inset]).filter(([a,c])=>c-a>0.2);
-    if(!spans.length)continue;
-    if(Math.abs(y-hole.cy)<holeR){const dx=Math.sqrt(holeR*holeR-(y-hole.cy)*(y-hole.cy));let cut=[];for(const sp of spans)cut=cut.concat(subtractInterval([sp],hole.cx-dx,hole.cx+dx));spans=cut;}
-    if(dir===-1)spans=spans.slice().reverse();
-    for(let [a,c] of spans){if(dir===-1){const t=a;a=c;c=t;}const p0=toBed({x:a,y},bbox,cfg),p1=toBed({x:c,y},bbox,cfg);em.travelTo(p0.x,p0.y);em.extrudeTo(p1.x,p1.y,feed,b.lineWidth,layerH);}
-    dir*=-1;
+
+// ---------------------------------------------------------------------------
+
+function dedupe(pts) {
+  const out = [];
+  for (const p of pts) {
+    const q = out[out.length - 1];
+    if (!q || Math.hypot(p.x - q.x, p.y - q.y) > 1e-4) out.push({ x: p.x, y: p.y });
+  }
+  if (out.length > 1) {
+    const a = out[0], b = out[out.length - 1];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-4) out.pop();
+  }
+  return out;
+}
+function signedArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+function ensureCCW(poly) {
+  return signedArea(poly) < 0 ? poly.slice().reverse() : poly;
+}
+
+/**
+ * Offset a CCW polygon inward by d (d>0 shrinks, d<0 expands) using per-edge
+ * normal shift + re-intersection. Good for small offsets (walls, 0.8mm chamfer).
+ */
+function offsetPolygon(poly, d) {
+  if (Math.abs(d) < 1e-6) return poly.slice();
+  const n = poly.length;
+  const lines = [];
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const nx = -dy, ny = dx; // inward normal for CCW
+    lines.push({ px: a.x + nx * d, py: a.y + ny * d, dx, dy });
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const l0 = lines[(i - 1 + n) % n], l1 = lines[i];
+    const p = intersect(l0, l1);
+    out.push(p || { x: poly[i].x, y: poly[i].y });
+  }
+  return out;
+}
+function intersect(l0, l1) {
+  const den = l0.dx * l1.dy - l0.dy * l1.dx;
+  if (Math.abs(den) < 1e-9) return null; // parallel
+  const t = ((l1.px - l0.px) * l1.dy - (l1.py - l0.py) * l1.dx) / den;
+  return { x: l0.px + l0.dx * t, y: l0.py + l0.dy * t };
+}
+
+/** Solid x-intervals where a horizontal line at height y crosses the polygon. */
+function scanlineSpans(poly, y) {
+  const xs = [];
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const y0 = a.y, y1 = b.y;
+    if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y)) {
+      const t = (y - y0) / (y1 - y0);
+      xs.push(a.x + t * (b.x - a.x));
+    }
+  }
+  xs.sort((p, q) => p - q);
+  const spans = [];
+  for (let i = 0; i + 1 < xs.length; i += 2) {
+    if (xs[i + 1] - xs[i] > 0.05) spans.push([xs[i], xs[i + 1]]);
+  }
+  return spans;
+}
+
+/** Remove [lo,hi] from a set of intervals, splitting where necessary. */
+function subtractInterval(intervals, lo, hi) {
+  const out = [];
+  for (const [a, b] of intervals) {
+    if (hi <= a || lo >= b) out.push([a, b]);
+    else { if (a < lo) out.push([a, lo]); if (hi < b) out.push([hi, b]); }
+  }
+  return out;
+}
+function boundsY(poly) {
+  let yMin = Infinity, yMax = -Infinity;
+  for (const p of poly) { if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y; }
+  return { yMin, yMax };
+}
+function pointInPolygon(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/** Shortest distance from a point to the polygon boundary (edges). */
+function distToBoundary(pt, poly) {
+  let min = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    min = Math.min(min, segDist(pt, a, b));
+  }
+  return min;
+}
+function segDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * Is the keyring hole placement valid? The hole centre must sit far enough
+ * inside the shape that a solid wall remains around it.
+ */
+function holeIsValid(holePt, poly, cfg) {
+  if (!pointInPolygon(holePt, poly)) return false;
+  return distToBoundary(holePt, poly) >= holeEdgeMargin(cfg);
+}
+function holeEdgeMargin(cfg) {
+  return cfg.build.holeDiameter / 2 + cfg.build.holeWallMin;
+}
+
+/** Default hole point for a preset position within the shape's bounding box. */
+function presetHole(position, bbox, cfg) {
+  const m = holeEdgeMargin(cfg) + 1;
+  if (position === 'left') return { x: m, y: bbox.h / 2 };
+  if (position === 'right') return { x: bbox.w - m, y: bbox.h / 2 };
+  return { x: bbox.w / 2, y: bbox.h - m }; // top-centre
+}
+
+/** Translate a plate-local point to absolute bed coordinates (bbox centred on the bed). */
+function toBed(pt, bbox, cfg) {
+  const [bx, by] = cfg.build.bedCenter;
+  return { x: pt.x - bbox.w / 2 + bx, y: pt.y - bbox.h / 2 + by };
+}
+
+/* ===== src/gcode/strokes.js ===== */
+// Stroke utilities. Each drawn stroke carries its own pen-tip width:
+//   { w: <bead mm>, pts: [ {x,y}, ... ] }   (plate-local mm, y-up)
+// We simplify the points and clip anything outside the backing polygon.
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+/** Total drawn length across all strokes (mm). */
+function totalLength(strokes) {
+  let L = 0;
+  for (const s of strokes) for (let i = 1; i < s.pts.length; i++) L += dist(s.pts[i - 1], s.pts[i]);
+  return L;
+}
+
+/** Ramer–Douglas–Peucker simplification; tolerance in mm. */
+function simplify(points, tol = 0.3) {
+  if (points.length < 3) return points.slice();
+  const keep = new Array(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [s, e] = stack.pop();
+    let maxD = 0, idx = -1;
+    for (let i = s + 1; i < e; i++) {
+      const d = perpDist(points[i], points[s], points[e]);
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > tol && idx !== -1) { keep[idx] = true; stack.push([s, idx], [idx, e]); }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+function perpDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+  if (len === 0) return dist(p, a);
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+}
+
+/**
+ * Split a point list wherever it leaves the plate (staying `margin` inside the
+ * outline) OR enters the keyring hole, so beads stay on solid plate and never
+ * print over the void or hang off the edge. Uses the raw polygon (offset-free,
+ * robust on concave shapes).
+ */
+function clipToRegion(points, poly, margin, hole) {
+  const ok = (p) =>
+    pointInPolygon(p, poly) &&
+    distToBoundary(p, poly) >= margin &&
+    (!hole || Math.hypot(p.x - hole.cx, p.y - hole.cy) > hole.r);
+  const out = [];
+  let cur = [];
+  for (const p of points) {
+    if (ok(p)) cur.push(p);
+    else if (cur.length) { out.push(cur); cur = []; }
+  }
+  if (cur.length) out.push(cur);
+  return out.filter((l) => l.length >= 1);
+}
+
+/**
+ * Prepare drawn strokes for extrusion: simplify, clip inside the backing outline
+ * (by `edgeMargin`) and around the hole, keep each stroke's pen width.
+ * Strokes are {w, pts}.
+ */
+function prepareStrokes(strokes, poly, cfg, hole = null, edgeMargin = 0) {
+  if (!Array.isArray(strokes)) return [];
+  const holeGuard = hole ? { cx: hole.cx, cy: hole.cy, r: hole.r + cfg.build.penRange[1] / 2 } : null;
+  const iters = cfg.build.strokeSmooth ?? 2;
+  const out = [];
+  const defW = cfg.build.beadWidth;
+  for (const stroke of strokes) {
+    const pts = stroke && Array.isArray(stroke.pts) ? stroke.pts : Array.isArray(stroke) ? stroke : null;
+    if (!pts || !pts.length) continue;
+    const w = clampWidth(stroke && stroke.w != null ? stroke.w : defW, cfg);
+    // light simplify to shed jitter, then Chaikin so the bead flows like a pen
+    // line instead of a chain of straight segments
+    const tidy = pts.length > 2 ? smooth(simplify(pts, 0.25), iters, true) : pts;
+    for (const seg of clipToRegion(tidy, poly, edgeMargin, holeGuard)) {
+      if (seg.length >= 1) out.push({ w, pts: decimate(seg, 0.25, false) });
+    }
+  }
+  return out;
+}
+function clampWidth(w, cfg) {
+  const [lo, hi] = cfg.build.penRange;
+  const v = +w;
+  return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : cfg.build.beadWidth;
+}
+
+/* ===== src/gcode/engine.js ===== */
+// Core g-code engine — pure and printer-independent.
+//
+// generate(design, cfg) -> { gcode, meta }
+//   design = {
+//     shape: 'rectangle'|'square'|'circle'|'heart'|'custom',
+//     customOutline: [ {x,y}, ... ],          // only for shape='custom' (plate-local mm)
+//     colours: { layer1, layer2 },            // labels only; not in the g-code
+//     hole: { x, y } | null,                   // tapped hole centre (plate-local mm)
+//     holePos: 'left'|'right'|'top' | null,    // preset used if hole is null
+//     design: [ { w, pts:[{x,y}...] }, ... ],  // strokes with per-stroke pen width
+//   }
+//
+// Object = flat two-colour keychain: backing plate (colour 1) -> M400 U1 colour
+// change -> raised bead drawing (colour 2). The backing's top rim and the hole's
+// top edge get a 45° chamfer over the top `chamferMm`.
+
+
+const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
+const ACCEL_FUDGE = 1.6;
+const STARTUP_MIN = 2.5;
+function generate(design, cfg) {
+  const b = cfg.build;
+  const s = cfg.speed;
+  const shape = design.shape || 'rectangle';
+  const crossSection = Math.PI * Math.pow(b.filamentDiameter / 2, 2);
+
+  const { poly, bbox } = shapePolygon(shape, cfg, design.customOutline);
+  const hole = resolveHole(design, poly, bbox, cfg);
+  const em = makeEmitter(cfg, crossSection);
+
+  em.comment(`3DiPad keychain  shape:${shape}  ${bbox.w.toFixed(0)}x${bbox.h.toFixed(0)}mm`);
+  em.comment(`layer1(backing): ${design.colours?.layer1 ?? '?'}   layer2(design): ${design.colours?.layer2 ?? '?'}`);
+  em.raw(applyTemplate(cfg.template.startResolved, cfg));
+  em.raw('G90'); em.raw('M83');
+
+  // ---- backing plate (colour 1) ----
+  const backingZs = layerZs(b.firstLayerHeight, b.layerHeight, b.backingThickness);
+  const nBack = backingZs.length;
+  em.comment(`===== BACKING (colour 1) — ${shape}, ${nBack} layers =====`);
+
+  backingZs.forEach((z, i) => {
+    const layerH = i === 0 ? b.firstLayerHeight : b.layerHeight;
+    const first = i === 0;
+    const solid = first || i < b.solidLayers || i >= nBack - b.solidLayers;
+    const spacing = solid ? b.lineWidth : b.sparseSpacing;
+    const infillFeed = first ? s.firstLayer : solid ? s.solidInfill : s.infill;
+    const perimFeed = first ? s.firstLayer : s.perimeter;
+
+    // chamfer: over the top `chamferMm`, inset the solid region (and widen the
+    // hole) to bevel the top rim. Done by inset-of-spans (robust on concave shapes).
+    const cham = Math.max(0, b.chamferMm - (b.backingThickness - z));
+    const perimOn = cham < 1e-6;
+    const inset = perimOn ? b.lineWidth : cham;
+    const holeR = hole.r + cham;
+
+    em.comment(`; layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ' chamfer' : ''}`);
+    em.setZ(z);
+    if (perimOn) perimeterLoop(em, cfg, bbox, poly, perimFeed, layerH); // raw outline
+    holePerimeter(em, cfg, bbox, hole, holeR, perimFeed, layerH);
+    infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, infillFeed, layerH, (i % 2) * (spacing / 2), inset);
+  });
+
+  // ---- colour change ----
+  em.comment('===== COLOUR CHANGE (M400 U1): load layer-2 colour, then Resume =====');
+  for (const line of asLines(cfg.colourChange.gcode)) em.raw(line);
+
+  // ---- design (colour 2), raised beads ----
+  const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
+  const designZs = layerZs(b.backingThickness + b.layerHeight, b.layerHeight, b.backingThickness + b.designThickness);
+  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
+  designZs.forEach((z) => {
+    em.setZ(z);
+    for (const st of strokes) beadStroke(em, cfg, bbox, st, s.bead, b.layerHeight);
+  });
+
+  em.raw(applyTemplate(cfg.template.endResolved, cfg));
+
+  const raw = em.meta();
+  const estMinutes = raw.timeMin * ACCEL_FUDGE + STARTUP_MIN;
+  const grams = raw.filamentMm * crossSection * FILAMENT_DENSITY;
+  return {
+    gcode: em.lines.join('\n') + '\n',
+    meta: {
+      shape, bbox, hole: { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
+      backingLayers: nBack, designLayers: designZs.length, strokeCount: strokes.length,
+      drawnLengthMm: Math.round(totalLength(strokes)),
+      estMinutes: +estMinutes.toFixed(1), estGrams: +grams.toFixed(1),
+      overBudget: estMinutes > cfg.limits.maxPrintMinutes, nearBudget: estMinutes > cfg.limits.warnPrintMinutes,
+    },
+  };
+}
+
+// Resolve the hole to a valid {cx,cy,r}: use the tapped point if valid, else a
+// preset, else nudge toward the centroid until a wall fits.
+function resolveHole(design, poly, bbox, cfg) {
+  const r = cfg.build.holeDiameter / 2;
+  let pt = design.hole && Number.isFinite(+design.hole.x) ? { x: +design.hole.x, y: +design.hole.y }
+    : presetHole(design.holePos || 'top', bbox, cfg);
+  if (!holeIsValid(pt, poly, cfg)) pt = nudgeInside(pt, poly, cfg);
+  return { cx: pt.x, cy: pt.y, r };
+}
+function centroid(poly) {
+  let x = 0, y = 0;
+  for (const p of poly) { x += p.x; y += p.y; }
+  return { x: x / poly.length, y: y / poly.length };
+}
+function nudgeInside(pt, poly, cfg) {
+  const c = centroid(poly);
+  for (let t = 0; t <= 1.001; t += 0.05) {
+    const q = { x: pt.x + (c.x - pt.x) * t, y: pt.y + (c.y - pt.y) * t };
+    if (holeIsValid(q, poly, cfg)) return q;
+  }
+  return pointInPolygon(c, poly) ? c : pt;
+}
+
+// ---------------------------------------------------------------------------
+
+function layerZs(first, step, top) {
+  const zs = []; let z = first;
+  while (z <= top + 1e-6) { zs.push(+z.toFixed(3)); z += step; }
+  if (!zs.length) zs.push(+first.toFixed(3));
+  return zs;
+}
+
+function perimeterLoop(em, cfg, bbox, poly, feed, layerH) {
+  if (poly.length < 3) return;
+  const p0 = toBed(poly[0], bbox, cfg);
+  em.travelTo(p0.x, p0.y);
+  for (let i = 1; i <= poly.length; i++) {
+    const p = toBed(poly[i % poly.length], bbox, cfg);
+    em.extrudeTo(p.x, p.y, feed, cfg.build.lineWidth, layerH);
   }
 }
-function beadStroke(em,cfg,bbox,stroke,feed,layerH){const pts=stroke.pts;if(!pts.length)return;const w=stroke.w;const p0=toBed(pts[0],bbox,cfg);em.travelTo(p0.x,p0.y);
-  if(pts.length===1){em.extrudeTo(p0.x+w*0.5,p0.y,feed,w,layerH);return;}for(let i=1;i<pts.length;i++){const p=toBed(pts[i],bbox,cfg);em.extrudeTo(p.x,p.y,feed,w,layerH);}}
-function makeEmitter(cfg,cs){const s=cfg.speed,lines=[],pos={x:0,y:0,z:0};let timeMin=0,filamentMm=0;const eFor=(l,w,h)=>(w*h*l)/cs;
-  return{lines,meta:()=>({timeMin,filamentMm}),comment:t=>lines.push('; '+t),raw:t=>{if(t&&t.length)lines.push(t);},
-    setZ(z){lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`);timeMin+=Math.abs(z-pos.z)/s.travel;pos.z=z;},
-    retract(){if(s.retractMm>0)lines.push(`G1 E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`);},
-    unretract(){if(s.retractMm>0)lines.push(`G1 E${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`);},
-    travelTo(x,y){this.retract();if(s.zHopMm>0)lines.push(`G1 Z${(pos.z+s.zHopMm).toFixed(3)} F${Math.round(s.travel)}`);
-      const L=Math.hypot(x-pos.x,y-pos.y);lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`);timeMin+=L/s.travel;
-      if(s.zHopMm>0)lines.push(`G1 Z${pos.z.toFixed(3)} F${Math.round(s.travel)}`);pos.x=x;pos.y=y;this.unretract();},
-    extrudeTo(x,y,feed,w,h){const L=Math.hypot(x-pos.x,y-pos.y);if(L<1e-4)return;const e=eFor(L,w,h);
-      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(feed)}`);timeMin+=L/feed;filamentMm+=e;pos.x=x;pos.y=y;}};}
-const asLines=v=>Array.isArray(v)?v:String(v).split('\n');
-function applyTemplate(t,cfg){if(!t)return'';return t.replaceAll('{nozzle}',cfg.temp.nozzle).replaceAll('{bed}',cfg.temp.bed).replaceAll('{nozzleFirst}',cfg.temp.nozzleFirst).replaceAll('{bedFirst}',cfg.temp.bedFirst);}
+
+function holePerimeter(em, cfg, bbox, hole, r, feed, layerH) {
+  if (r <= 0.2) return;
+  const seg = 32;
+  const p0 = toBed({ x: hole.cx + r, y: hole.cy }, bbox, cfg);
+  em.travelTo(p0.x, p0.y);
+  for (let i = 1; i <= seg; i++) {
+    const a = (2 * Math.PI * i) / seg;
+    const p = toBed({ x: hole.cx + r * Math.cos(a), y: hole.cy + r * Math.sin(a) }, bbox, cfg);
+    em.extrudeTo(p.x, p.y, feed, cfg.build.lineWidth, layerH);
+  }
+}
+
+function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, phase, inset) {
+  const b = cfg.build;
+  const { yMin, yMax } = boundsY(poly);
+  let dir = 1;
+  for (let y = yMin + spacing * 0.5 + phase; y <= yMax - 0.001; y += spacing) {
+    if (y < yMin + inset || y > yMax - inset) continue; // vertical inset (wall/chamfer)
+    let spans = scanlineSpans(poly, y)
+      .map(([a, c]) => [a + inset, c - inset])
+      .filter(([a, c]) => c - a > 0.2);
+    if (!spans.length) continue;
+    // carve the hole out of this scanline
+    if (Math.abs(y - hole.cy) < holeR) {
+      const dx = Math.sqrt(holeR * holeR - (y - hole.cy) * (y - hole.cy));
+      let cut = [];
+      for (const sp of spans) cut = cut.concat(subtractInterval([sp], hole.cx - dx, hole.cx + dx));
+      spans = cut;
+    }
+    if (dir === -1) spans = spans.slice().reverse();
+    for (let [a, c] of spans) {
+      if (dir === -1) { const t = a; a = c; c = t; }
+      const p0 = toBed({ x: a, y }, bbox, cfg);
+      const p1 = toBed({ x: c, y }, bbox, cfg);
+      em.travelTo(p0.x, p0.y);
+      em.extrudeTo(p1.x, p1.y, feed, b.lineWidth, layerH);
+    }
+    dir *= -1;
+  }
+}
+
+function beadStroke(em, cfg, bbox, stroke, feed, layerH) {
+  const pts = stroke.pts;
+  if (!pts.length) return;
+  const width = stroke.w;
+  const p0 = toBed(pts[0], bbox, cfg);
+  em.travelTo(p0.x, p0.y);
+  if (pts.length === 1) { em.extrudeTo(p0.x + width * 0.5, p0.y, feed, width, layerH); return; }
+  for (let i = 1; i < pts.length; i++) {
+    const p = toBed(pts[i], bbox, cfg);
+    em.extrudeTo(p.x, p.y, feed, width, layerH);
+  }
+}
+
+function makeEmitter(cfg, crossSection) {
+  const s = cfg.speed;
+  const lines = [];
+  const pos = { x: 0, y: 0, z: 0 };
+  let timeMin = 0, filamentMm = 0;
+  const eFor = (len, width, h) => (width * h * len) / crossSection;
+  return {
+    lines, meta: () => ({ timeMin, filamentMm }),
+    comment: (t) => lines.push('; ' + t),
+    raw: (t) => { if (t && t.length) lines.push(t); },
+    setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; },
+    retract() { if (s.retractMm > 0) lines.push(`G1 E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
+    unretract() { if (s.retractMm > 0) lines.push(`G1 E${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
+    travelTo(x, y) {
+      this.retract();
+      if (s.zHopMm > 0) lines.push(`G1 Z${(pos.z + s.zHopMm).toFixed(3)} F${Math.round(s.travel)}`);
+      const L = Math.hypot(x - pos.x, y - pos.y);
+      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`); timeMin += L / s.travel;
+      if (s.zHopMm > 0) lines.push(`G1 Z${pos.z.toFixed(3)} F${Math.round(s.travel)}`);
+      pos.x = x; pos.y = y; this.unretract();
+    },
+    extrudeTo(x, y, feed, width, h) {
+      const L = Math.hypot(x - pos.x, y - pos.y);
+      if (L < 1e-4) return;
+      const e = eFor(L, width, h);
+      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(feed)}`);
+      timeMin += L / feed; filamentMm += e; pos.x = x; pos.y = y;
+    },
+  };
+}
+
+const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
+function applyTemplate(text, cfg) {
+  if (!text) return '';
+  return text.replaceAll('{nozzle}', cfg.temp.nozzle).replaceAll('{bed}', cfg.temp.bed)
+    .replaceAll('{nozzleFirst}', cfg.temp.nozzleFirst).replaceAll('{bedFirst}', cfg.temp.bedFirst);
+}
 
 /* ============================ UI ============================ */
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -619,9 +1254,15 @@ function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefaul
 function onUp(ev){if(ev.pointerId!==activeId)return;drawing=false;activeId=null;
   if(state.mode==='outline'&&outlinePts){finishOutline();}
   redraw();}
-function finishOutline(){const simp=simplify(outlinePts,0.6);
-  if(simp.length<3){outlinePts=null;toast('Draw a bigger closed shape',true);return;}
-  state.customOutline=simp;outlinePts=null;state.mode='design';state.hole=null;updateHoleState();
+function finishOutline(){
+  const raw=outlinePts;outlinePts=null;
+  if(!raw||raw.length<3){toast('Draw a bigger closed shape',true);return;}
+  // heal it here too, so what the kid sees is exactly what will be printed:
+  // the gap is bridged, spikes are removed, and the edge is smoothed
+  const healed=healOutline(raw,{cell:CFG.build.outlineCell,closeR:CFG.build.outlineCloseMm,
+    openR:CFG.build.outlineOpenMm,smooth:CFG.build.outlineSmooth});
+  if(healed.length<3){toast('That shape was too thin to print — try a rounder one',true);return;}
+  state.customOutline=healed;state.mode='design';state.hole=null;outsideWarned=false;updateHoleState();
   resizeCanvas();updateBanner();toast('Nice shape! Now draw your design and place the hole');}
 function placeHole(p){
   const snapped=snapValidHole(p);
@@ -652,12 +1293,43 @@ function redraw(){
   if(state.hole){const[hx,hy]=px(state.hole);const r=CFG.build.holeDiameter/2*(pad.width/bb.w);
     ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle='#9aa7bd';ctx.lineWidth=2;ctx.beginPath();ctx.arc(hx,hy,r,0,7);ctx.fill();ctx.stroke();
     ctx.setLineDash([4,4]);ctx.strokeStyle='#c8d1e2';ctx.beginPath();ctx.arc(hx,hy,r+3,0,7);ctx.stroke();ctx.restore();}
-  // strokes
-  ctx.lineJoin='round';ctx.lineCap='round';const hex=COLOUR_HEX[state.colours.layer2]||'#e11';ctx.strokeStyle=hex;ctx.fillStyle=hex;
-  for(const st of state.strokes){const lw=Math.max(3,st.w*((pad.width/bb.w+pad.height/bb.h)/2));ctx.lineWidth=lw;
-    if(st.pts.length===1){const[cx,cy]=px(st.pts[0]);ctx.beginPath();ctx.arc(cx,cy,lw/2,0,7);ctx.fill();continue;}
-    ctx.beginPath();st.pts.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();}
+  // Strokes. Anything outside the base can't be printed, so show it as a faint
+  // ghost and draw only the in-bounds part solid — what you see is what prints.
+  const hasShape=!(state.shape==='custom'&&!state.customOutline);
+  const paintStrokes=()=>{
+    ctx.lineJoin='round';ctx.lineCap='round';
+    const hex=COLOUR_HEX[state.colours.layer2]||'#e11';ctx.strokeStyle=hex;ctx.fillStyle=hex;
+    for(const st of state.strokes){
+      const lw=Math.max(3,st.w*((pad.width/bb.w+pad.height/bb.h)/2));ctx.lineWidth=lw;
+      if(st.pts.length===1){const[cx,cy]=px(st.pts[0]);ctx.beginPath();ctx.arc(cx,cy,lw/2,0,7);ctx.fill();continue;}
+      ctx.beginPath();st.pts.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();
+    }
+  };
+  if(hasShape){
+    const poly=polyFor();
+    const clipPath=()=>{ctx.beginPath();poly.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.closePath();};
+    ctx.save();ctx.globalAlpha=0.18;paintStrokes();ctx.restore();   // ghost (won't print)
+    ctx.save();clipPath();ctx.clip();paintStrokes();ctx.restore();  // real (will print)
+  } else {
+    paintStrokes();
+  }
   updateMeter();
+  warnIfOutside();
+}
+/** Nudge the kid once if part of their drawing falls outside the base. */
+let outsideWarned=false;
+function warnIfOutside(){
+  if(state.shape==='custom'&&!state.customOutline)return;
+  const poly=polyFor(),m=CFG.build.designEdgeMargin;
+  let out=0,total=0;
+  for(const st of state.strokes)for(const p of st.pts){
+    total++;
+    if(!pointInPolygon(p,poly)||distToBoundary(p,poly)<m)out++;
+  }
+  if(!total)return;
+  const frac=out/total;
+  if(frac>0.05&&!outsideWarned){outsideWarned=true;toast('The faded bits fall outside your shape — those won’t be printed',true);}
+  if(frac<=0.05)outsideWarned=false;
 }
 function strokeLen(){let L=0;for(const s of state.strokes)for(let i=1;i<s.pts.length;i++)L+=dist(s.pts[i-1],s.pts[i]);return L;}
 function updateMeter(){const ratio=Math.min(1,strokeLen()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
