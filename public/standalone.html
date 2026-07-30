@@ -107,7 +107,11 @@
   .holebtns button.sel { border-color: var(--accent2); background: #0e2b22; }
   .toolrow { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .toolrow .btn { flex: 1 1 calc(50% - 4px); min-width: 0; }
-  @media (min-width: 620px) { .toolrow .btn { flex: 1 1 auto; } }
+  /* three-up row that still fits an iPhone: shrink text, never overflow */
+  .toolrow.tight .btn { flex: 1 1 0; min-width: 0; font-size: 14px; padding: 13px 6px; white-space: nowrap; }
+  .btn.dim { opacity: .45; }
+  @media (max-width: 400px) { .toolrow.tight .btn { font-size: 12.5px; padding: 13px 4px; } }
+  @media (min-width: 620px) { .toolrow .btn { flex: 1 1 auto; } .toolrow.tight .btn { font-size: 16px; padding: 14px 18px; } }
 
   /* review */
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; }
@@ -199,9 +203,12 @@
       </div>
     </div>
 
-    <div class="toolrow">
+    <div class="toolrow tight">
       <button class="btn ghost" id="undo">↶ Undo</button>
-      <button class="btn ghost" id="clear">Clear</button>
+      <button class="btn ghost" id="clear-drawing">Clear drawing</button>
+      <button class="btn ghost" id="clear-base">Clear base</button>
+    </div>
+    <div class="toolrow">
       <button class="btn ghost" data-go="contact">Back</button>
       <button class="btn" data-go="review">Preview →</button>
     </div>
@@ -1177,7 +1184,7 @@ function selectShape(shape){
   else state.mode='design';
   // hole may become invalid on shape change
   if(state.hole&&!holeIsValid(state.hole,polyFor(),CFG))state.hole=null;
-  resizeCanvas();updateHoleState();updateBanner();redraw();
+  resizeCanvas();updateHoleState();updateBanner();syncClearBase();redraw();
 }
 
 /* ---- colours ---- */
@@ -1234,7 +1241,24 @@ function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:f
   pad.addEventListener('pointerdown',onDown,o);pad.addEventListener('pointermove',onMove,o);
   pad.addEventListener('pointerup',onUp,o);pad.addEventListener('pointercancel',onUp,o);pad.addEventListener('pointerleave',onUp,o);
   $('#undo').addEventListener('click',()=>{if(state.mode==='outline')return;state.strokes.pop();redraw();});
-  $('#clear').addEventListener('click',()=>{if(state.shape==='custom'){state.customOutline=null;state.mode='outline';}state.strokes=[];state.hole=null;updateHoleState();resizeCanvas();updateBanner();redraw();});}
+  // Clear drawing: wipe the pen strokes, keep the base shape and hole.
+  $('#clear-drawing').addEventListener('click',()=>{
+    if(!state.strokes.length)return toast('Nothing drawn yet');
+    state.strokes=[];outsideWarned=false;redraw();toast('Drawing cleared');});
+  // Clear base: only the Custom shape has a drawn base. Wiping it also clears
+  // the hole, because the hole position only makes sense against a shape.
+  $('#clear-base').addEventListener('click',()=>{
+    if(state.shape!=='custom')
+      return toast('Only the Custom shape has a drawn base — pick Custom to draw your own',true);
+    state.customOutline=null;state.hole=null;state.holePos=null;state.mode='outline';
+    outsideWarned=false;updateHoleState();updateHoleButtons();resizeCanvas();updateBanner();redraw();
+    toast('Base cleared — draw a new outline (your drawing is kept)');});
+  syncClearBase();}
+/** Dim "Clear base" when the current shape has no drawn base. It stays
+ *  clickable on purpose, so tapping it explains why there's nothing to clear. */
+function syncClearBase(){
+  const b=$('#clear-base');if(!b)return;
+  b.classList.toggle('dim',state.shape!=='custom');}
 function resizeCanvas(){const bb=bboxFor(state.shape);const scale=Math.min(20,700/Math.max(bb.w,bb.h));pad.width=Math.round(bb.w*scale);pad.height=Math.round(bb.h*scale);redraw();}
 function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.shape);
   let x=(ev.clientX-rect.left)/rect.width*bb.w, y=bb.h-(ev.clientY-rect.top)/rect.height*bb.h;
