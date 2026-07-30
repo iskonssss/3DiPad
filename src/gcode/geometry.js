@@ -10,6 +10,8 @@
 //   - offsetPolygon() : inward/outward offset (chamfer, walls, hole margin)
 //   - scanlineSpans() : solid x-intervals of a polygon at height y
 
+import { healOutline } from './outline.js';
+
 /** Build the backing outline polygon (closed ring, CCW) + its bounding box. */
 export function shapePolygon(shape, cfg, customOutline) {
   const s = cfg.build.shapeSizes;
@@ -66,7 +68,16 @@ function customShape(outline, cfg) {
   const pts = outline
     .filter((p) => p && Number.isFinite(+p.x) && Number.isFinite(+p.y))
     .map((p) => ({ x: Math.max(0, Math.min(maxW, +p.x)), y: Math.max(0, Math.min(maxH, +p.y)) }));
-  return finalize(pts.length >= 3 ? pts : [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }]);
+  if (pts.length < 3) return rect(60, 40);
+  // Heal the freehand loop: bridge the gap where it didn't close, delete
+  // hair-thin spikes the nozzle can't print, and smooth it into curves.
+  const healed = healOutline(pts, {
+    cell: cfg.build.outlineCell,
+    closeR: cfg.build.outlineCloseMm,
+    openR: cfg.build.outlineOpenMm,
+    smooth: cfg.build.outlineSmooth,
+  });
+  return finalize(healed.length >= 3 ? healed : pts);
 }
 
 // ---------------------------------------------------------------------------
