@@ -1098,7 +1098,10 @@ const SHAPE_ICONS={
   heart:'<path d="M12 21C5 15 3 11 3 8a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 3-2 7-9 13z"/>',
   custom:'<path d="M4 14c1-6 6-9 9-8s6 5 5 9-6 6-10 4-5-3-4-5z"/>',
 };
-const SHAPES=[['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart'],['custom','Custom']];
+// Custom first, and the default — draw-your-own is the point of the booth, and
+// the preset shapes are the fallback for kids who'd rather not.
+const SHAPES=[['custom','Custom'],['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart']];
+const DEFAULT_SHAPE='custom';
 
 /* Country codes for the mobile field. Singapore first (booth default); `len`
    is the accepted national-number digit count, `ph` the example placeholder. */
@@ -1123,7 +1126,7 @@ const COUNTRIES=[
 ];
 const DEFAULT_CC='65';
 
-const state={contact:{name:'',phone:''},shape:'rectangle',customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
+const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
   pen:1.6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/};
 let lastGen=null;
 
@@ -1413,10 +1416,10 @@ async function submit(){
   $('#done-msg').textContent=`Your keychain file (${filename}) is ready — about ${meta.estMinutes} minutes to print.`;
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
-function resetAll(){state.contact={name:'',phone:''};state.shape='rectangle';state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
+function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
   state.pen=1.6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
-  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape('rectangle');show('welcome');}
+  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape(DEFAULT_SHAPE);show('welcome');}
 
 /* ---- utils ---- */
 function nextSeq(){let n=0;try{n=(parseInt(localStorage.getItem('3dipad_seq')||'0',10)||0)+1;localStorage.setItem('3dipad_seq',String(n));}catch{n=1;}return n;}
@@ -1429,7 +1432,7 @@ const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 /* ---- boot (after all declarations) ---- */
 buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();setupCanvas();
 $('#submit').addEventListener('click',submit);
-updateLayerDots();updateHoleState();updateHoleButtons();selectShape('rectangle');
+updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
