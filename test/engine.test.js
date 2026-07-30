@@ -83,7 +83,7 @@ for (const shape of SHAPES) {
     assert.ok(gcode.includes('chamfer'), 'chamfer applied on top backing layers');
     // Regression: chamfer layers used to skip the perimeter, leaving the top
     // rim as ragged infill ends instead of a clean bevel.
-    const layers = gcode.split(/^; ; layer /m).slice(1);
+    const layers = gcode.split(/^; layer /m).slice(1);
     const chamfered = layers.filter((L) => L.split('\n')[0].includes('chamfer'));
     assert.ok(chamfered.length >= 2, 'several layers are chamfered');
     for (const L of chamfered) {
@@ -108,6 +108,45 @@ test('per-stroke pen width: thicker pen extrudes more filament', () => {
   const thin = generate({ ...design('rectangle'), design: [{ w: 0.9, pts: [{ x: 20, y: 20 }, { x: 80, y: 20 }] }] }, cfg);
   const thick = generate({ ...design('rectangle'), design: [{ w: 2.5, pts: [{ x: 20, y: 20 }, { x: 80, y: 20 }] }] }, cfg);
   assert.ok(thick.meta.estGrams > thin.meta.estGrams, 'thicker pen uses more material');
+});
+
+test('wide pen is drawn as multiple passes, not one over-extruded line', () => {
+  // Regression from the first real print: a wide bead laid in a single pass
+  // extruded ~2.5x the backing rate and came out lumpy and domed. Every line,
+  // design included, must extrude at roughly the nominal line width.
+  const flow = (gcode) => {
+    let pos = { x: 0, y: 0 }, inDesign = false, back = { L: 0, E: 0 }, des = { L: 0, E: 0 };
+    for (const line of gcode.split('\n')) {
+      if (line.includes('DESIGN (colour 2)')) inDesign = true;
+      if (!line.startsWith('G1 ')) continue;
+      const x = num(line, 'X'), y = num(line, 'Y'), e = num(line, 'E');
+      const to = { x: x ?? pos.x, y: y ?? pos.y };
+      const L = Math.hypot(to.x - pos.x, to.y - pos.y);
+      if (e != null && e > 0 && L > 0) { const t = inDesign ? des : back; t.L += L; t.E += e; }
+      pos = to;
+    }
+    return { back: back.E / back.L, des: des.E / des.L };
+  };
+
+  for (const w of [1.0, 1.6, 2.4, 2.6]) {
+    const { gcode } = generate({ ...design('rectangle'), design: [{ w, pts: [{ x: 20, y: 20 }, { x: 80, y: 22 }] }] }, cfg);
+    const f = flow(gcode);
+    const ratio = f.des / f.back;
+    assert.ok(ratio > 0.8 && ratio < 1.25, `pen ${w}mm extrudes ${ratio.toFixed(2)}x the backing rate`);
+  }
+});
+
+test('gcode drives the printer display: fan on after layer 1, M73 progress', () => {
+  const { gcode } = generate(design('rectangle'), cfg);
+  assert.ok(/M106 S(1\d\d|2\d\d)/.test(gcode), 'part cooling turned on');
+  const m73 = gcode.match(/M73 P(\d+) R(\d+)/g) || [];
+  assert.ok(m73.length >= 4, `expected several progress reports, got ${m73.length}`);
+  const pcts = m73.map((l) => +l.match(/P(\d+)/)[1]);
+  assert.equal(pcts[0], 0, 'starts at 0%');
+  assert.equal(pcts[pcts.length - 1], 100, 'ends at 100%');
+  for (let i = 1; i < pcts.length; i++) assert.ok(pcts[i] >= pcts[i - 1], 'progress never goes backwards');
+  const lastR = +m73[m73.length - 1].match(/R(\d+)/)[1];
+  assert.equal(lastR, 0, 'finishes with 0 minutes remaining');
 });
 
 test('hole placement: resolved hole is always valid; edge points are rejected', () => {
