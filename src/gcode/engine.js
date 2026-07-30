@@ -39,6 +39,10 @@ export function generate(design, cfg) {
   em.comment(`layer1(backing): ${design.colours?.layer1 ?? '?'}   layer2(design): ${design.colours?.layer2 ?? '?'}`);
   em.raw(applyTemplate(cfg.template.startResolved, cfg));
   em.raw('G90'); em.raw('M83');
+  // Bambu's on-screen progress and time-remaining come from M73. Without it the
+  // printer shows 0:00 for the whole print. Marks are collected as we go and
+  // filled in at the end, once the total is known.
+  const marks = [{ at: em.lines.length, t: 0, pct: 0 }];
 
   // ---- backing plate (colour 1) ----
   const backingZs = layerZs(b.firstLayerHeight, b.layerHeight, b.backingThickness);
@@ -74,7 +78,12 @@ export function generate(design, cfg) {
     const fillPoly = insetAt(cham + b.lineWidth * 1.5);
 
     em.comment(`; layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
+    marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
+    // Part cooling: off for the first layer so it sticks, then on for the rest.
+    // Printing the whole part with the fan off is what causes drooping and the
+    // fine strings between travel moves.
+    if (i === 1) em.raw(`M106 S${Math.round(cfg.fan?.other ?? 255)} ; part cooling on`);
     if (wallPoly.length >= 3) perimeterLoop(em, cfg, bbox, wallPoly, perimFeed, layerH);
     holePerimeter(em, cfg, bbox, hole, holeR, perimFeed, layerH);
     if (fillPoly.length >= 3) {
@@ -97,17 +106,35 @@ export function generate(design, cfg) {
   for (let k = 1; k <= nDesign; k++) designZs.push(+(b.backingThickness + k * b.layerHeight).toFixed(3));
   em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
   designZs.forEach((z) => {
+    marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
     for (const st of strokes) beadStroke(em, cfg, bbox, st, s.bead, b.layerHeight);
   });
 
+  marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
   em.raw(applyTemplate(cfg.template.endResolved, cfg));
 
   const raw = em.meta();
   const estMinutes = raw.timeMin * ACCEL_FUDGE + STARTUP_MIN;
   const grams = raw.filamentMm * crossSection * FILAMENT_DENSITY;
+
+  // Build one progress report per mark, dropping consecutive duplicates so the
+  // printer isn't told the same thing twice.
+  const reports = marks.map((m) => {
+    const done = STARTUP_MIN + m.t * ACCEL_FUDGE;
+    const pct = m.pct ?? Math.max(0, Math.min(100, Math.round((m.t / Math.max(raw.timeMin, 1e-6)) * 100)));
+    const remaining = m.pct === 100 ? 0 : Math.max(0, Math.ceil(estMinutes - done));
+    return `M73 P${pct} R${remaining}`;
+  });
+  // splice from the back so earlier indices stay valid
+  const lines = em.lines.slice();
+  for (let i = marks.length - 1; i >= 0; i--) {
+    if (i > 0 && reports[i] === reports[i - 1]) continue;
+    lines.splice(marks[i].at, 0, reports[i]);
+  }
+
   return {
-    gcode: em.lines.join('\n') + '\n',
+    gcode: lines.join('\n') + '\n',
     meta: {
       shape, bbox, hole: { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
       backingLayers: nBack, designLayers: designZs.length, strokeCount: strokes.length,
@@ -237,6 +264,7 @@ function makeEmitter(cfg, crossSection) {
     comment: (t) => lines.push('; ' + t),
     raw: (t) => { if (t && t.length) lines.push(t); },
     setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; },
+    timeNow() { return timeMin; },
     distanceTo(x, y) { return Math.hypot(x - pos.x, y - pos.y); },
     /** Short hop with no retract or Z-hop — for joining adjacent infill lines. */
     moveTo(x, y) {

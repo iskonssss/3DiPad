@@ -154,5 +154,10 @@
         "accessCode": ""
       }
     ]
+  },
+  "fan": {
+    "_comment": "Part-cooling fan (0-255). Off on the first layer so it sticks, on for the rest - printing with no cooling causes drooping and stringing.",
+    "firstLayer": 0,
+    "other": 255
   }
 }
