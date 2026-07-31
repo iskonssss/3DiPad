@@ -279,6 +279,9 @@ const server = app.listen(port, () => {
   console.log(`  kiosk:     http://localhost:${port}/`);
   console.log(`  dashboard: http://localhost:${port}/dashboard/`);
   console.log(`  config:    ${cfg._configPath}`);
+  if (cfg._defaulted?.length) {
+    console.log(`             (${cfg._defaulted.length} newer settings not in your config.json — using shipped defaults: ${cfg._defaulted.slice(0, 6).join(', ')}${cfg._defaulted.length > 6 ? ', …' : ''})`);
+  }
   const lan = cfg.integrations?.lan?.enabled;
   const ready = (cfg.integrations?.printers || []).filter((p) => p.ip && p.serial && p.accessCode).length;
   console.log(`  printers:  LAN ${lan ? 'ON' : 'off'}, ${ready} configured`);

@@ -63,15 +63,52 @@ assertNoDuplicateDeclarations(parts);
 
 const engine = parts.map((p) => `/* ===== ${p.file} ===== */\n${p.code}`).join('\n\n');
 
+/* ---- the kiosk's CFG, generated from config.example.json ----
+   The tablet used to carry a hand-copied duplicate of these settings, which
+   quietly drifted from the server's: a fix to the design-layer count landed in
+   config.example.json and the standalone build kept printing the old value.
+   Generating it removes that whole class of bug. Server-only sections (printer
+   credentials, CRM webhooks, output paths) are left out — the browser has no
+   use for them and they don't belong in a file served to the public. */
+const SERVER_ONLY = ['integrations', 'output'];
+
+function stripComments(value) {
+  if (Array.isArray(value)) return value.map(stripComments);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) if (!k.startsWith('_')) out[k] = stripComments(v);
+    return out;
+  }
+  return value;
+}
+
+function kioskConfig() {
+  const cfg = stripComments(JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8')));
+  for (const key of SERVER_ONLY) delete cfg[key];
+  const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8').trimEnd();
+  cfg.template = {
+    startResolved: read(cfg.template.startFile),
+    endResolved: read(cfg.template.endFile),
+  };
+  return cfg;
+}
+
+const cfgJson = JSON.stringify(kioskConfig(), null, 2);
+
 const src = fs.readFileSync(path.join(root, 'src/kiosk/kiosk.html'), 'utf8');
-if (!src.includes('/*@ENGINE@*/')) {
-  console.error('src/kiosk/kiosk.html is missing the /*@ENGINE@*/ placeholder.');
-  process.exit(1);
+for (const placeholder of ['/*@ENGINE@*/', '/*@CONFIG@*/']) {
+  if (!src.includes(placeholder)) {
+    console.error(`src/kiosk/kiosk.html is missing the ${placeholder} placeholder.`);
+    process.exit(1);
+  }
 }
 
 const titleMatch = src.match(/<title>[\s\S]*?<\/title>/);
 const title = titleMatch ? titleMatch[0] : '<title>3DiPad</title>';
-const body = src.replace(/<title>[\s\S]*?<\/title>\s*/, '').replace('/*@ENGINE@*/', engine);
+const body = src
+  .replace(/<title>[\s\S]*?<\/title>\s*/, '')
+  .replace('/*@CONFIG@*/', () => cfgJson)
+  .replace('/*@ENGINE@*/', () => engine);
 
 const HEAD = `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">

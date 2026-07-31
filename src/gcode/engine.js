@@ -120,8 +120,13 @@ export function generate(design, cfg) {
   // Design height is counted in layers, not mm — 2 layers reads as a raised
   // line you can feel without looking like a slab on top of the plate.
   const nDesign = Math.max(1, b.designLayers ?? Math.round((b.designThickness ?? 0.56) / b.layerHeight));
+  // Stack on the LAST BACKING LAYER, not on the nominal backingThickness: a 2mm
+  // backing at 0.28mm layers really tops out at 1.96mm, so measuring from 2.0
+  // left the first design layer floating 0.32mm above the surface while being
+  // extruded for 0.28 — a thin, badly-stuck bead.
+  const backingTop = backingZs[nBack - 1];
   const designZs = [];
-  for (let k = 1; k <= nDesign; k++) designZs.push(+(b.backingThickness + k * b.layerHeight).toFixed(3));
+  for (let k = 1; k <= nDesign; k++) designZs.push(+(backingTop + k * b.layerHeight).toFixed(3));
   em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
   designZs.forEach((z) => {
     marks.push({ at: em.lines.length, t: em.timeNow() });
