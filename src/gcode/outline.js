@@ -197,7 +197,7 @@ class Raster {
 }
 
 /** Even-odd scanline fill of a closed polygon in grid coordinates. */
-function fillPolygon(poly, w, h) {
+export function fillPolygon(poly, w, h) {
   const mask = new Uint8Array(w * h);
   for (let row = 0; row < h; row++) {
     const yc = row + 0.5;
@@ -250,7 +250,7 @@ function distanceTo(mask, w, h, target) {
   return d;
 }
 
-function erode(mask, w, h, r) {
+export function erode(mask, w, h, r) {
   if (r <= 0) return mask;
   const d = distanceTo(mask, w, h, 0); // distance to background
   const out = new Uint8Array(w * h);
@@ -266,7 +266,7 @@ function dilate(mask, w, h, r) {
 }
 
 /** Flood-fill labelling; returns a mask containing only the biggest region. */
-function largestBlob(mask, w, h) {
+export function largestBlob(mask, w, h) {
   const seen = new Uint8Array(w * h);
   let best = null, bestSize = 0;
   const stack = [];
