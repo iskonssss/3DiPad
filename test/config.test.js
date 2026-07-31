@@ -87,7 +87,9 @@ for (const file of bundles) {
     assert.equal(cfg.build.designLayers, 2, 'design layer is two layers');
     assert.ok(!('designThickness' in cfg.build), 'the superseded thickness setting is gone');
     assert.deepEqual(cfg.palette, example.palette);
-    assert.deepEqual(cfg.speed, example.speed);
+    // the bundle drops the explanatory _comment keys, so compare what is left
+    const withoutComments = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.startsWith('_')));
+    assert.deepEqual(cfg.speed, withoutComments(example.speed));
     assert.ok(cfg.template.startResolved.includes('G28'), 'the real start template, not a trimmed copy');
     assert.ok(cfg.template.startResolved.includes('{calibration}'), 'with the calibration step left for the engine to fill in');
     for (const key of ['bedLevel', 'flow', 'startupMinutes']) {

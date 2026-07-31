@@ -334,3 +334,39 @@ test('bed levelling is skipped unless the config asks for it', () => {
   assert.ok(on.meta.estMinutes > off.meta.estMinutes,
     'and the estimate accounts for the time it costs');
 });
+
+test('solid infill is one unbroken zigzag, not a line of nicks', () => {
+  // From a real print: a dashed line ran around the rim just inside the wall.
+  // Every serpentine turn was a dry hop, and every one of those turns lands on
+  // the fill boundary — so each line left an un-extruded nick at the edge.
+  for (const shape of SHAPES) {
+    const { gcode } = generate(design(shape), cfg);
+    const body = gcode.slice(gcode.indexOf('BACKING (colour 1)'), gcode.indexOf('COLOUR CHANGE'));
+
+    let pos = { x: 0, y: 0 }, dry = 0, welded = 0;
+    for (const line of body.split('\n')) {
+      if (!line.startsWith('G1 ')) continue;
+      const x = num(line, 'X'), y = num(line, 'Y'), e = num(line, 'E');
+      if (x == null && y == null) continue;
+      const to = { x: x ?? pos.x, y: y ?? pos.y };
+      const L = Math.hypot(to.x - pos.x, to.y - pos.y);
+      // a turn is a short join between two fill lines
+      if (L > 0 && L <= cfg.build.lineWidth * 2) { if (e == null) dry++; else welded++; }
+      pos = to;
+    }
+    assert.ok(welded > 100, `${shape}: only ${welded} welded turns — the fill is not continuous`);
+    assert.ok(dry < welded / 20, `${shape}: ${dry} dry hops against ${welded} welded turns; each one is a nick at the rim`);
+  }
+});
+
+test('the visible top layer is printed slower than the buried ones', () => {
+  const { gcode } = generate(design('rectangle'), cfg);
+  const layers = gcode.split(/^; layer /m).slice(1);
+  const feedsOf = (L) => [...L.matchAll(/^G1 X[-\d.]+ Y[-\d.]+ E[\d.]+ F(\d+)/gm)].map((m) => +m[1]);
+
+  const top = feedsOf(layers[layers.length - 1]);
+  const buried = feedsOf(layers[Math.floor(layers.length / 2)]);
+  assert.ok(top.length && buried.length, 'found extrusions on both layers');
+  assert.equal(Math.max(...top), cfg.speed.topSurface, 'the top layer runs at the top-surface feedrate');
+  assert.ok(Math.max(...top) < Math.max(...buried), 'and slower than a buried layer');
+});

@@ -55,8 +55,10 @@
     "_wall_comment": "wallLoops: number of perimeters (Bambu default 2). infillWallOverlap: fraction of a line width the infill reaches into the innermost wall, which prevents a groove at the edges."
   },
   "speed": {
+    "_comment": "mm/min. topSurface is the visible last layer: solid fill turns every line width, and at solidInfill speed the nozzle never reaches the commanded speed before braking for the next turn, so flow varies through every turn. Slower there buys a cleaner top for a few seconds.",
     "infill": 12000,
     "solidInfill": 9000,
+    "topSurface": 6000,
     "perimeter": 6000,
     "bead": 3000,
     "travel": 15000,
