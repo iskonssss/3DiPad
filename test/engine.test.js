@@ -166,3 +166,38 @@ test('invalid tapped hole is nudged inside, not left in the wall', () => {
   assert.ok(holeIsValid({ x: meta.hole.x, y: meta.hole.y }, poly, cfg), 'nudged hole is valid');
   assert.ok(gcode.length > 1000);
 });
+
+test('the design sits on the backing as an unbroken layer stack', () => {
+  const { gcode, meta } = generate(design('rectangle'), cfg);
+  const b = cfg.build;
+
+  // Every Z the part itself extrudes at — the start template's prime line is
+  // outside the body and would otherwise count as a layer.
+  const zs = [];
+  let z = 0; let inBody = false;
+  for (const line of gcode.split('\n')) {
+    if (line.includes('BACKING (colour 1)')) inBody = true;
+    if (line.includes('A1 mini END')) inBody = false;
+    if (!line.startsWith('G1 ')) continue;
+    const nz = num(line, 'Z');
+    if (nz != null) z = nz;
+    const e = num(line, 'E');
+    if (inBody && e != null && e > 0 && (line.includes('X') || line.includes('Y')) && !zs.includes(z)) zs.push(z);
+  }
+  const print = zs.slice().sort((a, c) => a - c);
+
+  assert.equal(meta.designLayers, 2, 'design layer is two layers, not a slab');
+  assert.equal(print.length, meta.backingLayers + meta.designLayers, 'no layer prints twice or goes missing');
+
+  // The gap that matters: the backing tops out at nBack * layerHeight (1.96mm
+  // for a nominal 2mm plate), so the first design layer must step up from THAT,
+  // not from the rounded-up 2.0 — otherwise it is extruded thin into mid-air.
+  for (let i = 1; i < print.length; i++) {
+    const step = print[i] - print[i - 1];
+    assert.ok(Math.abs(step - b.layerHeight) < 1e-6,
+      `step ${i} is ${step.toFixed(3)}mm, expected one layer height (${b.layerHeight})`);
+  }
+  const top = print[print.length - 1];
+  assert.ok(Math.abs(top - (meta.backingLayers + meta.designLayers) * b.layerHeight) < 1e-6,
+    `finished height ${top} should be every layer stacked`);
+});
