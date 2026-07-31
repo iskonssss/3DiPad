@@ -4,6 +4,7 @@
 
 import express from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
@@ -243,9 +244,38 @@ const monitor = startMonitor(cfg, queue, async (job) => {
   queue.setStatus(job.id, 'ready', { notify: r });
 });
 
+/**
+ * This machine's addresses on the booth Wi-Fi, so the tablet URL is printed at
+ * startup instead of being looked up with ipconfig at the fair. Router DHCP can
+ * hand out a different address after a reboot, so it is worth re-reading each
+ * time the server starts.
+ */
+function lanAddresses() {
+  const out = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family !== 'IPv4' && a.family !== 4) continue;
+      if (a.internal) continue;
+      out.push({ name, address: a.address });
+    }
+  }
+  // Prefer ordinary private ranges — a VPN or virtual adapter address is no use to an iPad.
+  const priority = (ip) => (/^192\.168\./.test(ip) ? 0 : /^10\./.test(ip) ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 2 : 3);
+  return out.sort((a, b) => priority(a.address) - priority(b.address));
+}
+
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
   console.log(`3DiPad booth server on http://localhost:${port}`);
+  const nics = lanAddresses();
+  if (nics.length) {
+    console.log('');
+    console.log('  ON THE IPADS, OPEN:');
+    for (const n of nics) console.log(`     http://${n.address}:${port}      (${n.name})`);
+    console.log('');
+  } else {
+    console.log('  no Wi-Fi address found — the tablets cannot reach this laptop until it joins the booth network');
+  }
   console.log(`  kiosk:     http://localhost:${port}/`);
   console.log(`  dashboard: http://localhost:${port}/dashboard/`);
   console.log(`  config:    ${cfg._configPath}`);
