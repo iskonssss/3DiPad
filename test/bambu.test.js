@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter } from '../src/integrations/bambu.js';
+import {
+  sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
+  publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
+} from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
 test('sdName strips paths and unsafe characters', () => {
@@ -44,6 +47,58 @@ test('sendToPrinter degrades safely when LAN is off or unconfigured', async () =
   const unconfigured = await sendToPrinter({ id: 'A1-2' }, '/tmp/x.gcode', { integrations: { lan: { enabled: true } } });
   assert.equal(unconfigured.sent, false);
   assert.equal(unconfigured.manual, true);
+});
+
+// --- one MQTT connection per printer ---------------------------------------
+//
+// A Bambu printer accepts a single MQTT client. The status monitor holds one
+// open for the whole session, so the print-start command must go out on that
+// same connection instead of dialling a second one (which the printer ignores,
+// surfacing as "LAN dispatch failed at start: MQTT timeout").
+
+test('publishCommand reuses the monitor connection when one is open', async () => {
+  const printer = { id: 'A1-1', ip: '192.168.10.105', serial: 'SN1', accessCode: 'code' };
+  const published = [];
+  const fake = {
+    connected: true,
+    publish(topic, payload, opts, cb) { published.push({ topic, payload, opts }); cb(null); },
+  };
+  registerLiveClient(printer, fake);
+  try {
+    assert.equal(getLiveClient(printer), fake);
+    const res = await publishCommand(printer, buildPrintCommand('/sdcard/x.gcode', { sequenceId: 1 }), {});
+    assert.deepEqual(res, { ok: true, reused: true });
+    assert.equal(published.length, 1, 'no second connection was opened');
+    assert.equal(published[0].topic, 'device/SN1/request');
+    assert.equal(JSON.parse(published[0].payload).print.param, '/sdcard/x.gcode');
+  } finally {
+    releaseLiveClient(printer, fake);
+  }
+  assert.equal(getLiveClient(printer), null, 'stopping the monitor clears the registration');
+});
+
+test('a disconnected monitor client is not reused', () => {
+  const printer = { id: 'A1-9', ip: '1.2.3.4', serial: 'SN9', accessCode: 'c' };
+  const fake = { connected: false, publish() { throw new Error('must not publish while offline'); } };
+  registerLiveClient(printer, fake);
+  assert.equal(getLiveClient(printer), null, 'falls back to a fresh connection');
+  releaseLiveClient(printer, fake);
+});
+
+test('live clients are tracked per printer', () => {
+  const a = { id: 'A1-1', serial: 'SNA' };
+  const b = { id: 'A1-2', serial: 'SNB' };
+  const ca = { connected: true }; const cb = { connected: true };
+  registerLiveClient(a, ca);
+  registerLiveClient(b, cb);
+  assert.equal(getLiveClient(a), ca);
+  assert.equal(getLiveClient(b), cb);
+  releaseLiveClient(a, cb); // wrong client — must not clear A's registration
+  assert.equal(getLiveClient(a), ca);
+  releaseLiveClient(a, ca);
+  releaseLiveClient(b, cb);
+  assert.equal(getLiveClient(a), null);
+  assert.equal(getLiveClient(b), null);
 });
 
 // --- monitor lifecycle, driven through a fake queue ------------------------
