@@ -142,7 +142,11 @@
       "enabled": false,
       "uploadDir": "",
       "sdPrefix": "/sdcard",
-      "timeoutMs": 30000
+      "timeoutMs": 30000,
+      "_qos_comment": "The printer does not acknowledge MQTT publishes, so the start command goes out at QoS 0 and whether it worked is read from the printer's own reported state. startConfirmMs is how long to give it to turn over before saying it never started; maxDispatchAttempts stops a switched-off printer from spinning the whole queue.",
+      "qos": 0,
+      "startConfirmMs": 25000,
+      "maxDispatchAttempts": 3
     },
     "printers": [
       {

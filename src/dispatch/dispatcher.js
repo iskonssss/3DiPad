@@ -16,7 +16,7 @@
 import path from 'node:path';
 import { sendToPrinter } from '../integrations/bambu.js';
 
-export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter }) {
+export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter, confirmStart = null }) {
   let running = false;
   let again = false;
 
@@ -53,6 +53,23 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
     if (r.sent) {
       queue.setStatus(job.id, 'printing', { printerId: printer.id, dispatchAttempts: 0, dispatch: { ok: true, remotePath: r.remotePath } });
       onEvent({ type: 'sent', job, printer });
+      // The transport only says the command went out — the printer sends no
+      // acknowledgement, so a print that never starts is indistinguishable from
+      // one that did until someone walks over and looks. Watch the printer's own
+      // state in the background and say so if it never turns over. Deliberately
+      // not awaited: the wait is tens of seconds and the other printers should
+      // not sit idle through it.
+      if (confirmStart) {
+        Promise.resolve(confirmStart(printer, job)).then((started) => {
+          const now = queue.get(job.id);
+          if (started !== false || !now || now.status !== 'printing') return;
+          queue.setStatus(job.id, 'assigned', {
+            printerId: printer.id,
+            dispatch: { ok: false, uploaded: true, remotePath: r.remotePath, error: 'printer did not start' },
+          });
+          onEvent({ type: 'notstarted', job, printer, remotePath: r.remotePath });
+        }).catch(() => {});
+      }
     } else if (r.manual) {
       // LAN off or printer unconfigured: leave it assigned for a manual load
       queue.setStatus(job.id, 'assigned', { printerId: printer.id, dispatch: { ok: false, manual: true, reason: r.reason } });
