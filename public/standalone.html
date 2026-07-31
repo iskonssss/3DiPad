@@ -1365,7 +1365,13 @@ function generate(design, cfg) {
     // infill starts just inside the innermost loop and overlaps into it, which
     // is what stops a visible groove appearing between the wall and the fill
     const anchorInset = cham + lw * (walls + 0.5) - overlap;
-    const fillInset = anchorInset + lw * anchor - overlap * anchor;
+    // The fill boundary sits where the anchor loop's MATERIAL ends, less the
+    // overlap — not a whole line width further in. A whole line width assumed
+    // the outermost fill line would land exactly on that boundary, but the
+    // lines sit at a fixed pitch, so it lands anywhere up to a pitch further
+    // in and left a void between the two. Measured on a circle's top surface,
+    // 98% of the uncovered area sat in that one 0.4mm band.
+    const fillInset = anchorInset + (lw / 2 - overlap) * anchor;
 
     em.comment(`layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
     marks.push({ at: em.lines.length, t: em.timeNow() });
