@@ -138,10 +138,20 @@ export async function awaitLiveClient(printer, waitMs = 4000) {
   return connected ? client : null;
 }
 
-/** Publish a single command to the printer, reusing the monitor's connection. */
+/**
+ * Publish a single command to the printer, reusing the monitor's connection.
+ *
+ * QoS 0, because the printer does not send PUBACK: a QoS 1 publish waits for an
+ * acknowledgement that never arrives and reports "MQTT publish timeout" even
+ * though the command went out. The monitor's own pushall has always published
+ * at QoS 0 over this same connection, which is why status worked while starting
+ * a print did not. Whether the print actually began is confirmed from the
+ * printer's reported state, not from the transport.
+ */
 export async function publishCommand(printer, payload, cfg) {
   const lan = cfg?.integrations?.lan || {};
   const topic = `device/${printer.serial}/request`;
+  const qos = lan.qos ?? 0;
   const timeoutMs = (lan.timeoutMs ?? 10000) + 2000;
 
   const shared = await awaitLiveClient(printer);
@@ -150,7 +160,7 @@ export async function publishCommand(printer, payload, cfg) {
       let settled = false;
       const done = (r) => { if (!settled) { settled = true; resolve(r); } };
       try {
-        shared.publish(topic, JSON.stringify(payload), { qos: 1 }, (err) =>
+        shared.publish(topic, JSON.stringify(payload), { qos }, (err) =>
           done(err ? { ok: false, error: String(err) } : { ok: true, reused: true }),
         );
       } catch (e) {
@@ -171,7 +181,7 @@ export async function publishCommand(printer, payload, cfg) {
     let settled = false;
     const done = (r) => { if (!settled) { settled = true; try { client.end(true); } catch {} resolve(r); } };
     client.on('connect', () => {
-      client.publish(topic, JSON.stringify(payload), { qos: 1 }, (err) =>
+      client.publish(topic, JSON.stringify(payload), { qos }, (err) =>
         done(err ? { ok: false, error: String(err) } : { ok: true }),
       );
     });

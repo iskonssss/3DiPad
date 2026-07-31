@@ -252,12 +252,36 @@ function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
 }
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
 
+/**
+ * Did the printer actually start? The MQTT command is fire-and-forget — the
+ * printer sends no acknowledgement — so the only honest confirmation is its own
+ * reported state turning over from idle. Resolves false if it never does, which
+ * leaves the job assigned and the file on the SD card for a manual start.
+ */
+function confirmStart(printer) {
+  const waitMs = cfg.integrations?.lan?.startConfirmMs ?? 25000;
+  const deadline = Date.now() + waitMs;
+  const busy = (s) => s && (['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(s.state) || (s.percent ?? 0) > 0);
+  return new Promise((resolve) => {
+    const poll = () => {
+      if (busy(monitor.states()[printer.id])) return resolve(true);
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(poll, 1000).unref?.();
+    };
+    poll();
+  });
+}
+
 const dispatcher = createDispatcher({
-  cfg, queue, outDir,
+  cfg, queue, outDir, confirmStart,
   onEvent: (e) => {
     if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
     else if (e.type === 'failed') console.error(`[${e.printer.id}] send failed at ${e.stage}: ${e.error} — ${e.job.filename} back in the queue`);
     else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
+    else if (e.type === 'notstarted') {
+      console.error(`[${e.printer.id}] ${e.job.filename} is on the SD card but the printer did not start it.`);
+      console.error('           Start it from the printer screen, or press Send on the dashboard.');
+    }
   },
 });
 

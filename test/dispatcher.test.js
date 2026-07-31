@@ -157,3 +157,84 @@ test('with no printers configured the queue simply holds everything', async () =
   assert.equal(queue.get(job.id).status, 'queued');
   assert.equal(sends.length, 0);
 });
+
+// --- did it actually start? -------------------------------------------------
+//
+// The printer sends no acknowledgement of the start command, so "the command
+// went out" and "the print began" are different facts. The file is on the SD
+// card either way, which is why a print that never starts looks exactly like a
+// successful send until someone walks over and looks at the printer.
+
+test('a print that never starts is caught and handed back to the operator', async () => {
+  const { queue, dispatcher } = harness([PRINTERS[0]]);
+  let asked = 0;
+  const confirm = () => { asked++; return Promise.resolve(false); };
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    queue, outDir: '/tmp', confirmStart: confirm,
+    transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
+  });
+  const job = addJob(queue, 'Ada');
+  d2.submit(job);
+  await settle();
+
+  assert.equal(asked, 1, 'the printer state was checked');
+  const after = queue.get(job.id);
+  assert.equal(after.status, 'assigned', 'left assigned for a manual start, not reported as printing');
+  assert.equal(after.printerId, 'A1-1', 'and still on the printer holding its file');
+  assert.equal(after.dispatch.uploaded, true, 'the record says the file did reach the SD card');
+});
+
+test('a confirmed start stays printing', async () => {
+  const { queue } = harness([PRINTERS[0]]);
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    queue, outDir: '/tmp', confirmStart: () => Promise.resolve(true),
+    transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
+  });
+  const job = addJob(queue, 'Bo');
+  d2.submit(job);
+  await settle();
+  assert.equal(queue.get(job.id).status, 'printing');
+});
+
+test('confirmation does not hold up the other printers', async () => {
+  // It waits tens of seconds for the printer to turn over; the queue must not.
+  const { queue } = harness();
+  let released;
+  const slow = () => new Promise((r) => { released = r; });
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: PRINTERS } },
+    queue, outDir: '/tmp', confirmStart: slow,
+    transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
+  });
+  const a = addJob(queue, 'Ada');
+  const b = addJob(queue, 'Bo');
+  d2.submit(a);
+  await settle();
+  d2.submit(b);
+  await settle();
+
+  assert.equal(queue.get(a.id).status, 'printing');
+  assert.equal(queue.get(b.id).status, 'printing', 'the second printer was fed while the first was still unconfirmed');
+  released(true);
+});
+
+test('the monitor seeing the print run beats a late confirmation timeout', async () => {
+  const { queue } = harness([PRINTERS[0]]);
+  let release;
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    queue, outDir: '/tmp',
+    confirmStart: () => new Promise((r) => { release = r; }),
+    transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
+  });
+  const job = addJob(queue, 'Ada');
+  d2.submit(job);
+  await settle();
+  // the colour-change pause arrives before confirmation gives up
+  queue.setStatus(job.id, 'colour_change');
+  release(false);
+  await settle();
+  assert.equal(queue.get(job.id).status, 'colour_change', 'a stale timeout must not clobber real progress');
+});
