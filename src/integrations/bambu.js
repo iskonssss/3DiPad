@@ -77,9 +77,89 @@ export async function uploadFile(printer, filePath, cfg) {
   }
 }
 
-/** Publish a single command to the printer and close the connection. */
-export function publishCommand(printer, payload, cfg) {
+/* ------------------------------------------------------------------ *
+ * Shared MQTT connections                                              *
+ *                                                                      *
+ * A Bambu printer accepts only ONE MQTT client at a time. The status    *
+ * monitor holds a persistent connection for the whole booth session, so *
+ * opening a second connection just to send the print command gets       *
+ * ignored by the printer and times out ("LAN dispatch failed at start:  *
+ * MQTT timeout"). So commands are published on the monitor's connection *
+ * when there is one, and only fall back to a throwaway connection when  *
+ * nothing is watching that printer.                                     *
+ * ------------------------------------------------------------------ */
+
+const liveClients = new Map();
+
+function printerKey(printer) {
+  return String(printer?.id || printer?.serial || printer?.ip || '');
+}
+
+/** Record a long-lived client so publishCommand can reuse it. */
+export function registerLiveClient(printer, client) {
+  const key = printerKey(printer);
+  if (key) liveClients.set(key, client);
+}
+
+/** Drop a long-lived client (only if it is still the registered one). */
+export function releaseLiveClient(printer, client) {
+  const key = printerKey(printer);
+  if (key && (!client || liveClients.get(key) === client)) liveClients.delete(key);
+}
+
+/** The connected long-lived client for this printer, or null. */
+export function getLiveClient(printer) {
+  const client = liveClients.get(printerKey(printer));
+  return client && client.connected ? client : null;
+}
+
+/**
+ * Like getLiveClient, but if a monitor connection exists and is still dialling
+ * (server just started, or it is mid-reconnect) wait briefly for it rather than
+ * racing it with a second connection the printer would refuse.
+ */
+export async function awaitLiveClient(printer, waitMs = 4000) {
+  const client = liveClients.get(printerKey(printer));
+  if (!client) return null;
+  if (client.connected) return client;
+  if (typeof client.once !== 'function') return null;
+  const connected = await new Promise((resolve) => {
+    let settled = false;
+    const onConnect = () => done(true);
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      try { client.removeListener('connect', onConnect); } catch {}
+      resolve(v);
+    };
+    client.once('connect', onConnect);
+    setTimeout(() => done(false), waitMs).unref?.();
+  });
+  return connected ? client : null;
+}
+
+/** Publish a single command to the printer, reusing the monitor's connection. */
+export async function publishCommand(printer, payload, cfg) {
   const lan = cfg?.integrations?.lan || {};
+  const topic = `device/${printer.serial}/request`;
+  const timeoutMs = (lan.timeoutMs ?? 10000) + 2000;
+
+  const shared = await awaitLiveClient(printer);
+  if (shared) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+      try {
+        shared.publish(topic, JSON.stringify(payload), { qos: 1 }, (err) =>
+          done(err ? { ok: false, error: String(err) } : { ok: true, reused: true }),
+        );
+      } catch (e) {
+        done({ ok: false, error: String(e.message || e) });
+      }
+      setTimeout(() => done({ ok: false, error: 'MQTT publish timeout' }), timeoutMs).unref?.();
+    });
+  }
+
   return new Promise((resolve) => {
     const client = mqtt.connect(`mqtts://${printer.ip}:${MQTT_PORT}`, {
       username: USER,
@@ -91,12 +171,12 @@ export function publishCommand(printer, payload, cfg) {
     let settled = false;
     const done = (r) => { if (!settled) { settled = true; try { client.end(true); } catch {} resolve(r); } };
     client.on('connect', () => {
-      client.publish(`device/${printer.serial}/request`, JSON.stringify(payload), { qos: 1 }, (err) =>
+      client.publish(topic, JSON.stringify(payload), { qos: 1 }, (err) =>
         done(err ? { ok: false, error: String(err) } : { ok: true }),
       );
     });
     client.on('error', (e) => done({ ok: false, error: String(e.message || e) }));
-    setTimeout(() => done({ ok: false, error: 'MQTT timeout' }), (lan.timeoutMs ?? 10000) + 2000);
+    setTimeout(() => done({ ok: false, error: 'MQTT timeout' }), timeoutMs);
   });
 }
 
@@ -153,6 +233,8 @@ export function watchPrinter(printer, cfg, onStatus) {
     rejectUnauthorized: false,
     reconnectPeriod: 10000,
   });
+  // Publish commands over this connection too — the printer allows only one.
+  registerLiveClient(printer, client);
   const topic = `device/${printer.serial}/report`;
   client.on('connect', () => {
     client.subscribe(topic, { qos: 0 });
@@ -166,5 +248,5 @@ export function watchPrinter(printer, cfg, onStatus) {
     if (status) { try { onStatus(status); } catch (e) { console.error('printer status handler failed', e); } }
   });
   client.on('error', (e) => console.error(`[${printer.id}] MQTT error:`, e.message || e));
-  return { stop() { try { client.end(true); } catch {} } };
+  return { stop() { releaseLiveClient(printer, client); try { client.end(true); } catch {} } };
 }

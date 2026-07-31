@@ -85,6 +85,10 @@ function mqttCheck(p, waitMs = 6000) {
   });
 }
 
+// A Bambu printer accepts one MQTT client at a time, so this check fights with
+// a running booth server for the connection. Run it with the server stopped.
+console.log('Note: stop the booth server (Ctrl-C on `npm start`) before running this — the printer allows only one MQTT connection.');
+
 for (const p of printers) {
   console.log(`\n=== ${p.id} (${p.name}) — ${p.ip} ===`);
 
