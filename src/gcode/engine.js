@@ -62,7 +62,12 @@ export function generate(design, cfg) {
     const first = i === 0;
     const solid = first || i < b.solidLayers || i >= nBack - b.solidLayers;
     const spacing = solid ? b.lineWidth : b.sparseSpacing;
-    const infillFeed = first ? s.firstLayer : solid ? s.solidInfill : s.infill;
+    // The visible top surface gets its own, slower feedrate. Solid fill turns
+    // every line width or so, and at 150mm/s the nozzle never reaches the
+    // commanded speed before braking for the next turn — so flow varies through
+    // every turn, which is what shows as a rough top. Buried layers don't care.
+    const topSurface = i === nBack - 1;
+    const infillFeed = first ? s.firstLayer : topSurface ? (s.topSurface ?? s.solidInfill) : solid ? s.solidInfill : s.infill;
     const perimFeed = first ? s.firstLayer : s.perimeter;
 
     // Chamfer: over the top `chamferMm` the layer is inset so the rim bevels.
@@ -312,18 +317,32 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
   done.push(...open);
 
   // 3. draw each region as one continuous serpentine
+  //
+  // The turn at the end of each line is EXTRUDED, not hopped over. Every one of
+  // those turns lands on the fill boundary, so a dry hop left an un-extruded
+  // nick at the edge on every single line — around the whole rim that reads as
+  // a dashed line just inside the wall. A slicer lays solid infill as one
+  // unbroken zigzag for exactly this reason.
+  //
+  // Only a real turn is welded: a join no longer than a couple of line spacings.
+  // Anything further is the path crossing a concavity, where extruding would
+  // draw a line through fresh air.
+  const weldLimit = spacing * 2;
   const jumpLimit = spacing * 2.5;
   for (const region of done) {
-    let dir = 1;
+    let dir = 1, first = true;
     for (const seg of region.segs) {
       const x0 = dir === 1 ? seg.a : seg.b;
       const x1 = dir === 1 ? seg.b : seg.a;
       const p0 = toBed(fromScan({ x: x0, y: seg.y }), bbox, cfg);
       const p1 = toBed(fromScan({ x: x1, y: seg.y }), bbox, cfg);
-      if (em.distanceTo(p0.x, p0.y) <= jumpLimit) em.moveTo(p0.x, p0.y);
+      const d = em.distanceTo(p0.x, p0.y);
+      if (!first && d <= weldLimit) em.extrudeTo(p0.x, p0.y, feed, b.lineWidth, layerH);
+      else if (d <= jumpLimit) em.moveTo(p0.x, p0.y);
       else em.travelTo(p0.x, p0.y);
       em.extrudeTo(p1.x, p1.y, feed, b.lineWidth, layerH);
       dir *= -1;
+      first = false;
     }
   }
 }
