@@ -23,7 +23,6 @@ import { insetPolygon } from './outline.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
 const ACCEL_FUDGE = 1.6;
-const STARTUP_MIN = 2.5;
 
 export function generate(design, cfg) {
   const b = cfg.build;
@@ -155,22 +154,27 @@ export function generate(design, cfg) {
   em.raw(applyTemplate(cfg.template.endResolved, cfg));
 
   const raw = em.meta();
-  const estMinutes = raw.timeMin * ACCEL_FUDGE + STARTUP_MIN;
+  const startupMin = startupMinutes(cfg);
+  const estMinutes = raw.timeMin * ACCEL_FUDGE + startupMin;
   const grams = raw.filamentMm * crossSection * FILAMENT_DENSITY;
+
+  // Layer marks plus the emitter's time ticks, in file order. The ticks are what
+  // keeps the bar moving through a long first layer.
+  const all = marks.concat(em.progress).sort((p, q) => p.at - q.at || p.t - q.t);
 
   // Build one progress report per mark, dropping consecutive duplicates so the
   // printer isn't told the same thing twice.
-  const reports = marks.map((m) => {
-    const done = STARTUP_MIN + m.t * ACCEL_FUDGE;
+  const reports = all.map((m) => {
+    const done = startupMin + m.t * ACCEL_FUDGE;
     const pct = m.pct ?? Math.max(0, Math.min(100, Math.round((m.t / Math.max(raw.timeMin, 1e-6)) * 100)));
     const remaining = m.pct === 100 ? 0 : Math.max(0, Math.ceil(estMinutes - done));
     return `M73 P${pct} R${remaining}`;
   });
   // splice from the back so earlier indices stay valid
   const lines = em.lines.slice();
-  for (let i = marks.length - 1; i >= 0; i--) {
+  for (let i = all.length - 1; i >= 0; i--) {
     if (i > 0 && reports[i] === reports[i - 1]) continue;
-    lines.splice(marks[i].at, 0, reports[i]);
+    lines.splice(all[i].at, 0, reports[i]);
   }
 
   return {
@@ -392,12 +396,24 @@ function makeEmitter(cfg, crossSection) {
   const lines = [];
   const pos = { x: 0, y: 0, z: 0 };
   let timeMin = 0, filamentMm = 0;
+
+  // Progress reports were only emitted at layer boundaries, and the first layer
+  // is slow enough to be ~40% of a keychain — so the printer's bar sat at 0%
+  // for minutes before jumping. Marks are taken on a time tick instead, so the
+  // bar moves whatever a layer is doing.
+  const progress = [];
+  let nextTick = 0;
+  const TICK_MIN = 0.08;
+  const tick = () => {
+    if (timeMin >= nextTick) { progress.push({ at: lines.length, t: timeMin }); nextTick = timeMin + TICK_MIN; }
+  };
+
   const eFor = (len, width, h) => (width * h * len) / crossSection;
   return {
-    lines, meta: () => ({ timeMin, filamentMm }),
+    lines, progress, meta: () => ({ timeMin, filamentMm }),
     comment: (t) => lines.push('; ' + t),
     raw: (t) => { if (t && t.length) lines.push(t); },
-    setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; },
+    setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; tick(); },
     timeNow() { return timeMin; },
     distanceTo(x, y) { return Math.hypot(x - pos.x, y - pos.y); },
     /** Short hop with no retract or Z-hop — for joining adjacent infill lines. */
@@ -406,7 +422,7 @@ function makeEmitter(cfg, crossSection) {
       if (L < 1e-4) return;
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`);
       timeMin += L / s.travel;
-      pos.x = x; pos.y = y;
+      pos.x = x; pos.y = y; tick();
     },
     retract() { if (s.retractMm > 0) lines.push(`G1 E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
     unretract() { if (s.retractMm > 0) lines.push(`G1 E${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
@@ -416,21 +432,49 @@ function makeEmitter(cfg, crossSection) {
       const L = Math.hypot(x - pos.x, y - pos.y);
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`); timeMin += L / s.travel;
       if (s.zHopMm > 0) lines.push(`G1 Z${pos.z.toFixed(3)} F${Math.round(s.travel)}`);
-      pos.x = x; pos.y = y; this.unretract();
+      pos.x = x; pos.y = y; this.unretract(); tick();
     },
     extrudeTo(x, y, feed, width, h) {
       const L = Math.hypot(x - pos.x, y - pos.y);
       if (L < 1e-4) return;
       const e = eFor(L, width, h);
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(feed)}`);
-      timeMin += L / feed; filamentMm += e; pos.x = x; pos.y = y;
+      timeMin += L / feed; filamentMm += e; pos.x = x; pos.y = y; tick();
     },
   };
 }
 
 const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
+
+/**
+ * The calibration block for the start template.
+ *
+ * A full G29 mesh probe costs well over a minute — on a 13-minute keychain that
+ * is a tenth of the booth's throughput, repeated for every single kid. With it
+ * off the printer uses the mesh it stored the last time it levelled, which is
+ * what Bambu Studio's "no calibration" option does too. Level once on arrival
+ * (printer screen, or flip bedLevel on for the day's first print) and every
+ * print after that starts straight into the prime line.
+ */
+function calibrationBlock(cfg) {
+  const c = cfg.calibration || {};
+  const out = [];
+  if (c.bedLevel) out.push('G29 ; auto bed levelling (probes at reduced nozzle temp)');
+  else out.push('; bed levelling skipped — using the mesh stored on the printer');
+  if (c.flow) out.push('M900 ; flow dynamics calibration');
+  for (const line of asLines(c.extra || [])) if (line && line.trim()) out.push(line);
+  return out.join('\n');
+}
+
+/** Minutes before the first extrusion: heat soak, homing, and any calibration. */
+function startupMinutes(cfg) {
+  const c = cfg.calibration || {};
+  return (c.startupMinutes ?? 1.2) + (c.bedLevel ? (c.bedLevelMinutes ?? 1.3) : 0);
+}
+
 function applyTemplate(text, cfg) {
   if (!text) return '';
   return text.replaceAll('{nozzle}', cfg.temp.nozzle).replaceAll('{bed}', cfg.temp.bed)
-    .replaceAll('{nozzleFirst}', cfg.temp.nozzleFirst).replaceAll('{bedFirst}', cfg.temp.bedFirst);
+    .replaceAll('{nozzleFirst}', cfg.temp.nozzleFirst).replaceAll('{bedFirst}', cfg.temp.bedFirst)
+    .replaceAll('{calibration}', calibrationBlock(cfg));
 }

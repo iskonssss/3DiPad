@@ -12,7 +12,7 @@
 
 import { watchPrinter } from '../integrations/bambu.js';
 
-export function startMonitor(cfg, queue, onReady) {
+export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   const printers = cfg.integrations?.printers || [];
   if (!cfg.integrations?.lan?.enabled) return { stop() {}, states: () => ({}) };
 
@@ -27,6 +27,11 @@ export function startMonitor(cfg, queue, onReady) {
     });
     handles.push(h);
   }
+
+  // The printer just let go of its job, so the next kid in the queue can have
+  // it. Without this a job submitted while every printer was busy would sit
+  // queued for ever — its g-code written, its lead captured, never printed.
+  const freed = () => { try { onPrinterFree(); } catch (e) { console.error('dispatch pump failed', e); } };
 
   function applyTransition(printer, state) {
     // the job currently on this printer
@@ -44,9 +49,11 @@ export function startMonitor(cfg, queue, onReady) {
       queue.setStatus(job.id, 'ready');
       console.log(`[${printer.id}] finished ${job.filename} — notifying ${job.contact?.name}`);
       Promise.resolve(onReady(job)).catch((e) => console.error('ready notify failed', e));
+      freed();
     } else if (state === 'FAILED') {
       queue.setStatus(job.id, 'failed');
       console.error(`[${printer.id}] print FAILED for ${job.filename}`);
+      freed();
     }
   }
 

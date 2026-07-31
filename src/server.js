@@ -14,8 +14,8 @@ import { saveLead } from './leads.js';
 import * as notify from './integrations/notify.js';
 import * as outbox from './integrations/outbox.js';
 import { uploadGcode } from './integrations/drive.js';
-import { sendToPrinter } from './integrations/bambu.js';
 import { startMonitor } from './dispatch/monitor.js';
+import { createDispatcher } from './dispatch/dispatcher.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = loadConfig();
@@ -96,26 +96,17 @@ app.post('/api/submit', async (req, res) => {
   // best-effort Drive upload (never blocks the kid)
   uploadGcode(cfg, filePath).then((r) => { if (r.ok) queue.setStatus(job.id, job.status, { driveLink: r.link }); }).catch(() => {});
 
-  // best-effort auto-dispatch to a free printer over LAN
-  let printerName = null;
-  const printers = cfg.integrations?.printers || [];
-  const free = queue.freePrinter(printers);
-  if (free) {
-    const r = await sendToPrinter(free, filePath, cfg, { sequenceId: seq }).catch((e) => ({ ok: false, error: String(e) }));
-    if (r.sent) {
-      queue.setStatus(job.id, 'printing', { printerId: free.id, dispatch: { ok: true, remotePath: r.remotePath } });
-      printerName = free.name;
-    } else if (r.manual) {
-      queue.setStatus(job.id, 'assigned', { printerId: free.id, dispatch: { ok: false, manual: true, reason: r.reason } });
-      printerName = free.name;
-    } else {
-      // LAN send failed — keep the job queued and surface it on the dashboard
-      queue.setStatus(job.id, 'queued', { dispatch: { ok: false, stage: r.stage, error: r.error } });
-      console.error(`LAN dispatch to ${free.id} failed at ${r.stage}: ${r.error}`);
-    }
-  }
+  // Reserve a printer now, upload after responding. The FTPS transfer takes a
+  // couple of seconds and there is a queue of kids behind this one — the tablet
+  // should not sit on "Make it" waiting for a file to cross the network.
+  const free = dispatcher.submit(job);
+  const queuedAhead = queue.jobs.filter((j) => j.status === 'queued').length;
 
-  res.json({ ok: true, jobId: job.id, filename, meta, printer: printerName });
+  res.json({
+    ok: true, jobId: job.id, filename, meta,
+    printer: free ? free.name : null,
+    queuedAhead: free ? 0 : queuedAhead,
+  });
 });
 
 // ---- operator / dashboard API ----
@@ -141,6 +132,9 @@ app.post('/api/jobs/:id/status', async (req, res) => {
   const job = queue.setStatus(req.params.id, status, printerId ? { printerId } : {});
   if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
 
+  // an operator moving a job off a printer frees it for the next kid
+  if (['ready', 'collected', 'failed', 'queued'].includes(status)) dispatcher.pump();
+
   // reaching "ready" fires the pickup notification via the configured provider
   if (status === 'ready') {
     const r = await notify.onReady(cfg, job);
@@ -148,6 +142,26 @@ app.post('/api/jobs/:id/status', async (req, res) => {
     return res.json({ ok: true, job: publicJob(job), notify: r });
   }
   res.json({ ok: true, job: publicJob(job) });
+});
+
+// Send a job to a printer by hand — for a job whose upload failed, or one the
+// operator wants on a particular machine. Without this the only path to a
+// printer was the instant of submission.
+app.post('/api/jobs/:id/dispatch', async (req, res) => {
+  const job = queue.get(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
+
+  const wanted = String(req.body?.printerId || '');
+  const printers = cfg.integrations?.printers || [];
+  const printer = wanted
+    ? printers.find((p) => p.id === wanted)
+    : queue.freePrinter(printers);
+  if (!printer) return res.status(409).json({ ok: false, error: wanted ? 'no such printer' : 'every printer is busy' });
+
+  // an operator asking for it explicitly clears the give-up counter
+  queue.setStatus(job.id, 'assigned', { printerId: printer.id, dispatchAttempts: 0 });
+  const r = await dispatcher.send(job, printer);
+  res.json({ ok: !!(r.sent || r.manual), printer: printer.name, result: r, job: publicJob(queue.get(job.id)) });
 });
 
 app.post('/api/jobs/:id/notify', async (req, res) => {
@@ -238,11 +252,22 @@ function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
 }
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
 
+const dispatcher = createDispatcher({
+  cfg, queue, outDir,
+  onEvent: (e) => {
+    if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
+    else if (e.type === 'failed') console.error(`[${e.printer.id}] send failed at ${e.stage}: ${e.error} — ${e.job.filename} back in the queue`);
+    else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
+  },
+});
+
 // Watch the printers so prints advance (and notify) with no operator tap.
+// A printer leaving its job — finished or failed — is the moment the next
+// queued kid can go on, so every transition gives the dispatcher a nudge.
 const monitor = startMonitor(cfg, queue, async (job) => {
   const r = await notify.onReady(cfg, job);
   queue.setStatus(job.id, 'ready', { notify: r });
-});
+}, () => dispatcher.pump());
 
 /**
  * This machine's addresses on the booth Wi-Fi, so the tablet URL is printed at
