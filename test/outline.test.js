@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { healOutline, smooth, decimate } from '../src/gcode/outline.js';
+import { healOutline, smooth, decimate, insetPolygon } from '../src/gcode/outline.js';
 import { loadConfig } from '../src/config.js';
 import { shapePolygon, pointInPolygon } from '../src/gcode/geometry.js';
 import { prepareStrokes } from '../src/gcode/strokes.js';
@@ -111,4 +111,66 @@ test('a stroke crossing the edge is split, keeping only the inside part', () => 
   const kept = prepareStrokes([crossing], poly, cfg, null, cfg.build.designEdgeMargin);
   assert.ok(kept.length >= 1, 'the inside portion is kept');
   for (const seg of kept) for (const p of seg.pts) assert.ok(pointInPolygon(p, poly), 'no printed point is outside');
+});
+
+// --- wall spacing ---------------------------------------------------------
+//
+// Wall loops are cut from a raster, and the raster measures cell to cell — so a
+// loop landed anywhere within about a cell of where it was asked to be. Two
+// loops asked for one line width apart could come out 0.7mm apart, leaving a
+// groove around the rim that shows on the finished part. Offsets have to be
+// accurate to well under a line width.
+//
+// Measured mid-edge: at a corner the offset correctly sweeps an arc about the
+// vertex, so the extreme point there is nearer the corner than `d` by design.
+
+const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+
+/** Distance from the left edge, sampled well away from either corner. */
+function leftEdgeInset(poly, loY, hiY) {
+  const mid = poly.filter((p) => p.y > loY && p.y < hiY);
+  assert.ok(mid.length, 'no vertices along the sampled edge');
+  return Math.min(...mid.map((p) => p.x));
+}
+
+test('insetPolygon lands on the offset it was asked for', () => {
+  const poly = rect(100, 40);
+  for (const d of [0.225, 0.45, 0.675, 0.9, 1.125, 1.8]) {
+    const got = insetPolygon(poly, d, { cell: 0.25 });
+    const left = leftEdgeInset(got, 10, 30);
+    assert.ok(Math.abs(left - d) < 0.05, `inset ${d}mm put the left edge at ${left.toFixed(3)}`);
+  }
+});
+
+test('successive wall loops sit exactly one line width apart', () => {
+  const poly = rect(100, 40);
+  const lw = cfg.build.lineWidth;
+  const loops = [0, 1, 2, 3].map((i) => leftEdgeInset(insetPolygon(poly, lw * (i + 0.5), { cell: 0.25 }), 10, 30));
+  for (let i = 1; i < loops.length; i++) {
+    const gap = loops[i] - loops[i - 1];
+    assert.ok(Math.abs(gap - lw) < 0.05,
+      `loops ${i - 1}->${i} are ${gap.toFixed(3)}mm apart, expected ${lw} — a gap that size prints as a groove`);
+  }
+});
+
+test('inset stays accurate on a curve, not just straight edges', () => {
+  const R = 30, circle = Array.from({ length: 180 }, (_, i) => {
+    const a = (i / 180) * Math.PI * 2;
+    return { x: R + R * Math.cos(a), y: R + R * Math.sin(a) };
+  });
+  for (const d of [0.45, 0.9, 1.35]) {
+    const radii = insetPolygon(circle, d, { cell: 0.25 }).map((p) => Math.hypot(p.x - R, p.y - R));
+    const mean = radii.reduce((a, b) => a + b, 0) / radii.length;
+    assert.ok(Math.abs(mean - (R - d)) < 0.05, `inset ${d} gave mean radius ${mean.toFixed(3)}, wanted ${(R - d).toFixed(3)}`);
+    assert.ok(Math.max(...radii) - Math.min(...radii) < 0.1, 'the loop is round, not scalloped');
+  }
+});
+
+test('inset still copes with a concave shape', () => {
+  // The heart's cleft is why this is done on a raster at all: offsetting edges
+  // directly self-intersects there and routes a perimeter across the notch.
+  const { poly } = shapePolygon('heart', cfg, null);
+  const inner = insetPolygon(poly, cfg.build.lineWidth * 1.5, { cell: 0.25 });
+  assert.ok(inner.length > 8, 'the inset survives');
+  for (const p of inner) assert.ok(pointInPolygon(p, poly), 'every inset point is inside the original');
 });

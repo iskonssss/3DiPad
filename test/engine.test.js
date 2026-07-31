@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
 import { generate } from '../src/gcode/engine.js';
 import { shapePolygon, pointInPolygon, distToBoundary, holeIsValid, presetHole } from '../src/gcode/geometry.js';
+import { insetPolygon } from '../src/gcode/outline.js';
 
 const cfg = loadConfig();
 const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
@@ -105,9 +106,26 @@ for (const shape of SHAPES) {
 }
 
 test('per-stroke pen width: thicker pen extrudes more filament', () => {
-  const thin = generate({ ...design('rectangle'), design: [{ w: 0.9, pts: [{ x: 20, y: 20 }, { x: 80, y: 20 }] }] }, cfg);
-  const thick = generate({ ...design('rectangle'), design: [{ w: 2.5, pts: [{ x: 20, y: 20 }, { x: 80, y: 20 }] }] }, cfg);
-  assert.ok(thick.meta.estGrams > thin.meta.estGrams, 'thicker pen uses more material');
+  // Measured on the design section alone. Total estGrams is rounded to 0.1g and
+  // the plate dwarfs the drawing, so a whole pen-width range vanishes into the
+  // rounding — the test passed or failed on noise elsewhere in the part.
+  const designFilament = (gcode) => {
+    let inDesign = false, e = 0;
+    for (const line of gcode.split('\n')) {
+      if (line.includes('DESIGN (colour 2)')) inDesign = true;
+      if (!inDesign || !line.startsWith('G1 ')) continue;
+      const de = num(line, 'E');
+      if (de != null && de > 0) e += de;
+    }
+    return e;
+  };
+  const stroke = (w) => generate({ ...design('rectangle'), design: [{ w, pts: [{ x: 20, y: 20 }, { x: 80, y: 20 }] }] }, cfg);
+  const widths = [0.9, 1.4, 2.0, 2.5].map((w) => ({ w, e: designFilament(stroke(w).gcode) }));
+  for (let i = 1; i < widths.length; i++) {
+    assert.ok(widths[i].e > widths[i - 1].e,
+      `pen ${widths[i].w}mm extruded ${widths[i].e.toFixed(2)}, not more than ${widths[i - 1].w}mm at ${widths[i - 1].e.toFixed(2)}`);
+  }
+  assert.ok(widths[3].e > widths[0].e * 2, 'the widest pen lays down far more than the finest');
 });
 
 test('wide pen is drawn as multiple passes, not one over-extruded line', () => {
@@ -200,4 +218,78 @@ test('the design sits on the backing as an unbroken layer stack', () => {
   const top = print[print.length - 1];
   assert.ok(Math.abs(top - (meta.backingLayers + meta.designLayers) * b.layerHeight) < 1e-6,
     `finished height ${top} should be every layer stacked`);
+});
+
+test('no groove between the wall and the top shell', () => {
+  // From a real print: a continuous dark line ran around the rim of the plate
+  // where the top surface met the wall. Two causes, both here — the wall loops
+  // were unevenly spaced (raster-quantised offsets), and the 45-degree fill
+  // lines ended ON the fill boundary, so consecutive line-ends left scallops.
+  // Measured as: how much of the surface that should be solid is untouched by
+  // any extrusion, and how long an unbroken untouched run gets.
+  const CELL = 0.15;
+  for (const shape of ['rectangle', 'heart']) {
+    const { gcode, meta } = generate(design(shape), cfg);
+    const { poly } = shapePolygon(shape, cfg, customOutline);
+    const [bx, by] = cfg.build.bedCenter;
+
+    // extrusions on the top solid layer, in plate-local mm
+    const byZ = new Map();
+    let pos = { x: 0, y: 0, z: 0 }, inBody = false;
+    for (const line of gcode.split('\n')) {
+      if (line.includes('BACKING (colour 1)')) inBody = true;
+      if (line.includes('COLOUR CHANGE')) inBody = false;
+      if (!line.startsWith('G1 ')) continue;
+      const x = num(line, 'X'), y = num(line, 'Y'), z = num(line, 'Z'), e = num(line, 'E');
+      const to = { x: x ?? pos.x, y: y ?? pos.y, z: z ?? pos.z };
+      if (inBody && e != null && e > 0 && (x != null || y != null)) {
+        if (!byZ.has(to.z)) byZ.set(to.z, []);
+        byZ.get(to.z).push([pos.x - bx + meta.bbox.w / 2, pos.y - by + meta.bbox.h / 2,
+          to.x - bx + meta.bbox.w / 2, to.y - by + meta.bbox.h / 2]);
+      }
+      pos = to;
+    }
+    const segs = byZ.get(Math.max(...byZ.keys()));
+    const half = cfg.build.lineWidth / 2;
+
+    // bucket the segments so coverage is a local lookup, not a scan of them all
+    const GS = 2, grid = new Map();
+    segs.forEach((s, i) => {
+      for (let gx = Math.floor((Math.min(s[0], s[2]) - half) / GS); gx <= Math.floor((Math.max(s[0], s[2]) + half) / GS); gx++) {
+        for (let gy = Math.floor((Math.min(s[1], s[3]) - half) / GS); gy <= Math.floor((Math.max(s[1], s[3]) + half) / GS); gy++) {
+          const k = gx + ',' + gy;
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k).push(i);
+        }
+      }
+    });
+    const nearSeg = (px, py, [x1, y1, x2, y2]) => {
+      const dx = x2 - x1, dy = y2 - y1, L = dx * dx + dy * dy;
+      let t = L ? ((px - x1) * dx + (py - y1) * dy) / L : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)) <= half;
+    };
+    const covered = (x, y) => (grid.get(Math.floor(x / GS) + ',' + Math.floor(y / GS)) || [])
+      .some((i) => nearSeg(x, y, segs[i]));
+
+    // the surface that should be solid: the shape less its chamfer, less the hole
+    const target = insetPolygon(poly, cfg.build.chamferMm, { cell: 0.25 });
+    const hr = cfg.build.holeDiameter / 2 + cfg.build.chamferMm + half;
+    const xs = target.map((p) => p.x), ys = target.map((p) => p.y);
+    let inside = 0, blank = 0, worst = 0;
+    for (let y = Math.min(...ys); y <= Math.max(...ys); y += CELL) {
+      let run = 0;
+      for (let x = Math.min(...xs); x <= Math.max(...xs); x += CELL) {
+        if (!pointInPolygon({ x, y }, target) || Math.hypot(x - meta.hole.x, y - meta.hole.y) < hr) { run = 0; continue; }
+        inside++;
+        if (covered(x, y)) run = 0;
+        else { blank++; worst = Math.max(worst, ++run * CELL); }
+      }
+    }
+    const pct = (100 * blank) / inside;
+    // Before the fix the rectangle carried a 97mm unbroken groove down each
+    // long edge; anything past a couple of line widths is a visible line.
+    assert.ok(worst < 1.5, `${shape}: ${worst.toFixed(2)}mm unbroken gap on the top surface`);
+    assert.ok(pct < 1.0, `${shape}: ${pct.toFixed(2)}% of the top surface has no material on it`);
+  }
 });
