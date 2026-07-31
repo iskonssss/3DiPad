@@ -227,6 +227,7 @@
           <h4>Tool</h4>
           <div class="seg" id="tool-seg">
             <button data-tool="pen" class="sel">✏️ Draw</button>
+            <button data-tool="fill">🪣 Fill</button>
             <button data-tool="eraser">🧽 Erase</button>
           </div>
           <div class="penrow" id="eraser-row" style="display:none">
@@ -456,7 +457,7 @@ function setTool(t){
   state.tool=t;
   $$('#tool-seg button').forEach(b=>b.classList.toggle('sel',b.dataset.tool===t));
   $('#eraser-row').style.display=t==='eraser'?'':'none';
-  if(t==='eraser'&&state.mode==='hole'){state.mode='design';updateHoleButtons();}
+  if((t==='eraser'||t==='fill')&&state.mode==='hole'){state.mode='design';updateHoleButtons();}
   updateBanner();redraw();
 }
 function setEraser(mm){
@@ -486,6 +487,88 @@ function eraseAt(p){
   if(changed){state.strokes=out;outsideWarned=false;}
   return changed;
 }
+/* ---- bucket fill ----
+   A kid shading an area with a finger lays dozens of overlapping strokes. The
+   engine unions everything into a coverage mask so that prints correctly, but
+   it is still slow to do and hard on a small hand. Tapping fills the region
+   instead: flood the tapped area over a raster of what is already drawn, then
+   lay it down as scan lines the engine's mask unions back into one solid area. */
+const FILL_CELL=0.5;
+
+/** Raster of everything currently drawn, plus the plate it has to stay on. */
+function fillGrid(){
+  const bb=bboxFor(state.shape);
+  const w=Math.ceil(bb.w/FILL_CELL)+1, h=Math.ceil(bb.h/FILL_CELL)+1;
+  const ink=new Uint8Array(w*h), plate=new Uint8Array(w*h);
+  const poly=polyFor(), m=CFG.build.designEdgeMargin;
+  for(let j=0;j<h;j++)for(let i=0;i<w;i++){
+    const p={x:i*FILL_CELL,y:j*FILL_CELL};
+    const ok=pointInPolygon(p,poly)&&distToBoundary(p,poly)>=m
+      &&(!state.hole||Math.hypot(p.x-state.hole.x,p.y-state.hole.y)>CFG.build.holeDiameter/2+1);
+    if(ok)plate[j*w+i]=1;
+  }
+  for(const st of state.strokes){
+    const r=Math.max(CFG.build.lineWidth,st.w)/2;
+    for(let k=0;k<st.pts.length;k++){
+      const a=st.pts[k], b=st.pts[k+1]||a;
+      const i0=Math.max(0,Math.floor((Math.min(a.x,b.x)-r)/FILL_CELL)), i1=Math.min(w-1,Math.ceil((Math.max(a.x,b.x)+r)/FILL_CELL));
+      const j0=Math.max(0,Math.floor((Math.min(a.y,b.y)-r)/FILL_CELL)), j1=Math.min(h-1,Math.ceil((Math.max(a.y,b.y)+r)/FILL_CELL));
+      const dx=b.x-a.x, dy=b.y-a.y, L=dx*dx+dy*dy;
+      for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){
+        const px=i*FILL_CELL, py=j*FILL_CELL;
+        let t=L>1e-9?((px-a.x)*dx+(py-a.y)*dy)/L:0; t=t<0?0:t>1?1:t;
+        if(Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy))<=r)ink[j*w+i]=1;
+      }
+    }
+  }
+  return {w,h,ink,plate};
+}
+
+/** Flood the region containing `p`, bounded by ink and by the plate edge. */
+function floodRegion(p){
+  const g=fillGrid();
+  const si=Math.round(p.x/FILL_CELL), sj=Math.round(p.y/FILL_CELL);
+  const idx=sj*g.w+si;
+  if(si<0||sj<0||si>=g.w||sj>=g.h||!g.plate[idx])return null;
+  if(g.ink[idx])return 'onink';
+  const seen=new Uint8Array(g.w*g.h);
+  const stack=[idx]; seen[idx]=1; const cells=[];
+  while(stack.length){
+    const c=stack.pop(); cells.push(c);
+    const i=c%g.w, j=(c-i)/g.w;
+    const push=(ni,nj)=>{ if(ni<0||nj<0||ni>=g.w||nj>=g.h)return;
+      const n=nj*g.w+ni; if(seen[n]||!g.plate[n]||g.ink[n])return; seen[n]=1; stack.push(n); };
+    push(i-1,j); push(i+1,j); push(i,j-1); push(i,j+1);
+  }
+  return {g,cells,seen};
+}
+
+/** Turn a flooded region into scan-line strokes the engine unions into an area. */
+function bucketFill(p){
+  const r=floodRegion(p);
+  if(!r){toast('Tap somewhere on the tag',true);return;}
+  if(r==='onink'){toast('That spot is already coloured — tap an empty area',true);return;}
+  const {g,seen}=r;
+  const step=Math.max(1,Math.round(1.2/FILL_CELL));   // scan lines ~1.2mm apart
+  const w=1.6;                                        // slightly wider, so they merge
+  const added=[];
+  for(let j=0;j<g.h;j+=step){
+    let start=-1;
+    for(let i=0;i<=g.w;i++){
+      const on=i<g.w&&seen[j*g.w+i];
+      if(on&&start<0)start=i;
+      else if(!on&&start>=0){
+        if(i-start>=2)added.push({w,pts:[{x:start*FILL_CELL,y:j*FILL_CELL},{x:(i-1)*FILL_CELL,y:j*FILL_CELL}]});
+        start=-1;
+      }
+    }
+  }
+  if(!added.length){toast('That area is too small to fill',true);return;}
+  state.strokes.push(...added);
+  outsideWarned=false;
+  redraw();
+}
+
 function setPen(w,fromRange){state.pen=clampWidth(w,CFG);$('#pen-range').value=state.pen;$('#pen-mm').textContent=state.pen.toFixed(1)+' mm';
   const px=Math.max(8,state.pen/CFG.build.penRange[1]*22);$('#pendot').style.width=px+'px';$('#pendot').style.height=px+'px';
   if(!fromRange)$$('#pen-seg button').forEach(b=>b.classList.toggle('sel',+b.dataset.pen===state.pen));
@@ -579,6 +662,7 @@ function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.
 function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;if(penSeen&&ev.pointerType==='touch')return;
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
+  if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
@@ -614,6 +698,7 @@ function placeHole(p){
 function updateBanner(){const b=$('#banner');
   if(state.shape==='custom'&&state.mode==='outline'){b.style.display='';b.textContent='✏️ Draw the outline of your shape';}
   else if(state.mode==='hole'){b.style.display='';b.textContent='📍 Tap where the keyring hole goes';}
+  else if(state.tool==='fill'){b.style.display='';b.textContent='🪣 Tap inside a shape you drew to colour it in';}
   else if(state.tool==='eraser'){b.style.display='';b.textContent='🧽 Rub over your drawing to erase';}
   else b.style.display='none';}
 
@@ -673,7 +758,21 @@ function warnIfOutside(){
   if(frac<=0.05)outsideWarned=false;
 }
 function strokeLen(){let L=0;for(const s of state.strokes)for(let i=1;i<s.pts.length;i++)L+=dist(s.pts[i-1],s.pts[i]);return L;}
-function updateMeter(){const ratio=Math.min(1,strokeLen()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
+/**
+ * How full the tag is, measured as the AREA the drawing covers rather than the
+ * length of line drawn. The printer lays one line width per square millimetre
+ * however many times it was scribbled over, so raw stroke length ran the bar
+ * into the red for a design that prints in eight minutes — and a bucket fill,
+ * which is hundreds of millimetres of scan line over a small patch, would peg
+ * it instantly.
+ */
+function coveredLengthMm(){
+  if(!state.strokes.length)return 0;
+  const g=fillGrid();
+  let n=0; for(let i=0;i<g.ink.length;i++) if(g.ink[i]&&g.plate[i]) n++;
+  return n*FILL_CELL*FILL_CELL/CFG.build.lineWidth;
+}
+function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
 
 /* ---- review ---- */
 function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes};}

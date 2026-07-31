@@ -19,7 +19,8 @@ import {
   toBed, presetHole, holeIsValid, pointInPolygon,
 } from './geometry.js';
 import { prepareStrokes, totalLength } from './strokes.js';
-import { insetPolygon } from './outline.js';
+import { insetPolygon, erode } from './outline.js';
+import { buildCoverage, maskContours, maskRows, contourToMm } from './fill.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
 const ACCEL_FUDGE = 1.6;
@@ -148,11 +149,18 @@ export function generate(design, cfg) {
   const backingTop = backingZs[nBack - 1];
   const designZs = [];
   for (let k = 1; k <= nDesign; k++) designZs.push(+(backingTop + k * b.layerHeight).toFixed(3));
+  // Painted into one coverage mask before any g-code is emitted. Colouring an
+  // area in means dozens of overlapping strokes, and drawn stroke-by-stroke each
+  // one lays a full bead over the last — the same spot gets material four or
+  // five times and melts into a blob. From a mask, the toolpath is the same
+  // whether the kid used one stroke or a hundred.
+  const cov = buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin);
   em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
-  designZs.forEach((z) => {
+  designZs.forEach((z, k) => {
     marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
-    for (const st of strokes) beadStroke(em, cfg, bbox, st, s.bead, b.layerHeight);
+    // alternate the fill direction between the two layers so they cross-bond
+    designLayer(em, cfg, bbox, cov, s.bead, b.layerHeight, k % 2 === 1);
   });
 
   marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
@@ -295,7 +303,16 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
     if (spans.length) rows.push({ y, spans });
   }
 
-  // 2. chain spans that overlap between consecutive scanlines into regions
+  drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, (p) => fromScan(p));
+}
+
+/**
+ * Chain spans that overlap between consecutive scanlines into regions, then draw
+ * each region as one continuous serpentine. Shared by the backing's infill and
+ * the design layer's fill; `toPlate` maps a span coordinate to plate-local mm.
+ */
+function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPlate) {
+  const b = cfg.build;
   const done = [];
   let open = [];
   for (const row of rows) {
@@ -316,8 +333,6 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
   }
   done.push(...open);
 
-  // 3. draw each region as one continuous serpentine
-  //
   // The turn at the end of each line is EXTRUDED, not hopped over. Every one of
   // those turns lands on the fill boundary, so a dry hop left an un-extruded
   // nick at the edge on every single line — around the whole rim that reads as
@@ -334,8 +349,8 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
     for (const seg of region.segs) {
       const x0 = dir === 1 ? seg.a : seg.b;
       const x1 = dir === 1 ? seg.b : seg.a;
-      const p0 = toBed(fromScan({ x: x0, y: seg.y }), bbox, cfg);
-      const p1 = toBed(fromScan({ x: x1, y: seg.y }), bbox, cfg);
+      const p0 = toBed(toPlate({ x: x0, y: seg.y }), bbox, cfg);
+      const p1 = toBed(toPlate({ x: x1, y: seg.y }), bbox, cfg);
       const d = em.distanceTo(p0.x, p0.y);
       if (!first && d <= weldLimit) em.extrudeTo(p0.x, p0.y, feed, b.lineWidth, layerH);
       else if (d <= jumpLimit) em.moveTo(p0.x, p0.y);
@@ -348,66 +363,39 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
 }
 
 /**
- * Draw one pen stroke as a raised bead.
+ * Draw the design layer from its coverage mask: a perimeter around every
+ * contour, then a solid fill inside.
  *
- * A 0.4mm nozzle can only lay about 0.8mm of plastic in a single pass. Asking
- * it for the full pen width in one go over-extrudes badly — the line comes out
- * lumpy and domed instead of a flat raised bead. So a wide pen is drawn as
- * several parallel passes at normal line width, side by side, walked in a
- * serpentine so the passes join without retracting.
+ * Contours include the inside of enclosed holes, so a drawn "O" prints as a
+ * ring rather than a filled disc. Thin strokes survive as a degenerate loop —
+ * up one side of the ribbon and back the other — which is the right two passes
+ * for a pen line and costs nothing extra to fall out of the same code.
  */
-function beadStroke(em, cfg, bbox, stroke, feed, layerH) {
-  const pts = stroke.pts;
-  if (!pts.length) return;
-  const lw = cfg.build.lineWidth;
-  const width = Math.max(lw, stroke.w);
-  const passes = Math.max(1, Math.round(width / lw));
+function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
+  if (!cov) return;
+  const b = cfg.build;
+  const lw = b.lineWidth;
+  const overlap = lw * (b.infillWallOverlap ?? 0.15);
 
-  if (pts.length === 1) {
-    // a dot: a few short side-by-side dabs of the right overall width
-    const c = pts[0];
-    for (let k = 0; k < passes; k++) {
-      const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
-      const a = toBed({ x: c.x - lw * 0.5, y: c.y + off }, bbox, cfg);
-      const b = toBed({ x: c.x + lw * 0.5, y: c.y + off }, bbox, cfg);
-      if (em.distanceTo(a.x, a.y) <= lw * 2.5) em.moveTo(a.x, a.y); else em.travelTo(a.x, a.y);
-      em.extrudeTo(b.x, b.y, feed, lw, layerH);
-    }
-    return;
+  const perim = erode(cov.mask, cov.w, cov.h, lw / 2 / cov.cell);
+  em.comment('design outline');
+  for (const loop of maskContours(perim, cov.w, cov.h)) {
+    const pts = contourToMm(loop, cov);
+    if (pts.length >= 3) perimeterLoop(em, cfg, bbox, pts, feed, layerH);
   }
 
-  const normals = strokeNormals(pts);
-  for (let k = 0; k < passes; k++) {
-    const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
-    // serpentine: reverse every other pass so the end of one is beside the
-    // start of the next, letting them join with a plain move
-    const order = k % 2 === 0 ? [...pts.keys()] : [...pts.keys()].reverse();
-    let started = false;
-    for (const idx of order) {
-      const p = pts[idx], n = normals[idx];
-      const q = toBed({ x: p.x + n.x * off, y: p.y + n.y * off }, bbox, cfg);
-      if (!started) {
-        if (em.distanceTo(q.x, q.y) <= Math.max(lw * 2.5, 1.0)) em.moveTo(q.x, q.y);
-        else em.travelTo(q.x, q.y);
-        started = true;
-      } else {
-        em.extrudeTo(q.x, q.y, feed, lw, layerH);
-      }
-    }
+  // fill starts a line width in from the perimeter's centreline, overlapping it
+  // by the same fraction the backing uses
+  const inner = erode(cov.mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
+  const step = Math.max(1, Math.round(lw / cov.cell));
+  const rows = maskRows(inner, cov.w, cov.h, step, vertical ? step / 2 : 0, vertical);
+  if (rows.length) {
+    em.comment('design fill');
+    // Scanning vertically, a row's line index is a column and its spans are row
+    // indices — so the pair arrives at toPlate the other way round.
+    const toPlate = vertical ? (p) => cov.toMm({ x: p.y, y: p.x }) : (p) => cov.toMm(p);
+    drawSpanRegions(em, cfg, bbox, rows, lw, feed, layerH, toPlate);
   }
-}
-
-/** Unit normal at each point of an open polyline (average of adjacent segments). */
-function strokeNormals(pts) {
-  const out = [];
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-    let tx = b.x - a.x, ty = b.y - a.y;
-    const len = Math.hypot(tx, ty) || 1;
-    tx /= len; ty /= len;
-    out.push({ x: -ty, y: tx });
-  }
-  return out;
 }
 
 function makeEmitter(cfg, crossSection) {

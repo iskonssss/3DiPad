@@ -22,6 +22,7 @@ const ENGINE_MODULES = [
   'src/gcode/outline.js',
   'src/gcode/geometry.js',
   'src/gcode/strokes.js',
+  'src/gcode/fill.js',
   'src/gcode/engine.js',
 ];
 
@@ -55,11 +56,33 @@ function assertNoDuplicateDeclarations(parts) {
   }
 }
 
+/**
+ * Catch the other hazard: a module the engine imports that nobody added to
+ * ENGINE_MODULES. Concatenation happily drops the import line, so the bundle
+ * builds clean and then throws "x is not defined" on the tablet.
+ */
+function assertNoMissingModules(parts) {
+  const bundled = new Set(ENGINE_MODULES.map((m) => path.basename(m)));
+  const missing = [];
+  for (const rel of ENGINE_MODULES) {
+    const code = fs.readFileSync(path.join(root, rel), 'utf8');
+    for (const m of code.matchAll(/from\s*['"]\.\/([\w.-]+)['"]/g)) {
+      if (!bundled.has(m[1])) missing.push(`${rel} imports ./${m[1]}`);
+    }
+  }
+  if (missing.length) {
+    console.error('Engine modules imported but not bundled — add them to ENGINE_MODULES:');
+    for (const d of missing) console.error('  - ' + d);
+    process.exit(1);
+  }
+}
+
 const parts = ENGINE_MODULES.map((rel) => ({
   file: rel,
   code: stripModuleSyntax(fs.readFileSync(path.join(root, rel), 'utf8')).trim(),
 }));
 assertNoDuplicateDeclarations(parts);
+assertNoMissingModules(parts);
 
 const engine = parts.map((p) => `/* ===== ${p.file} ===== */\n${p.code}`).join('\n\n');
 

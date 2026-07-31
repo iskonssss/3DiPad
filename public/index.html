@@ -241,6 +241,7 @@
           <h4>Tool</h4>
           <div class="seg" id="tool-seg">
             <button data-tool="pen" class="sel">✏️ Draw</button>
+            <button data-tool="fill">🪣 Fill</button>
             <button data-tool="eraser">🧽 Erase</button>
           </div>
           <div class="penrow" id="eraser-row" style="display:none">
@@ -701,7 +702,6 @@ function distanceTo(mask, w, h, target) {
   }
   return d;
 }
-
 function erode(mask, w, h, r) {
   if (r <= 0) return mask;
   const d = distanceTo(mask, w, h, 0); // distance to background
@@ -1102,6 +1102,183 @@ function clampWidth(w, cfg) {
   return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : cfg.build.beadWidth;
 }
 
+/* ===== src/gcode/fill.js ===== */
+// The design layer as an AREA, not as a pile of strokes.
+//
+// Drawing each stroke as its own bead is right for a signature and badly wrong
+// for colouring-in. A kid shading a shape with a finger lays forty overlapping
+// strokes across the same few square centimetres, and stroke-by-stroke every
+// one of them extrudes a full bead — the same spot gets material four or five
+// times over and comes out as a molten blob standing proud of the plate.
+//
+// So the strokes are painted into a coverage mask first: the union of every
+// stroke widened by its own pen width. Whatever the kid did to build that
+// shape — one stroke or a hundred — the mask is the same, and the toolpath is
+// generated from the mask. Every square millimetre gets exactly one line width
+// of plastic, which is what a bucket fill has to do to print at all.
+//
+// The mask is also where clipping belongs: a stroke's centreline can sit inside
+// the plate while its bead hangs over the rim, and an area mask can simply be
+// intersected with the plate.
+
+/**
+ * Paint every stroke into one coverage mask.
+ * Returns { mask, w, h, cell, pad, toMm } in plate-local mm, or null if the
+ * drawing is empty or too large to raster.
+ */
+function buildCoverage(strokes, cfg, bbox, clipPoly, hole, edgeMargin) {
+  const cell = cfg.build.designCell ?? 0.12;
+  if (!strokes || !strokes.length) return null;
+  const pad = Math.ceil(3 / cell);
+  const w = Math.ceil(bbox.w / cell) + pad * 2;
+  const h = Math.ceil(bbox.h / cell) + pad * 2;
+  if (w < 4 || h < 4 || w * h > 6_000_000) return null;
+
+  const mask = new Uint8Array(w * h);
+  const toCell = (p) => ({ x: p.x / cell + pad, y: p.y / cell + pad });
+  const minR = cfg.build.lineWidth / 2 / cell;
+
+  for (const s of strokes) {
+    const r = Math.max(minR, Math.max(cfg.build.lineWidth, s.w) / 2 / cell);
+    const pts = s.pts.map(toCell);
+    if (pts.length === 1) stampSegment(mask, w, h, pts[0], pts[0], r);
+    else for (let i = 1; i < pts.length; i++) stampSegment(mask, w, h, pts[i - 1], pts[i], r);
+  }
+
+  // Clip as an area: the bead of a stroke whose centreline is legally inside can
+  // still hang over the rim, and only the mask can see that.
+  if (clipPoly && clipPoly.length >= 3) {
+    let clip = fillPolygon(clipPoly.map(toCell), w, h);
+    if (edgeMargin > 0) clip = erode(clip, w, h, edgeMargin / cell);
+    for (let i = 0; i < mask.length; i++) if (!clip[i]) mask[i] = 0;
+  }
+  if (hole) {
+    const c = toCell({ x: hole.cx, y: hole.cy });
+    const r = (hole.r + cfg.build.lineWidth) / cell;
+    clearDisc(mask, w, h, c.x, c.y, r);
+  }
+
+  let any = false;
+  for (let i = 0; i < mask.length && !any; i++) if (mask[i]) any = true;
+  if (!any) return null;
+
+  return { mask, w, h, cell, pad, toMm: (c) => ({ x: (c.x - pad) * cell, y: (c.y - pad) * cell }) };
+}
+
+/** Mark every cell within `r` cells of the segment a-b. */
+function stampSegment(mask, w, h, a, b, r) {
+  const x0 = Math.max(0, Math.floor(Math.min(a.x, b.x) - r));
+  const x1 = Math.min(w - 1, Math.ceil(Math.max(a.x, b.x) + r));
+  const y0 = Math.max(0, Math.floor(Math.min(a.y, b.y) - r));
+  const y1 = Math.min(h - 1, Math.ceil(Math.max(a.y, b.y) + r));
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = dx * dx + dy * dy;
+  const r2 = r * r;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      let t = len > 1e-9 ? ((x - a.x) * dx + (y - a.y) * dy) / len : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const ex = x - (a.x + t * dx), ey = y - (a.y + t * dy);
+      if (ex * ex + ey * ey <= r2) mask[y * w + x] = 1;
+    }
+  }
+}
+
+function clearDisc(mask, w, h, cx, cy, r) {
+  const r2 = r * r;
+  for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(h - 1, Math.ceil(cy + r)); y++) {
+    for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(w - 1, Math.ceil(cx + r)); x++) {
+      const ex = x - cx, ey = y - cy;
+      if (ex * ex + ey * ey <= r2) mask[y * w + x] = 0;
+    }
+  }
+}
+
+/**
+ * Every closed contour of a mask — the outside of each blob AND the inside of
+ * each enclosed hole, so a drawn "O" prints as a ring rather than a disc.
+ * Returns loops of cell coordinates.
+ */
+function maskContours(mask, w, h) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+  const edge = (x, y) => at(x, y) && (!at(x - 1, y) || !at(x + 1, y) || !at(x, y - 1) || !at(x, y + 1));
+  const seen = new Uint8Array(w * h);
+  const loops = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (seen[y * w + x] || !edge(x, y)) continue;
+      const loop = traceLoop(mask, w, h, x, y);
+      for (const p of loop) seen[p.y * w + p.x] = 1;
+      seen[y * w + x] = 1;
+      if (loop.length >= 8) loops.push(loop);
+    }
+  }
+  return loops;
+}
+
+const RING = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+/** Moore-neighbour boundary trace starting at a known boundary cell. */
+function traceLoop(mask, w, h, sx, sy) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+  // any background neighbour will do as the cell we "came from"
+  let from = null;
+  for (const [dx, dy] of RING) if (!at(sx + dx, sy + dy)) { from = { x: sx + dx, y: sy + dy }; break; }
+  if (!from) return [];
+
+  let bx = sx, by = sy, fx = from.x, fy = from.y;
+  const contour = [{ x: bx, y: by }];
+  const maxSteps = w * h * 4;
+  for (let step = 0; step < maxSteps; step++) {
+    let idx = RING.findIndex(([dx, dy]) => bx + dx === fx && by + dy === fy);
+    if (idx < 0) idx = 7;
+    let moved = false;
+    for (let k = 1; k <= 8; k++) {
+      const j = (idx + k) % 8;
+      const nx = bx + RING[j][0], ny = by + RING[j][1];
+      if (at(nx, ny)) {
+        const prev = RING[(j + 7) % 8];
+        fx = bx + prev[0]; fy = by + prev[1];
+        bx = nx; by = ny;
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) break;
+    if (bx === sx && by === sy) break;
+    contour.push({ x: bx, y: by });
+  }
+  return contour;
+}
+
+/** Rows of set-cell spans through a mask, `step` cells apart. */
+function maskRows(mask, w, h, step, phase = 0, vertical = false) {
+  const rows = [];
+  const outer = vertical ? w : h;
+  const inner = vertical ? h : w;
+  for (let a = Math.max(0, Math.round(phase)); a < outer; a += step) {
+    const line = Math.round(a);
+    const spans = [];
+    let start = -1;
+    for (let b = 0; b < inner; b++) {
+      const on = vertical ? mask[b * w + line] : mask[line * w + b];
+      if (on && start < 0) start = b;
+      else if (!on && start >= 0) { spans.push([start, b - 1]); start = -1; }
+    }
+    if (start >= 0) spans.push([start, inner - 1]);
+    if (spans.length) rows.push({ y: line, spans });
+  }
+  return rows;
+}
+
+/** Turn a traced cell contour into a smooth mm path. */
+function contourToMm(loop, cov, smoothIters = 1) {
+  let pts = loop.map(cov.toMm);
+  pts = decimate(pts, cov.cell * 1.5);
+  pts = smooth(pts, smoothIters, false);
+  return decimate(pts, cov.cell * 2.5);
+}
+
 /* ===== src/gcode/engine.js ===== */
 // Core g-code engine — pure and printer-independent.
 //
@@ -1118,6 +1295,7 @@ function clampWidth(w, cfg) {
 // Object = flat two-colour keychain: backing plate (colour 1) -> M400 U1 colour
 // change -> raised bead drawing (colour 2). The backing's top rim and the hole's
 // top edge get a 45° chamfer over the top `chamferMm`.
+
 
 
 
@@ -1247,11 +1425,18 @@ function generate(design, cfg) {
   const backingTop = backingZs[nBack - 1];
   const designZs = [];
   for (let k = 1; k <= nDesign; k++) designZs.push(+(backingTop + k * b.layerHeight).toFixed(3));
+  // Painted into one coverage mask before any g-code is emitted. Colouring an
+  // area in means dozens of overlapping strokes, and drawn stroke-by-stroke each
+  // one lays a full bead over the last — the same spot gets material four or
+  // five times and melts into a blob. From a mask, the toolpath is the same
+  // whether the kid used one stroke or a hundred.
+  const cov = buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin);
   em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
-  designZs.forEach((z) => {
+  designZs.forEach((z, k) => {
     marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
-    for (const st of strokes) beadStroke(em, cfg, bbox, st, s.bead, b.layerHeight);
+    // alternate the fill direction between the two layers so they cross-bond
+    designLayer(em, cfg, bbox, cov, s.bead, b.layerHeight, k % 2 === 1);
   });
 
   marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
@@ -1394,7 +1579,16 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
     if (spans.length) rows.push({ y, spans });
   }
 
-  // 2. chain spans that overlap between consecutive scanlines into regions
+  drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, (p) => fromScan(p));
+}
+
+/**
+ * Chain spans that overlap between consecutive scanlines into regions, then draw
+ * each region as one continuous serpentine. Shared by the backing's infill and
+ * the design layer's fill; `toPlate` maps a span coordinate to plate-local mm.
+ */
+function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPlate) {
+  const b = cfg.build;
   const done = [];
   let open = [];
   for (const row of rows) {
@@ -1415,8 +1609,6 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
   }
   done.push(...open);
 
-  // 3. draw each region as one continuous serpentine
-  //
   // The turn at the end of each line is EXTRUDED, not hopped over. Every one of
   // those turns lands on the fill boundary, so a dry hop left an un-extruded
   // nick at the edge on every single line — around the whole rim that reads as
@@ -1433,8 +1625,8 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
     for (const seg of region.segs) {
       const x0 = dir === 1 ? seg.a : seg.b;
       const x1 = dir === 1 ? seg.b : seg.a;
-      const p0 = toBed(fromScan({ x: x0, y: seg.y }), bbox, cfg);
-      const p1 = toBed(fromScan({ x: x1, y: seg.y }), bbox, cfg);
+      const p0 = toBed(toPlate({ x: x0, y: seg.y }), bbox, cfg);
+      const p1 = toBed(toPlate({ x: x1, y: seg.y }), bbox, cfg);
       const d = em.distanceTo(p0.x, p0.y);
       if (!first && d <= weldLimit) em.extrudeTo(p0.x, p0.y, feed, b.lineWidth, layerH);
       else if (d <= jumpLimit) em.moveTo(p0.x, p0.y);
@@ -1447,66 +1639,39 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
 }
 
 /**
- * Draw one pen stroke as a raised bead.
+ * Draw the design layer from its coverage mask: a perimeter around every
+ * contour, then a solid fill inside.
  *
- * A 0.4mm nozzle can only lay about 0.8mm of plastic in a single pass. Asking
- * it for the full pen width in one go over-extrudes badly — the line comes out
- * lumpy and domed instead of a flat raised bead. So a wide pen is drawn as
- * several parallel passes at normal line width, side by side, walked in a
- * serpentine so the passes join without retracting.
+ * Contours include the inside of enclosed holes, so a drawn "O" prints as a
+ * ring rather than a filled disc. Thin strokes survive as a degenerate loop —
+ * up one side of the ribbon and back the other — which is the right two passes
+ * for a pen line and costs nothing extra to fall out of the same code.
  */
-function beadStroke(em, cfg, bbox, stroke, feed, layerH) {
-  const pts = stroke.pts;
-  if (!pts.length) return;
-  const lw = cfg.build.lineWidth;
-  const width = Math.max(lw, stroke.w);
-  const passes = Math.max(1, Math.round(width / lw));
+function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
+  if (!cov) return;
+  const b = cfg.build;
+  const lw = b.lineWidth;
+  const overlap = lw * (b.infillWallOverlap ?? 0.15);
 
-  if (pts.length === 1) {
-    // a dot: a few short side-by-side dabs of the right overall width
-    const c = pts[0];
-    for (let k = 0; k < passes; k++) {
-      const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
-      const a = toBed({ x: c.x - lw * 0.5, y: c.y + off }, bbox, cfg);
-      const b = toBed({ x: c.x + lw * 0.5, y: c.y + off }, bbox, cfg);
-      if (em.distanceTo(a.x, a.y) <= lw * 2.5) em.moveTo(a.x, a.y); else em.travelTo(a.x, a.y);
-      em.extrudeTo(b.x, b.y, feed, lw, layerH);
-    }
-    return;
+  const perim = erode(cov.mask, cov.w, cov.h, lw / 2 / cov.cell);
+  em.comment('design outline');
+  for (const loop of maskContours(perim, cov.w, cov.h)) {
+    const pts = contourToMm(loop, cov);
+    if (pts.length >= 3) perimeterLoop(em, cfg, bbox, pts, feed, layerH);
   }
 
-  const normals = strokeNormals(pts);
-  for (let k = 0; k < passes; k++) {
-    const off = passes === 1 ? 0 : -(width - lw) / 2 + (k * (width - lw)) / (passes - 1);
-    // serpentine: reverse every other pass so the end of one is beside the
-    // start of the next, letting them join with a plain move
-    const order = k % 2 === 0 ? [...pts.keys()] : [...pts.keys()].reverse();
-    let started = false;
-    for (const idx of order) {
-      const p = pts[idx], n = normals[idx];
-      const q = toBed({ x: p.x + n.x * off, y: p.y + n.y * off }, bbox, cfg);
-      if (!started) {
-        if (em.distanceTo(q.x, q.y) <= Math.max(lw * 2.5, 1.0)) em.moveTo(q.x, q.y);
-        else em.travelTo(q.x, q.y);
-        started = true;
-      } else {
-        em.extrudeTo(q.x, q.y, feed, lw, layerH);
-      }
-    }
+  // fill starts a line width in from the perimeter's centreline, overlapping it
+  // by the same fraction the backing uses
+  const inner = erode(cov.mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
+  const step = Math.max(1, Math.round(lw / cov.cell));
+  const rows = maskRows(inner, cov.w, cov.h, step, vertical ? step / 2 : 0, vertical);
+  if (rows.length) {
+    em.comment('design fill');
+    // Scanning vertically, a row's line index is a column and its spans are row
+    // indices — so the pair arrives at toPlate the other way round.
+    const toPlate = vertical ? (p) => cov.toMm({ x: p.y, y: p.x }) : (p) => cov.toMm(p);
+    drawSpanRegions(em, cfg, bbox, rows, lw, feed, layerH, toPlate);
   }
-}
-
-/** Unit normal at each point of an open polyline (average of adjacent segments). */
-function strokeNormals(pts) {
-  const out = [];
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-    let tx = b.x - a.x, ty = b.y - a.y;
-    const len = Math.hypot(tx, ty) || 1;
-    tx /= len; ty /= len;
-    out.push({ x: -ty, y: tx });
-  }
-  return out;
 }
 
 function makeEmitter(cfg, crossSection) {
@@ -1723,7 +1888,7 @@ function setTool(t){
   state.tool=t;
   $$('#tool-seg button').forEach(b=>b.classList.toggle('sel',b.dataset.tool===t));
   $('#eraser-row').style.display=t==='eraser'?'':'none';
-  if(t==='eraser'&&state.mode==='hole'){state.mode='design';updateHoleButtons();}
+  if((t==='eraser'||t==='fill')&&state.mode==='hole'){state.mode='design';updateHoleButtons();}
   updateBanner();redraw();
 }
 function setEraser(mm){
@@ -1753,6 +1918,88 @@ function eraseAt(p){
   if(changed){state.strokes=out;outsideWarned=false;}
   return changed;
 }
+/* ---- bucket fill ----
+   A kid shading an area with a finger lays dozens of overlapping strokes. The
+   engine unions everything into a coverage mask so that prints correctly, but
+   it is still slow to do and hard on a small hand. Tapping fills the region
+   instead: flood the tapped area over a raster of what is already drawn, then
+   lay it down as scan lines the engine's mask unions back into one solid area. */
+const FILL_CELL=0.5;
+
+/** Raster of everything currently drawn, plus the plate it has to stay on. */
+function fillGrid(){
+  const bb=bboxFor(state.shape);
+  const w=Math.ceil(bb.w/FILL_CELL)+1, h=Math.ceil(bb.h/FILL_CELL)+1;
+  const ink=new Uint8Array(w*h), plate=new Uint8Array(w*h);
+  const poly=polyFor(), m=CFG.build.designEdgeMargin;
+  for(let j=0;j<h;j++)for(let i=0;i<w;i++){
+    const p={x:i*FILL_CELL,y:j*FILL_CELL};
+    const ok=pointInPolygon(p,poly)&&distToBoundary(p,poly)>=m
+      &&(!state.hole||Math.hypot(p.x-state.hole.x,p.y-state.hole.y)>CFG.build.holeDiameter/2+1);
+    if(ok)plate[j*w+i]=1;
+  }
+  for(const st of state.strokes){
+    const r=Math.max(CFG.build.lineWidth,st.w)/2;
+    for(let k=0;k<st.pts.length;k++){
+      const a=st.pts[k], b=st.pts[k+1]||a;
+      const i0=Math.max(0,Math.floor((Math.min(a.x,b.x)-r)/FILL_CELL)), i1=Math.min(w-1,Math.ceil((Math.max(a.x,b.x)+r)/FILL_CELL));
+      const j0=Math.max(0,Math.floor((Math.min(a.y,b.y)-r)/FILL_CELL)), j1=Math.min(h-1,Math.ceil((Math.max(a.y,b.y)+r)/FILL_CELL));
+      const dx=b.x-a.x, dy=b.y-a.y, L=dx*dx+dy*dy;
+      for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){
+        const px=i*FILL_CELL, py=j*FILL_CELL;
+        let t=L>1e-9?((px-a.x)*dx+(py-a.y)*dy)/L:0; t=t<0?0:t>1?1:t;
+        if(Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy))<=r)ink[j*w+i]=1;
+      }
+    }
+  }
+  return {w,h,ink,plate};
+}
+
+/** Flood the region containing `p`, bounded by ink and by the plate edge. */
+function floodRegion(p){
+  const g=fillGrid();
+  const si=Math.round(p.x/FILL_CELL), sj=Math.round(p.y/FILL_CELL);
+  const idx=sj*g.w+si;
+  if(si<0||sj<0||si>=g.w||sj>=g.h||!g.plate[idx])return null;
+  if(g.ink[idx])return 'onink';
+  const seen=new Uint8Array(g.w*g.h);
+  const stack=[idx]; seen[idx]=1; const cells=[];
+  while(stack.length){
+    const c=stack.pop(); cells.push(c);
+    const i=c%g.w, j=(c-i)/g.w;
+    const push=(ni,nj)=>{ if(ni<0||nj<0||ni>=g.w||nj>=g.h)return;
+      const n=nj*g.w+ni; if(seen[n]||!g.plate[n]||g.ink[n])return; seen[n]=1; stack.push(n); };
+    push(i-1,j); push(i+1,j); push(i,j-1); push(i,j+1);
+  }
+  return {g,cells,seen};
+}
+
+/** Turn a flooded region into scan-line strokes the engine unions into an area. */
+function bucketFill(p){
+  const r=floodRegion(p);
+  if(!r){toast('Tap somewhere on the tag',true);return;}
+  if(r==='onink'){toast('That spot is already coloured — tap an empty area',true);return;}
+  const {g,seen}=r;
+  const step=Math.max(1,Math.round(1.2/FILL_CELL));   // scan lines ~1.2mm apart
+  const w=1.6;                                        // slightly wider, so they merge
+  const added=[];
+  for(let j=0;j<g.h;j+=step){
+    let start=-1;
+    for(let i=0;i<=g.w;i++){
+      const on=i<g.w&&seen[j*g.w+i];
+      if(on&&start<0)start=i;
+      else if(!on&&start>=0){
+        if(i-start>=2)added.push({w,pts:[{x:start*FILL_CELL,y:j*FILL_CELL},{x:(i-1)*FILL_CELL,y:j*FILL_CELL}]});
+        start=-1;
+      }
+    }
+  }
+  if(!added.length){toast('That area is too small to fill',true);return;}
+  state.strokes.push(...added);
+  outsideWarned=false;
+  redraw();
+}
+
 function setPen(w,fromRange){state.pen=clampWidth(w,CFG);$('#pen-range').value=state.pen;$('#pen-mm').textContent=state.pen.toFixed(1)+' mm';
   const px=Math.max(8,state.pen/CFG.build.penRange[1]*22);$('#pendot').style.width=px+'px';$('#pendot').style.height=px+'px';
   if(!fromRange)$$('#pen-seg button').forEach(b=>b.classList.toggle('sel',+b.dataset.pen===state.pen));
@@ -1846,6 +2093,7 @@ function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.
 function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;if(penSeen&&ev.pointerType==='touch')return;
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
+  if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
@@ -1881,6 +2129,7 @@ function placeHole(p){
 function updateBanner(){const b=$('#banner');
   if(state.shape==='custom'&&state.mode==='outline'){b.style.display='';b.textContent='✏️ Draw the outline of your shape';}
   else if(state.mode==='hole'){b.style.display='';b.textContent='📍 Tap where the keyring hole goes';}
+  else if(state.tool==='fill'){b.style.display='';b.textContent='🪣 Tap inside a shape you drew to colour it in';}
   else if(state.tool==='eraser'){b.style.display='';b.textContent='🧽 Rub over your drawing to erase';}
   else b.style.display='none';}
 
@@ -1940,7 +2189,21 @@ function warnIfOutside(){
   if(frac<=0.05)outsideWarned=false;
 }
 function strokeLen(){let L=0;for(const s of state.strokes)for(let i=1;i<s.pts.length;i++)L+=dist(s.pts[i-1],s.pts[i]);return L;}
-function updateMeter(){const ratio=Math.min(1,strokeLen()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
+/**
+ * How full the tag is, measured as the AREA the drawing covers rather than the
+ * length of line drawn. The printer lays one line width per square millimetre
+ * however many times it was scribbled over, so raw stroke length ran the bar
+ * into the red for a design that prints in eight minutes — and a bucket fill,
+ * which is hundreds of millimetres of scan line over a small patch, would peg
+ * it instantly.
+ */
+function coveredLengthMm(){
+  if(!state.strokes.length)return 0;
+  const g=fillGrid();
+  let n=0; for(let i=0;i<g.ink.length;i++) if(g.ink[i]&&g.plate[i]) n++;
+  return n*FILL_CELL*FILL_CELL/CFG.build.lineWidth;
+}
+function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
 
 /* ---- review ---- */
 function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes};}
