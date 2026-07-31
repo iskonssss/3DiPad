@@ -114,7 +114,64 @@ export function insetPolygon(points, d, opts = {}) {
   let out = r.toMm(traced);
   out = decimate(out, cell * 1.5);
   out = smooth(out, opts.smooth ?? 1, false);
-  return decimate(out, opts.minSeg ?? cell * 2.5);
+  out = decimate(out, opts.minSeg ?? cell * 2.5);
+  // The raster is only trusted for the SHAPE of the offset loop, never for its
+  // distance: it measures cell to cell, so a loop landed anywhere within about
+  // a cell of where it was asked to be. Wall loops a line width apart could
+  // come out 0.7mm apart and leave a groove around the rim. Measuring each
+  // vertex against the real polygon puts every loop on its true offset.
+  return projectToOffset(out, points, d);
+}
+
+/** Nearest point to p on segment a-b. */
+function closestOnSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = dx * dx + dy * dy;
+  if (len < 1e-12) return a;
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
+
+/** Twice the signed area: positive when the ring winds counter-clockwise. */
+function signedArea2(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a;
+}
+
+/** Move every point to exactly `d` mm from the polygon, along its own normal. */
+function projectToOffset(pts, poly, d) {
+  const ccw = signedArea2(poly) > 0;
+  return pts.map((p) => {
+    let near = null, best = Infinity, seg = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const q = closestOnSegment(p, poly[i], poly[(i + 1) % poly.length]);
+      const dist = Math.hypot(p.x - q.x, p.y - q.y);
+      if (dist < best) { best = dist; near = q; seg = i; }
+    }
+    if (!near) return p;
+    const a = poly[seg], bb = poly[(seg + 1) % poly.length];
+    const dx = bb.x - a.x, dy = bb.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = (ccw ? -dy : dy) / len, ny = (ccw ? dx : -dx) / len;
+
+    if (best > 1e-3) {
+      const ux = (p.x - near.x) / best, uy = (p.y - near.y) / best;
+      // Inside: the direction from the boundary out to the point already IS the
+      // normal, and around a convex corner it correctly sweeps an arc about the
+      // vertex. Outside (the raster contour can sit half a cell proud of the
+      // real edge) that same direction points the wrong way and would offset
+      // OUTWARD, growing the part — so fall through to the edge normal.
+      if (ux * nx + uy * ny > 0) return { x: near.x + ux * d, y: near.y + uy * d };
+    }
+    // On or outside the outline: no usable direction on the point itself, so
+    // take the inward normal of the edge it is nearest to.
+    return { x: near.x + nx * d, y: near.y + ny * d };
+  });
 }
 
 /** Rasterise a closed polygon into a bitmask, remembering how to map back. */

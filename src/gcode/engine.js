@@ -77,9 +77,16 @@ export function generate(design, cfg) {
     const lw = b.lineWidth;
     const walls = Math.max(1, b.wallLoops ?? 2);
     const overlap = lw * (b.infillWallOverlap ?? 0.15);
-    // infill starts just inside the innermost wall and overlaps into it, which
+    // Solid surfaces get one more loop hugging the fill boundary before the
+    // scanline fill. Diagonal fill lines END on that boundary, and consecutive
+    // ends sit spacing/sin(45) apart while each only covers a line width — so
+    // without the loop the rim carries a scalloped groove between the fill and
+    // the wall. Sparse layers are internal and don't need the extra pass.
+    const anchor = solid ? 1 : 0;
+    // infill starts just inside the innermost loop and overlaps into it, which
     // is what stops a visible groove appearing between the wall and the fill
-    const fillInset = cham + lw * (walls + 0.5) - overlap;
+    const anchorInset = cham + lw * (walls + 0.5) - overlap;
+    const fillInset = anchorInset + lw * anchor - overlap * anchor;
 
     em.comment(`layer ${i + 1}/${nBack} z=${z.toFixed(2)} ${solid ? 'solid' : 'sparse'}${cham > 0 ? ` chamfer ${cham.toFixed(2)}mm` : ''}`);
     marks.push({ at: em.lines.length, t: em.timeNow() });
@@ -101,12 +108,22 @@ export function generate(design, cfg) {
     // hole is the full 5mm rather than 5mm minus a wall
     holePerimeter(em, cfg, bbox, hole, holeR + lw / 2, perimFeed, layerH);
 
+    if (anchor) {
+      const edgeLoop = insetAt(anchorInset);
+      if (edgeLoop.length >= 3) {
+        em.comment('solid infill boundary');
+        perimeterLoop(em, cfg, bbox, edgeLoop, infillFeed, layerH);
+      }
+      // and the same closing loop around the hole, for the same reason
+      holePerimeter(em, cfg, bbox, hole, holeR + lw * 1.5 - overlap, infillFeed, layerH);
+    }
+
     const fillPoly = insetAt(fillInset);
     if (fillPoly.length >= 3) {
       em.comment(solid ? 'solid infill' : 'sparse infill');
       // 45 degrees, alternating per layer — diagonal to the walls, so lines
       // bond better and the surface doesn't read as one direction of banding
-      infillLayer(em, cfg, bbox, fillPoly, hole, holeR + lw - overlap, spacing, infillFeed, layerH,
+      infillLayer(em, cfg, bbox, fillPoly, hole, holeR + lw * (1 + anchor) - overlap * (1 + anchor), spacing, infillFeed, layerH,
         (i % 2) * (spacing / 2), i % 2 === 0 ? 45 : 135);
     }
   });
