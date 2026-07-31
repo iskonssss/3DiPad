@@ -277,20 +277,36 @@ test('no groove between the wall and the top shell', () => {
     const hr = cfg.build.holeDiameter / 2 + cfg.build.chamferMm + half;
     const xs = target.map((p) => p.x), ys = target.map((p) => p.y);
     let inside = 0, blank = 0, worst = 0;
+    const voids = [];
     for (let y = Math.min(...ys); y <= Math.max(...ys); y += CELL) {
       let run = 0;
       for (let x = Math.min(...xs); x <= Math.max(...xs); x += CELL) {
         if (!pointInPolygon({ x, y }, target) || Math.hypot(x - meta.hole.x, y - meta.hole.y) < hr) { run = 0; continue; }
         inside++;
         if (covered(x, y)) run = 0;
-        else { blank++; worst = Math.max(worst, ++run * CELL); }
+        else { blank++; voids.push({ x, y }); worst = Math.max(worst, ++run * CELL); }
       }
     }
     const pct = (100 * blank) / inside;
     // Before the fix the rectangle carried a 97mm unbroken groove down each
     // long edge; anything past a couple of line widths is a visible line.
-    assert.ok(worst < 1.5, `${shape}: ${worst.toFixed(2)}mm unbroken gap on the top surface`);
-    assert.ok(pct < 1.0, `${shape}: ${pct.toFixed(2)}% of the top surface has no material on it`);
+    assert.ok(worst < 1.0, `${shape}: ${worst.toFixed(2)}mm unbroken gap on the top surface`);
+    assert.ok(pct < 0.35, `${shape}: ${pct.toFixed(2)}% of the top surface has no material on it`);
+
+    // The defect this guards was a BAND at one distance from the rim, not
+    // scattered pinholes: the fill boundary sat a whole line width inside the
+    // anchor loop, and the outermost fill line landed anywhere up to a pitch
+    // further in again. Voids concentrated in one narrow band read as a dotted
+    // line around the part; the same area scattered about is invisible.
+    const band = new Map();
+    for (const v of voids) {
+      const k = (Math.floor(distToBoundary(v, poly) / 0.2) * 0.2).toFixed(1);
+      band.set(k, (band.get(k) || 0) + 1);
+    }
+    const worstBand = Math.max(0, ...band.values()) / Math.max(1, voids.length);
+    const bandArea = pct * worstBand;
+    assert.ok(bandArea < 0.15,
+      `${shape}: ${(100 * worstBand).toFixed(0)}% of the voids sit in one 0.2mm band (${bandArea.toFixed(3)}% of the surface) — that prints as a dotted line`);
   }
 });
 
