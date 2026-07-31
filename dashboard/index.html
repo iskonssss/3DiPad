@@ -153,18 +153,30 @@
       }
 
       function actions(j) {
+        // The select SENDS the file — it used to only relabel the job, so a job
+        // that missed its dispatch could never reach a printer from here.
         const assign = printers.length
-          ? `<select onchange="setStatus('${j.id}','${j.status==='queued'?'assigned':j.status}',this.value)">
-               <option value="">printer…</option>
+          ? `<select onchange="sendTo('${j.id}',this.value)">
+               <option value="">send to…</option>
                ${printers.map(p=>`<option value="${p.id}" ${p.id===j.printerId?'selected':''}>${p.name}</option>`).join('')}
              </select>` : '';
         const btns = [];
+        if (j.status === 'queued') btns.push(`<button class="primary" onclick="sendTo('${j.id}')">Send to a free printer</button>`);
         if (j.status !== 'printing') btns.push(`<button class="primary" onclick="setStatus('${j.id}','printing')">Printing</button>`);
         btns.push(`<button class="warn" onclick="setStatus('${j.id}','colour_change')">Colour swap</button>`);
         if (j.status !== 'ready') btns.push(`<button class="ok" onclick="setStatus('${j.id}','ready')">Ready → WhatsApp</button>`);
         else btns.push(`<button class="ghost" onclick="notify('${j.id}')">Resend WA</button>`);
         btns.push(`<button class="ghost" onclick="setStatus('${j.id}','collected')">Collected</button>`);
         return `<div class="actions">${assign}${btns.join('')}</div>`;
+      }
+
+      async function sendTo(id, printerId) {
+        const r = await (await fetch(`/api/jobs/${id}/dispatch`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(printerId ? { printerId } : {}),
+        })).json();
+        if (!r.ok) alert('Could not send: ' + (r.error || r.result?.error || 'unknown'));
+        tick();
       }
 
       async function setStatus(id, status, printerId) {

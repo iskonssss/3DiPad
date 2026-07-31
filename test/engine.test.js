@@ -46,7 +46,7 @@ for (const shape of SHAPES) {
   test(`${shape}: structure + real A1 template + M400 pause`, () => {
     const { gcode, meta } = generate(design(shape), cfg);
     assert.equal(meta.shape, shape);
-    assert.ok(gcode.includes('G29'), 'auto bed levelling present');
+    assert.ok(/^G28\b/m.test(gcode), 'homes before printing');
     assert.ok(gcode.includes('M83'), 'relative extrusion');
     assert.ok(gcode.includes('M400 U1'), 'M400 U1 colour-change pause');
     assert.ok(meta.backingLayers >= 5, 'backing has several layers');
@@ -292,4 +292,45 @@ test('no groove between the wall and the top shell', () => {
     assert.ok(worst < 1.5, `${shape}: ${worst.toFixed(2)}mm unbroken gap on the top surface`);
     assert.ok(pct < 1.0, `${shape}: ${pct.toFixed(2)}% of the top surface has no material on it`);
   }
+});
+
+test('progress reports keep moving through the slow first layer', () => {
+  // The bar used to be updated only at layer boundaries. The first layer runs
+  // at the first-layer feedrate and is roughly 40% of a keychain, so the
+  // printer showed 0% for minutes and then jumped straight to the forties.
+  const { gcode } = generate(design('rectangle'), cfg);
+  const body = gcode.slice(gcode.indexOf('BACKING (colour 1)'));
+  const firstLayerEnd = body.indexOf('; layer 2/');
+  assert.ok(firstLayerEnd > 0, 'found the end of the first layer');
+
+  const pcts = [...body.slice(0, firstLayerEnd).matchAll(/M73 P(\d+)/g)].map((m) => +m[1]);
+  assert.ok(pcts.length >= 5, `only ${pcts.length} progress reports during the first layer`);
+  assert.ok(Math.max(...pcts) >= 10, `the bar only reached ${Math.max(...pcts)}% by the end of layer 1`);
+
+  const all = [...gcode.matchAll(/M73 P(\d+) R(\d+)/g)].map((m) => ({ p: +m[1], r: +m[2] }));
+  for (let i = 1; i < all.length; i++) {
+    assert.ok(all[i].p >= all[i - 1].p, `progress went backwards: ${all[i - 1].p} -> ${all[i].p}`);
+    assert.ok(all[i].r <= all[i - 1].r, `time remaining went up: ${all[i - 1].r} -> ${all[i].r}`);
+  }
+  assert.equal(all[0].p, 0);
+  assert.equal(all[all.length - 1].p, 100);
+  assert.equal(all[all.length - 1].r, 0);
+  // no long silent stretch: every report is within a few percent of the last
+  const biggestJump = Math.max(...all.slice(1).map((v, i) => v.p - all[i].p));
+  assert.ok(biggestJump <= 5, `the bar jumps ${biggestJump}% in one step`);
+});
+
+test('bed levelling is skipped unless the config asks for it', () => {
+  // A G29 mesh probe costs over a minute on a 12-minute keychain — a tenth of
+  // the booth's throughput, per kid.
+  const off = generate(design('rectangle'), cfg);
+  assert.ok(!/^G29\b/m.test(off.gcode), 'no bed levelling by default');
+  assert.ok(/^G28\b/m.test(off.gcode), 'still homes — that part is not optional');
+  assert.ok(off.gcode.includes('bed levelling skipped'), 'and says so in the file');
+
+  const levelled = { ...cfg, calibration: { ...cfg.calibration, bedLevel: true } };
+  const on = generate(design('rectangle'), levelled);
+  assert.ok(/^G29\b/m.test(on.gcode), 'turning it on puts G29 back');
+  assert.ok(on.meta.estMinutes > off.meta.estMinutes,
+    'and the estimate accounts for the time it costs');
 });

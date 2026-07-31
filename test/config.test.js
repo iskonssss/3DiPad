@@ -88,7 +88,12 @@ for (const file of bundles) {
     assert.ok(!('designThickness' in cfg.build), 'the superseded thickness setting is gone');
     assert.deepEqual(cfg.palette, example.palette);
     assert.deepEqual(cfg.speed, example.speed);
-    assert.ok(cfg.template.startResolved.includes('G29'), 'the real start template, not a trimmed copy');
+    assert.ok(cfg.template.startResolved.includes('G28'), 'the real start template, not a trimmed copy');
+    assert.ok(cfg.template.startResolved.includes('{calibration}'), 'with the calibration step left for the engine to fill in');
+    for (const key of ['bedLevel', 'flow', 'startupMinutes']) {
+      assert.equal(cfg.calibration[key], example.calibration[key], `calibration.${key} matches the server`);
+    }
+    assert.ok(!('_comment' in cfg.calibration), 'the explanatory comments are stripped from the bundle');
   });
 
   test(`${name}: no booth secrets are served to the browser`, () => {
