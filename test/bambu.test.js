@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
-  readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent,
+  readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent, readPattern,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -290,4 +290,34 @@ test('what we sent and what the printer said are kept for the post-mortem', asyn
 
   // an unknown printer has nothing recorded, and says so rather than throwing
   assert.equal(lastCommandSent({ id: 'never-seen' }), null);
+});
+
+test('seven identical refusals mean the request was never the problem', () => {
+  // The booth ran the whole matrix and every row came back the same:
+  //   Bambu's own 3mf and ours, /sdcard and /sdcard/cache, project_file and
+  //   gcode_file — all err_code 0x05024007. Nothing about what was sent moved
+  //   the answer, and that is the finding, not any individual row.
+  const same = [
+    'Bambu Studio 3mf, as Bambu sends it', 'Bambu Studio 3mf, from the SD card root',
+    'our 3mf, in cache/', 'our 3mf, from the SD card root',
+    'our 3mf carrying project_settings.config',
+    'bare .gcode, gcode_file with /sdcard prefix', 'bare .gcode, gcode_file with just the name',
+  ].map((name) => ({ name, outcome: 'refused', detail: 'err_code 84033543 (0x05024007)' }));
+
+  const text = readPattern(same).join('\n');
+  assert.match(text, /All 7 requests were refused with the same answer/);
+  assert.match(text, /permission/, 'names what an unchanging answer implies');
+  assert.match(text, /LAN Only Mode/, 'and what to actually go and check');
+
+  // A different code per request means the opposite: the request is the thing.
+  const varied = [
+    { name: 'a', outcome: 'refused', detail: 'err_code 1 (0x00000001)' },
+    { name: 'b', outcome: 'refused', detail: 'err_code 2 (0x00000002)' },
+  ];
+  const t2 = readPattern(varied).join('\n');
+  assert.match(t2, /answer changed with the request/);
+  assert.ok(!/LAN Only Mode/.test(t2), 'does not offer a diagnosis that does not fit');
+
+  // Refused by nothing at all is its own case, not silently treated as either.
+  assert.match(readPattern([{ name: 'a', outcome: 'no answer' }]).join('\n'), /did not answer at all/);
 });

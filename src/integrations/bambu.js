@@ -398,7 +398,26 @@ export function readCommandReply(msg) {
 export function errorCodeText(code) {
   const n = Number(code);
   if (!Number.isFinite(n)) return String(code);
-  return `err_code ${n} (0x${(n >>> 0).toString(16).toUpperCase().padStart(8, '0')})`;
+  const hex = `0x${(n >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  return `err_code ${n} (${hex})`;
+}
+
+/**
+ * What we know about a refusal code, if anything.
+ *
+ * 0x05024007 was returned identically for seven different requests — Bambu's
+ * own 3mf and ours, from /sdcard and /sdcard/cache, as project_file and as
+ * gcode_file. Nothing about the payload changed the answer, which is the
+ * signature of a permission rather than a malformed request.
+ */
+export function errorCodeHint(code) {
+  const hex = `0x${(Number(code) >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  return {
+    '0x05024007': 'the printer would not accept a print command from the local network at all — ' +
+      'the usual cause is that it is still bound to a Bambu account and expecting print jobs ' +
+      'to arrive from the cloud. Turn LAN Only Mode ON from the printer screen ' +
+      '(Settings > Network), then re-read the access code, which changes when you do.',
+  }[hex] || null;
 }
 
 /**
@@ -476,4 +495,47 @@ export function watchPrinter(printer, cfg, onStatus) {
     stop() { releaseLiveClient(printer, client); try { client.end(true); } catch {} },
     health: () => ({ ...health, configured: true, topic }),
   };
+}
+
+/**
+ * Say what the shape of the results means, rather than leaving seven identical
+ * rows to be interpreted by hand.
+ *
+ * The useful signal is not any single row: it is whether the answer changed
+ * when the request did. Seven different requests answered identically is a
+ * different finding from seven different answers, and points somewhere else
+ * entirely.
+ */
+export function readPattern(rows) {
+  const refused = rows.filter((r) => r.outcome === 'refused');
+  const codes = new Set(refused.map((r) => r.detail));
+  const out = ['  WHAT THIS MEANS', ''];
+
+  if (refused.length >= 2 && codes.size === 1) {
+    const [only] = [...codes];
+    out.push(`  All ${refused.length} requests were refused with the same answer:`);
+    out.push(`      ${only}`);
+    out.push('');
+    out.push('  The file was not the problem: a 3mf Bambu Studio made and one we made were');
+    out.push('  refused alike. Nor was the folder, nor the command — /sdcard and /sdcard/cache,');
+    out.push('  project_file and gcode_file, all the same answer. Nothing about what we sent');
+    out.push('  changed it, which is what a permission looks like rather than a bad request.');
+    const code = /\((0x[0-9A-F]+)\)/.exec(only)?.[1];
+    const hint = code && errorCodeHint(parseInt(code, 16));
+    if (hint) {
+      out.push('');
+      out.push('  Most likely: ' + hint.replace(/\s+/g, ' '));
+    }
+    out.push('');
+    out.push('  To check: on the printer, Settings > Network. If LAN Only Mode is off, turn');
+    out.push('  it on, take the new access code, put it in on the setup page, and run this');
+    out.push('  again. If it was already on, paste this output and we will look further.');
+  } else if (codes.size > 1) {
+    out.push('  The answer changed with the request, so the request is the thing to fix:');
+    for (const r of refused) out.push(`      ${r.detail}   <- ${r.name}`);
+  } else {
+    out.push('  Nothing started and nothing was refused, so the printer did not answer at all.');
+    out.push('  Paste this whole output.');
+  }
+  return out;
 }
