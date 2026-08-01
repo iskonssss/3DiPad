@@ -3,6 +3,15 @@ config.json
 .env
 output/
 *.log
+# Folder metadata dropped in by Windows Explorer and cloud-sync clients. Inside
+# .git these break the repo outright — git reads .git/refs/desktop.ini as a
+# branch pointer and aborts every fetch with "bad object refs/desktop.ini".
+# Ignoring them here keeps them out of commits; clearing one already inside .git
+# needs:  Get-ChildItem -Path .git -Filter desktop.ini -Recurse -Force | Remove-Item -Force
 .DS_Store
+desktop.ini
+Thumbs.db
+.Spotlight-V100
+.Trashes
 leads.csv
 leads/
