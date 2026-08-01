@@ -42,17 +42,34 @@
       .empty { color:var(--muted); padding:60px 20px; text-align:center; grid-column:1/-1; }
       .swap-banner { background:var(--warn); color:#241203; font-weight:700; padding:8px; border-radius:8px; text-align:center; margin-bottom:8px; font-size:13px; }
       select { font:inherit; padding:8px; border-radius:8px; background:#20294a; color:var(--ink); border:1px solid #ffffff20; }
-      .printers { display:flex; gap:8px; flex-wrap:wrap; width:100%; margin-top:6px; }
-      .pcard { display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid #ffffff12; border-radius:10px; padding:7px 11px; font-size:12px; }
-      .pcard .nm { font-weight:700; }
-      .pcard .st { color:var(--muted); text-transform:uppercase; letter-spacing:.4px; font-size:11px; }
-      .pcard.running { border-color:#1d3a5f; } .pcard.running .st { color:#7db9ff; }
-      .pcard.pause { border-color:var(--warn); } .pcard.pause .st { color:var(--warn); }
-      .pcard.finish .st { color:var(--ok); }
-      .pcard.failed { border-color:var(--danger); } .pcard.failed .st { color:var(--danger); }
-      .pcard.offline { opacity:.5; }
-      .bar { width:54px; height:5px; background:#0e1730; border-radius:4px; overflow:hidden; }
-      .bar i { display:block; height:100%; background:#7db9ff; }
+      /* Printer status, readable from across the booth: one big square each,
+         green free / red busy / amber wants you. */
+      .printers { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+                  gap:14px; padding:14px 18px 0; max-width:1000px; }
+      .ptile { border-radius:16px; padding:14px 16px; color:#0b1220; display:flex; flex-direction:column; gap:2px;
+               border:2px solid #ffffff20; }
+      .ptile .nm { font-weight:800; font-size:17px; letter-spacing:-.01em; }
+      .ptile .st { font-weight:800; font-size:25px; line-height:1.15; letter-spacing:-.02em; }
+      .ptile .sub { font-size:13px; font-weight:600; opacity:.75; min-height:17px; }
+      .ptile.free { background:var(--ok); }
+      .ptile.busy { background:var(--danger); }
+      .ptile.soon { background:var(--warn); }
+      .ptile.dead { background:#243050; color:var(--muted); border-color:#ffffff10; }
+      /* The swap pause is the one thing that stops the whole booth until someone
+         walks over, so it moves as well as being amber. */
+      .ptile.swap { animation:pulse 1s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { box-shadow:0 0 0 0 #ff8a3400; } 50% { box-shadow:0 0 0 7px #ff8a3455; } }
+      @media (prefers-reduced-motion: reduce) { .ptile.swap { animation:none; border-color:#241203; } }
+      .ptile .bar { width:100%; height:6px; background:#00000030; border-radius:4px; overflow:hidden; margin-top:5px; }
+      .ptile .bar i { display:block; height:100%; background:#00000055; }
+
+      /* One button per printer, so a job is never sent to a machine whose
+         filament the operator has not checked. */
+      .sendrow { display:flex; gap:7px; flex-wrap:wrap; width:100%; margin-bottom:8px; }
+      .pbtn { background:#2b3a63; color:var(--ink); border:2px solid transparent; font-weight:700; }
+      .pbtn.can { background:var(--ok); color:#04371f; }
+      .pbtn.on { border-color:var(--accent); }
+      .pbtn[disabled] { background:#1b2440; color:#5d6a8c; cursor:not-allowed; }
     </style>
   </head>
   <body>
@@ -63,14 +80,16 @@
       <span class="pill" id="p-lan">LAN</span>
       <span class="pill" id="p-outbox" style="display:none"></span>
       <a class="pill" href="setup.html" style="text-decoration:none">🔌 Printer setup</a>
-      <div class="printers" id="printer-strip"></div>
       <div class="stats" id="stats"></div>
     </header>
+    <div class="printers" id="printer-strip"></div>
     <main id="board"><div class="empty">Loading…</div></main>
 
     <script>
       const COLOUR_HEX = { BLACK:'#1c1c1e',WHITE:'#f5f5f7',RED:'#e23b3b',BLUE:'#2f6fed',GREEN:'#34a853',YELLOW:'#f4c20d',PINK:'#ff5fa2',PURPLE:'#8b5cf6',ORANGE:'#ff8a34',TEAL:'#14b8a6',GREY:'#8e8e93',GRAY:'#8e8e93',GOLD:'#d4af37',SILVER:'#c0c4cc',BROWN:'#8b5a2b' };
       let printers = [];
+      // the cards need every job's printer assignment, not just their own
+      let allJobs = [];
 
       async function tick() {
         try {
@@ -97,7 +116,8 @@
         outbox.style.display = pend ? '' : 'none';
         outbox.className = 'pill off';
         outbox.textContent = '⏳ ' + pend + ' queued (retrying)';
-        renderPrinters(d.printers || []);
+        allJobs = d.jobs || [];
+        renderPrinters(d.printers || [], allJobs);
         const s = d.stats.by;
         document.getElementById('stats').innerHTML =
           `<span>Leads: <b>${d.stats.leads}</b></span><span>Queued: ${s.queued||0}</span><span>Printing: ${s.printing||0}</span><span>Ready: ${s.ready||0}</span>`;
@@ -107,20 +127,54 @@
         board.innerHTML = d.jobs.map(card).join('');
       }
 
-      function renderPrinters(list) {
+      /**
+       * What a printer is doing, in the terms the booth cares about:
+       *   free  — send it a job
+       *   busy  — do not
+       *   soon  — about to be free, or waiting on you
+       *   dead  — not set up, or not answering
+       * `jobs` matters as well as the printer's own report: a job assigned
+       * seconds ago is on that printer before the printer has said so.
+       */
+      function printerState(p, jobs) {
+        if (!p.configured) return { cls: 'dead', st: 'NOT SET UP', sub: 'Add it on the setup page' };
+        const live = p.live || {};
+        const state = String(live.state || '').toUpperCase();
+        if (!state) return { cls: 'dead', st: 'NO SIGNAL', sub: 'Check it on the setup page' };
+
+        const holding = jobs.find((j) => j.printerId === p.id && ['assigned', 'printing', 'colour_change'].includes(j.status));
+        const who = holding ? holding.name : '';
+        const mins = typeof live.remainingMin === 'number' ? live.remainingMin : null;
+        const pct = typeof live.percent === 'number' ? live.percent : null;
+
+        if (state === 'PAUSE') {
+          return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct };
+        }
+        if (state === 'FAILED') return { cls: 'busy', st: 'FAILED', sub: who, pct };
+        if (state === 'RUNNING' || state === 'PREPARE') {
+          const soon = mins != null && mins <= 1;
+          return {
+            cls: soon ? 'soon' : 'busy',
+            st: soon ? 'ALMOST DONE' : 'PRINTING',
+            sub: [who, mins != null ? `${mins} min left` : null].filter(Boolean).join(' · '),
+            pct,
+          };
+        }
+        // idle by its own account, but a job was just handed to it
+        if (holding) return { cls: 'busy', st: 'STARTING', sub: who, pct };
+        return { cls: 'free', st: 'READY', sub: 'Free for the next job' };
+      }
+
+      function renderPrinters(list, jobs) {
         const strip = document.getElementById('printer-strip');
         if (!list.length) { strip.innerHTML = ''; return; }
-        strip.innerHTML = list.map(p => {
-          const live = p.live || {};
-          const state = (live.state || (p.configured ? 'idle' : 'not set up')).toLowerCase();
-          const cls = ['running','pause','finish','failed'].includes(state) ? state : (p.configured ? '' : 'offline');
-          const pct = typeof live.percent === 'number' ? live.percent : null;
-          const eta = typeof live.remainingMin === 'number' && live.remainingMin > 0 ? ` · ${live.remainingMin}m left` : '';
-          const label = state === 'pause' ? 'swap filament' : state;
-          return `<div class="pcard ${cls}">
+        strip.innerHTML = list.map((p) => {
+          const s = printerState(p, jobs);
+          return `<div class="ptile ${s.cls}">
             <span class="nm">${esc(p.name)}</span>
-            <span class="st">${esc(label)}${eta}</span>
-            ${pct !== null ? `<span class="bar"><i style="width:${pct}%"></i></span><span class="st">${pct}%</span>` : ''}
+            <span class="st">${esc(s.st)}</span>
+            <span class="sub">${esc(s.sub || '')}</span>
+            ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
           </div>`;
         }).join('');
       }
@@ -154,15 +208,21 @@
       }
 
       function actions(j) {
-        // The select SENDS the file — it used to only relabel the job, so a job
-        // that missed its dispatch could never reach a printer from here.
-        const assign = printers.length
-          ? `<select onchange="sendTo('${j.id}',this.value)">
-               <option value="">send to…</option>
-               ${printers.map(p=>`<option value="${p.id}" ${p.id===j.printerId?'selected':''}>${p.name}</option>`).join('')}
-             </select>` : '';
+        // One button per printer, never "any free printer": the operator has to
+        // know which machine is loaded with which colour before a job goes to
+        // it, and a dropdown hides that decision behind a second tap.
+        const send = printers.map((p) => {
+          const s = printerState(p, allJobs);
+          const free = s.cls === 'free';
+          const mine = p.id === j.printerId;
+          const why = s.cls === 'dead' ? s.st.toLowerCase() : `${s.st.toLowerCase()}${s.sub ? ' — ' + s.sub : ''}`;
+          return `<button class="pbtn ${free ? 'can' : ''} ${mine ? 'on' : ''}" ${free ? '' : 'disabled'}
+            title="${esc(free ? `Send ${j.colours.layer1} → ${j.colours.layer2} to ${p.name}` : `${p.name} is ${why}`)}"
+            onclick="sendTo('${j.id}','${p.id}')">${esc(p.name)}</button>`;
+        }).join('');
+        const assign = printers.length ? `<div class="sendrow">${send}</div>` : '';
+
         const btns = [];
-        if (j.status === 'queued') btns.push(`<button class="primary" onclick="sendTo('${j.id}')">Send to a free printer</button>`);
         if (j.status !== 'printing') btns.push(`<button class="primary" onclick="setStatus('${j.id}','printing')">Printing</button>`);
         btns.push(`<button class="warn" onclick="setStatus('${j.id}','colour_change')">Colour swap</button>`);
         if (j.status !== 'ready') btns.push(`<button class="ok" onclick="setStatus('${j.id}','ready')">Ready → WhatsApp</button>`);
