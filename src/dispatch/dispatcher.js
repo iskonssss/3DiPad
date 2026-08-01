@@ -55,7 +55,7 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
     const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart, meta: job.meta }))
       .catch((e) => ({ ok: false, stage: 'send', error: String(e.message || e) }));
 
-    if (r.variant) onEvent({ type: 'variant', job, printer, variant: r.variant });
+    if (r.variant) onEvent({ type: 'variant', job, printer, variant: r.variant, confirmed: !!r.confirmed });
 
     if (r.sent) {
       queue.setStatus(job.id, 'printing', { printerId: printer.id, dispatchAttempts: 0, dispatch: { ok: true, remotePath: r.remotePath } });

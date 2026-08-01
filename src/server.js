@@ -17,6 +17,7 @@ import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
 import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
+import { lastCommandSent } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = loadConfig();
@@ -394,12 +395,14 @@ const dispatcher = createDispatcher({
   cfg, queue, outDir, confirmStart, probeStart,
   onEvent: (e) => {
     if (e.type === 'variant') {
+      // Only say a command worked when the printer was actually seen to move.
+      // This used to print "start command that worked" for the only command we
+      // tried, on a printer that never started — a log line asserting the exact
+      // opposite of what happened, directly above the line reporting it.
       const pinned = cfg.integrations?.lan?.startCommand;
-      if (!pinned || pinned === 'auto') {
+      if (e.confirmed && (!pinned || pinned === 'auto') && e.variant !== 'gcode_file') {
         console.log(`[${e.printer.id}] start command that worked: "${e.variant}"`);
-        if (e.variant !== 'gcode_file') {
-          console.log(`           Pin it to skip the probing: integrations.lan.startCommand = "${e.variant}"`);
-        }
+        console.log(`           Pin it to skip the probing: integrations.lan.startCommand = "${e.variant}"`);
       }
     }
     else if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
@@ -414,6 +417,20 @@ const dispatcher = createDispatcher({
       if (h.lastCommand) {
         const c = h.lastCommand;
         console.error(`           It answered "${c.command}" with ${c.result || '?'}${c.reason ? ` — ${c.reason}` : ''}.`);
+      }
+      // Both sides of the exchange, printed without anyone having to switch a
+      // debug flag on and reproduce it. This is the failure we cannot reproduce
+      // here — the evidence has to survive the one time it happens at a booth.
+      const sent = lastCommandSent(e.printer);
+      if (sent) {
+        console.error(`           We sent, to ${sent.topic}:`);
+        console.error(`             ${JSON.stringify(sent.payload)}`);
+      }
+      if (h.recent?.length) {
+        console.error('           The printer said, around that moment:');
+        for (const r of h.recent.slice(-5)) console.error(`             ${r.text}`);
+      } else if (h.messages) {
+        console.error('           The printer sent status the whole time and never mentioned the command.');
       }
       if (h.connected && !h.messages) {
         console.error(`           The printer has never sent anything on device/${e.printer.serial}/report.`);
