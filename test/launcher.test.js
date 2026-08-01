@@ -63,5 +63,21 @@ test('both launchers wait for the port rather than racing it', () => {
     // the old bug, spelled out so it cannot come back
     assert.ok(!/start "" http:\/\/localhost/.test(text) && !/^\(sleep \d+ &&/m.test(text),
       `${file} still opens the browser without waiting`);
+
+    // and it has to say which copy of the project it is. Two checkouts — a
+    // synced folder, an old download — are indistinguishable once the window
+    // is open, and then a pull in one and a double-click in the other quietly
+    // disagree about what the booth is running.
+    assert.match(text, /Running from/, `${file} does not say where it is running from`);
+    assert.match(text, /git log -1/, `${file} does not say which version it is`);
   }
+});
+
+test('the waiter does not get its own window', () => {
+  // `start /min` still creates a console window: the operator got a mystery
+  // black Node window sitting on the desktop for up to a minute, next to the
+  // booth. /b runs it inside the booth's own window.
+  const text = fs.readFileSync(path.join(root, 'Start Booth.cmd'), 'utf8');
+  assert.match(text, /start "" \/b node tools\\open-when-ready\.mjs/);
+  assert.ok(!/\/min node/.test(text), 'still opening a separate window for the waiter');
 });

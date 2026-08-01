@@ -9,6 +9,16 @@ rem ===================================================================
 title 3DiPad Booth
 cd /d "%~dp0"
 
+rem Which copy is this? A second checkout somewhere else — a synced folder, an
+rem old download, a colleague's shared drive — is indistinguishable from the
+rem real one once the window is open, and then `git pull` in one folder and a
+rem double-click in the other quietly disagree about what the booth is running.
+rem Say it out loud, every start.
+echo.
+echo  Running from: %CD%
+for /f "delims=" %%v in ('git log -1 --format^="%%h  %%s" 2^>nul') do echo  Version:      %%v
+echo.
+
 rem A cloud-synced folder is a bad place to RUN from: the sync client copies
 rem node_modules and .git file by file and locks them mid-write. Drive's
 rem "Other computers" area is a read-only backup of a different machine, where
@@ -86,7 +96,10 @@ rem So: wait for the port to actually answer, in the background, and open the
 rem browser then. Gives up after 60 seconds rather than hanging around.
 echo.
 echo Starting the booth. The dashboard will open once it is ready...
-start "" /min node tools\open-when-ready.mjs 3000 /dashboard/
+rem /b, not /min: /min still creates a console window, so the waiter appeared as
+rem a mystery black Node window sitting on the desktop for up to a minute. /b
+rem runs it inside this window, where its output belongs anyway.
+start "" /b node tools\open-when-ready.mjs 3000 /dashboard/
 echo.
 echo ===================================================================
 echo  Leave this window open. Close it to stop the booth.

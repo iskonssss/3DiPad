@@ -28,6 +28,11 @@ npm run build
 # Wait for the port to actually answer rather than guessing at two seconds — a
 # cold start after an npm install takes longer than that, and the browser then
 # lands on "connection refused" for a booth that is starting normally.
+echo
+echo " Running from: $PWD"
+git log -1 --format=' Version:      %h  %s' 2>/dev/null || true
+echo
+
 node tools/open-when-ready.mjs 3000 /dashboard/ &
 
 echo
