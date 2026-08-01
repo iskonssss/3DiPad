@@ -160,6 +160,12 @@ export async function uploadFile(printer, filePath, cfg) {
 
 const liveClients = new Map();
 
+/** The last command sent to each printer, for explaining a print that never began. */
+const lastPublished = new Map();
+export function lastCommandSent(printer) {
+  return lastPublished.get(printerKey(printer)) || null;
+}
+
 function printerKey(printer) {
   return String(printer?.id || printer?.serial || printer?.ip || '');
 }
@@ -223,6 +229,7 @@ export async function publishCommand(printer, payload, cfg) {
   const qos = lan.qos ?? 0;
   const timeoutMs = (lan.timeoutMs ?? 10000) + 2000;
 
+  lastPublished.set(printerKey(printer), { at: new Date().toISOString(), topic, payload });
   if (lan.debug) {
     console.log(`[${printer.id}] PUBLISH ${topic}`);
     console.log('           ' + JSON.stringify(payload));
@@ -289,7 +296,7 @@ export async function sendToPrinter(printer, filePath, cfg, opts = {}) {
 
   const started = await startPrint(printer, up.remotePath, cfg, { ...opts, gcodePath });
   if (!started.ok) return { ...started, sent: false, uploaded: up.name };
-  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath, variant: started.variant, unverified: started.unverified };
+  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath, variant: started.variant, confirmed: started.confirmed, unverified: started.unverified };
 }
 
 /**
@@ -335,9 +342,9 @@ export async function startPrint(printer, remotePath, cfg, opts = {}) {
     //   null  -> we cannot see this printer's state at all. Stop: firing more
     //            commands blind is how you cancel someone's keychain.
     const moved = await probe(printer, variant);
-    if (moved !== false) return { ok: true, variant, unverified: moved == null };
+    if (moved !== false) return { ok: true, variant, confirmed: moved === true, unverified: moved == null };
   }
-  return { ok: true, variant: last };
+  return { ok: true, variant: last, confirmed: false };
 }
 
 /* ------------------------------------------------------------------ *
@@ -387,7 +394,11 @@ export function watchPrinter(printer, cfg, onStatus) {
   // connects is credentials or network, while one that connects and then hears
   // nothing means we are subscribed to the wrong topic — i.e. the serial number
   // is wrong. Both present as "no status yet".
-  const health = { connected: false, connections: 0, messages: 0, lastMessageAt: null, lastError: null };
+  // `recent` is a small ring of the messages that were not routine status
+  // pushes. A print that will not start is diagnosed from what the printer said
+  // around the moment we asked, and asking an operator to turn a debug flag on
+  // and reproduce it is asking them to do that during a fair. Keep it always.
+  const health = { connected: false, connections: 0, messages: 0, lastMessageAt: null, lastError: null, recent: [] };
   if (!isConfigured(printer) || !cfg?.integrations?.lan?.enabled) {
     return { stop() {}, health: () => ({ ...health, configured: false }) };
   }
@@ -417,8 +428,11 @@ export function watchPrinter(printer, cfg, onStatus) {
     // With debug on, print everything that is not the routine status push. If a
     // start command is being refused for a reason we have not learned to
     // recognise, this is where it will be visible.
-    if (cfg.integrations.lan.debug && msg?.print?.command !== 'push_status') {
-      console.log(`[${printer.id}] REPORT ${JSON.stringify(msg).slice(0, 600)}`);
+    if (msg?.print?.command !== 'push_status') {
+      const text = JSON.stringify(msg).slice(0, 600);
+      health.recent.push({ at: new Date().toISOString(), text });
+      if (health.recent.length > 12) health.recent.shift();
+      if (cfg.integrations.lan.debug) console.log(`[${printer.id}] REPORT ${text}`);
     }
     // The printer does answer commands — it just answers on the report topic,
     // mixed in with status. We were parsing these messages for status only and

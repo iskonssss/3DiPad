@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
-  readCommandReply, startVariants, START_VARIANTS, startPrint,
+  readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -256,4 +256,28 @@ test('a printer we cannot see is never sent a second start command', async () =>
     confirmStarted: () => Promise.resolve(n++ === 0 ? false : null),
   });
   assert.equal(t2.length, 2, 'one retry after a definite idle, then stop when it goes dark');
+});
+
+test('what we sent and what the printer said are kept for the post-mortem', async () => {
+  // A print that will not start is the one failure that cannot be reproduced
+  // on a laptop — it happens once, at a booth, in front of a queue. Both sides
+  // of the exchange have to be recorded as they happen, not behind a debug flag
+  // somebody has to switch on and then make it happen again.
+  const printer = { id: 'A1-9', ip: '10.0.0.9', serial: 'SERIAL9', accessCode: 'x' };
+  const cfg = { integrations: { lan: { enabled: true } } };
+
+  await startPrint(printer, '/sdcard/K_0014.3mf', cfg, {
+    sequenceId: 14, gcodePath: 'Metadata/plate_1.gcode',
+    publish: async (p, payload, c) => publishCommand(p, payload, c).catch(() => ({ ok: true })),
+  }).catch(() => {});
+
+  const sent = lastCommandSent(printer);
+  assert.ok(sent, 'the command we published was recorded');
+  assert.equal(sent.topic, 'device/SERIAL9/request', 'including where it went');
+  assert.equal(sent.payload.print.command, 'project_file');
+  assert.equal(sent.payload.print.param, 'Metadata/plate_1.gcode');
+  assert.ok(sent.at, 'and when');
+
+  // an unknown printer has nothing recorded, and says so rather than throwing
+  assert.equal(lastCommandSent({ id: 'never-seen' }), null);
 });
