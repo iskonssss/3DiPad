@@ -1,0 +1,117 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import zlib from 'node:zlib';
+import { build3mf, zip, solidPng, colourHex } from '../src/integrations/bambu3mf.js';
+import { buildPrintCommand, startVariants, container } from '../src/integrations/bambu.js';
+
+/**
+ * Read a zip without a library, so the test is checking the bytes we wrote
+ * rather than agreeing with the writer. Walks the central directory, which is
+ * what any real unzip does.
+ */
+function unzip(buf) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(eocd >= 0, 'no end-of-central-directory record — this is not a zip');
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const out = {};
+  for (let i = 0; i < count; i++) {
+    assert.equal(buf.readUInt32LE(p), 0x02014b50, 'central directory entry ' + i);
+    const method = buf.readUInt16LE(p + 10);
+    const csize = buf.readUInt32LE(p + 20);
+    const usize = buf.readUInt32LE(p + 24);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
+    const lNameLen = buf.readUInt16LE(local + 26);
+    const lExtra = buf.readUInt16LE(local + 28);
+    const start = local + 30 + lNameLen + lExtra;
+    const body = buf.slice(start, start + csize);
+    const data = method === 8 ? zlib.inflateRawSync(body) : body;
+    assert.equal(data.length, usize, `${name} unpacked to the wrong size`);
+    out[name] = data;
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return out;
+}
+
+const GCODE = ';3DiPad\nG28\n' + 'G1 X10 Y10 E0.5 F3000\n'.repeat(500);
+const CFG = { build: { bedCenter: [90, 90], layerHeight: 0.28 }, integrations: { lan: {} } };
+const META = { bbox: { w: 100, h: 40 }, colours: { layer1: 'YELLOW', layer2: 'BLACK' }, estMinutes: 15.2, estGrams: 6.4 };
+
+test('the 3mf holds the g-code where the printer looks for it', () => {
+  const files = unzip(build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'YELLOW-BLACK_0009' }));
+
+  // The parts, taken from a 3mf Bambu Studio produced for this printer.
+  for (const part of [
+    '[Content_Types].xml', '_rels/.rels', '3D/3dmodel.model',
+    'Metadata/model_settings.config', 'Metadata/_rels/model_settings.config.rels',
+    'Metadata/plate_1.gcode', 'Metadata/plate_1.gcode.md5',
+    'Metadata/plate_1.json', 'Metadata/slice_info.config', 'Metadata/plate_1.png',
+  ]) assert.ok(files[part], `missing ${part}`);
+
+  assert.equal(files['Metadata/plate_1.gcode'].toString('utf8'), GCODE, 'the g-code survives the round trip');
+
+  // The md5 sidecar is checked by the printer when it loads the project. Upper
+  // case hex — a lower-case digest is a file the printer will refuse.
+  const md5 = files['Metadata/plate_1.gcode.md5'].toString('utf8');
+  assert.equal(md5, crypto.createHash('md5').update(Buffer.from(GCODE, 'utf8')).digest('hex').toUpperCase());
+  assert.match(md5, /^[0-9A-F]{32}$/);
+
+  // The relationship that tells the printer which member is the g-code.
+  assert.match(files['Metadata/_rels/model_settings.config.rels'].toString(), /Target="\/Metadata\/plate_1\.gcode"/);
+  assert.match(files['Metadata/model_settings.config'].toString(), /key="gcode_file" value="Metadata\/plate_1\.gcode"/);
+});
+
+test('the 3mf carries the numbers the tablet promised', () => {
+  const files = unzip(build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' }));
+  const plate = JSON.parse(files['Metadata/plate_1.json'].toString());
+  assert.deepEqual(plate.filament_colors, [colourHex('YELLOW'), colourHex('BLACK')]);
+  // 100x40 centred on a 90,90 bed
+  assert.deepEqual(plate.bbox_all, [40, 70, 140, 110]);
+
+  const info = files['Metadata/slice_info.config'].toString();
+  assert.match(info, /key="prediction" value="912"/, '15.2 minutes in seconds');
+  assert.match(info, /key="weight" value="6.4"/);
+  assert.match(info, /key="printer_model_id" value="N1"/, 'the A1 mini');
+});
+
+test('the archive is a real zip, and a smaller upload than the raw g-code', () => {
+  const buf = build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' });
+  assert.equal(buf.readUInt32LE(0), 0x04034b50, 'starts with a local file header');
+  assert.ok(buf.length < Buffer.byteLength(GCODE), 'g-code compresses, so the booth uploads less');
+
+  // an empty archive is still a valid one
+  assert.equal(unzip(zip([])) && Object.keys(unzip(zip([]))).length, 0);
+  // and a stored (incompressible) member round-trips too
+  const noise = crypto.randomBytes(4096);
+  assert.deepEqual(unzip(zip([{ name: 'n.bin', data: noise }]))['n.bin'], noise);
+});
+
+test('the thumbnail is a valid PNG in the backing colour', () => {
+  const png = solidPng(8, 4, [0xf4, 0xc2, 0x0d]);
+  assert.deepEqual([...png.slice(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(png.readUInt32BE(16), 8, 'width');
+  assert.equal(png.readUInt32BE(20), 4, 'height');
+  assert.equal(png.slice(12, 16).toString(), 'IHDR');
+  assert.ok(png.includes(Buffer.from('IEND')));
+});
+
+test('a 3mf is started as a project, with no shape to guess at', () => {
+  assert.equal(container({}), '3mf', 'the default is what Bambu itself sends');
+  assert.deepEqual(startVariants({}), ['project_file'], 'one command — nothing to probe');
+  assert.deepEqual(startVariants({ integrations: { lan: { container: 'gcode' } } }).length, 3,
+    'the bare-gcode path still probes, because firmware disagrees there');
+
+  const cmd = buildPrintCommand('/sdcard/YELLOW-BLACK_0009.3mf', {
+    sequenceId: 9, variant: 'project_file', gcodePath: 'Metadata/plate_1.gcode',
+  });
+  assert.equal(cmd.print.command, 'project_file');
+  assert.equal(cmd.print.param, 'Metadata/plate_1.gcode', 'which member of the archive to run');
+  assert.equal(cmd.print.url, 'file:///sdcard/YELLOW-BLACK_0009.3mf');
+  assert.equal(cmd.print.subtask_name, 'YELLOW-BLACK_0009');
+  // the calibration skips the booth asked for, as print-task parameters
+  assert.equal(cmd.print.bed_leveling, false);
+  assert.equal(cmd.print.flow_cali, false);
+});

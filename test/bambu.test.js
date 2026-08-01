@@ -169,12 +169,15 @@ test('the start command comes in the shapes different firmware wants', () => {
 });
 
 test('start shapes are tried in turn until the printer moves', async () => {
-  assert.deepEqual(startVariants({}), START_VARIANTS);
+  // These are about the bare-gcode upload path. The booth default is now a 3mf,
+  // which has exactly one start command — see bambu3mf.test.js.
+  const GC = { integrations: { lan: { container: 'gcode' } } };
+  assert.deepEqual(startVariants(GC), START_VARIANTS);
   assert.deepEqual(startVariants({ integrations: { lan: { startCommand: 'project_file' } } }), ['project_file'],
     'a pinned command stops the probing');
 
   const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
-  const run = async (obeys, cfg = {}) => {
+  const run = async (obeys, cfg = GC) => {
     const tried = [];
     const r = await startPrint(printer, '/sdcard/x.gcode', cfg, {
       publish: (_p, payload) => { tried.push(payload.print.command === 'gcode_file' ? (payload.print.param.startsWith('/') ? 'gcode_file' : 'gcode_file_bare') : payload.print.command); return { ok: true }; },
@@ -201,11 +204,11 @@ test('start shapes are tried in turn until the printer moves', async () => {
   assert.equal(none.r.ok, true);
 
   // Pinned: one shape, no probing, whatever the printer does.
-  const pinned = await run('nothing', { integrations: { lan: { startCommand: 'gcode_file_bare' } } });
+  const pinned = await run('nothing', { integrations: { lan: { container: 'gcode', startCommand: 'gcode_file_bare' } } });
   assert.deepEqual(pinned.tried, ['gcode_file_bare']);
 
   // A transport failure stops the loop rather than trying the rest blind.
-  const dead = await startPrint(printer, '/sdcard/x.gcode', {}, {
+  const dead = await startPrint(printer, '/sdcard/x.gcode', GC, {
     publish: () => ({ ok: false, error: 'MQTT timeout' }),
     confirmStarted: () => Promise.resolve(false),
   });
@@ -236,7 +239,8 @@ test('a printer we cannot see is never sent a second start command', async () =>
   // firing three start commands blind at a machine mid-keychain.
   const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
   const tried = [];
-  const r = await startPrint(printer, '/sdcard/x.gcode', {}, {
+  const gc = { integrations: { lan: { container: 'gcode' } } };
+  const r = await startPrint(printer, '/sdcard/x.gcode', gc, {
     publish: (_p, payload) => { tried.push(payload.print.command); return { ok: true }; },
     confirmStarted: () => Promise.resolve(null),   // no status from this printer
   });
@@ -247,7 +251,7 @@ test('a printer we cannot see is never sent a second start command', async () =>
   // Going quiet part-way through is the same situation.
   const t2 = [];
   let n = 0;
-  await startPrint(printer, '/sdcard/x.gcode', {}, {
+  await startPrint(printer, '/sdcard/x.gcode', gc, {
     publish: (_p, payload) => { t2.push(payload.print.command); return { ok: true }; },
     confirmStarted: () => Promise.resolve(n++ === 0 ? false : null),
   });

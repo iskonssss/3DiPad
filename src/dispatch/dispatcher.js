@@ -52,7 +52,7 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
     // probeStart lets the transport find out which start command this firmware
     // obeys, by watching whether the printer moved after each one. It is a short
     // wait (a few seconds each) and only happens while the shape is unknown.
-    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart }))
+    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart, meta: job.meta }))
       .catch((e) => ({ ok: false, stage: 'send', error: String(e.message || e) }));
 
     if (r.variant) onEvent({ type: 'variant', job, printer, variant: r.variant });

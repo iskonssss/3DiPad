@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Client as FtpClient } from 'basic-ftp';
 import mqtt from 'mqtt';
+import { build3mf } from './bambu3mf.js';
 
 const FTP_PORT = 990;
 const MQTT_PORT = 8883;
@@ -65,7 +66,21 @@ export const START_VARIANTS = ['gcode_file', 'gcode_file_bare', 'project_file'];
 export function startVariants(cfg) {
   const pinned = cfg?.integrations?.lan?.startCommand;
   if (pinned && pinned !== 'auto') return [pinned];
+  // A 3mf is a project by definition — there is one command that starts it and
+  // nothing to probe for.
+  if (container(cfg) === '3mf') return ['project_file'];
   return START_VARIANTS;
+}
+
+/**
+ * What we put on the SD card.
+ *
+ * '3mf' wraps the g-code as a project, which is what Bambu Studio uploads and
+ * what the printer's own task record points at. 'gcode' is the original bare
+ * upload, kept because it is one config line away if a firmware prefers it.
+ */
+export function container(cfg) {
+  return cfg?.integrations?.lan?.container ?? '3mf';
 }
 
 /** The MQTT payload that starts a print of an already-uploaded .gcode file. */
@@ -84,7 +99,9 @@ export function buildPrintCommand(remotePath, opts = {}) {
         print: {
           sequence_id,
           command: 'project_file',
-          param: '',
+          // Inside a 3mf the g-code is a member of the archive, and this names
+          // it. For a bare .gcode upload there is nothing to point at.
+          param: opts.gcodePath || '',
           url: `file://${remotePath}`,
           subtask_name: bare,
           timelapse: false,
@@ -254,16 +271,35 @@ export async function sendToPrinter(printer, filePath, cfg, opts = {}) {
   if (!isConfigured(printer)) {
     return { ok: true, sent: false, manual: true, reason: 'printer missing ip/serial/accessCode' };
   }
-  let up;
+  let up, send = filePath, gcodePath = '';
   try {
-    up = await uploadFile(printer, filePath, cfg);
+    if (container(cfg) === '3mf') {
+      send = wrapAs3mf(filePath, cfg, opts.meta);
+      gcodePath = 'Metadata/plate_1.gcode';
+    }
+    up = await uploadFile(printer, send, cfg);
   } catch (e) {
     return { ok: false, sent: false, stage: 'upload', error: String(e.message || e) };
   }
 
-  const started = await startPrint(printer, up.remotePath, cfg, opts);
+  const started = await startPrint(printer, up.remotePath, cfg, { ...opts, gcodePath });
   if (!started.ok) return { ...started, sent: false, uploaded: up.name };
-  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath, variant: started.variant };
+  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath, variant: started.variant, unverified: started.unverified };
+}
+
+/**
+ * Write <name>.3mf next to the .gcode and return its path.
+ *
+ * Kept on disk rather than in a temp file on purpose: if the network dies at
+ * the fair, this is the file to copy onto a USB stick or hand to Bambu Studio,
+ * and it is the one the printer would have been given.
+ */
+export function wrapAs3mf(gcodePath, cfg, meta) {
+  const out = gcodePath.replace(/\.gcode$/i, '') + '.3mf';
+  const gcode = fs.readFileSync(gcodePath, 'utf8');
+  const name = path.basename(gcodePath).replace(/\.gcode$/i, '');
+  fs.writeFileSync(out, build3mf({ gcode, meta, cfg, name }));
+  return out;
 }
 
 /**

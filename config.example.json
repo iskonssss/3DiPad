@@ -164,9 +164,13 @@
       "qos": 0,
       "startConfirmMs": 25000,
       "maxDispatchAttempts": 3,
-      "_start_comment": "Firmware disagrees about how a bare .gcode on the SD card is started: whether the path carries the /sdcard prefix, and whether the command is gcode_file or project_file with a file:// url. 'auto' tries each in order and keeps the one the printer visibly acts on, waiting startProbeMs between tries. The server logs the winner — pin it here ('gcode_file', 'gcode_file_bare' or 'project_file') to stop the probing. project_file also carries bed_leveling/flow_cali false as print-task parameters.",
+      "_container_comment": "What actually goes on the SD card. Bambu Studio never sends bare g-code — it sends a 3mf project with the g-code inside at Metadata/plate_1.gcode, and the printer's own task record points at a .3mf. Uploading a lone .gcode put the file on the card and the printer ignored every start command. '3mf' wraps it the way the printer expects (and uploads ~8x smaller, since g-code compresses well). 'gcode' is the old bare upload if a firmware ever prefers it. The .3mf is written next to the .gcode in the output folder, so it can be copied to a USB stick if the network dies.",
+      "container": "3mf",
+      "printerModelId": "N1",
+      "bedType": "textured_plate",
+      "_start_comment": "Only consulted for container 'gcode', where firmware disagrees about the path prefix and the command name: 'auto' tries each shape in order and keeps the one the printer visibly acts on, waiting startProbeMs between tries. A 3mf has exactly one start command (project_file), so nothing is probed. project_file carries bed_leveling/flow_cali false as print-task parameters.",
       "startCommand": "auto",
-      "startProbeMs": 8000
+      "startProbeMs": 12000
     },
     "printers": [
       {
