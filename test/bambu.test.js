@@ -228,3 +228,28 @@ test('the printer answering a command is not mistaken for status', () => {
   // an errno with no reason is still a reason
   assert.equal(readCommandReply({ print: { command: 'project_file', errno: 5 } }).reason, 'errno 5');
 });
+
+test('a printer we cannot see is never sent a second start command', async () => {
+  // A "start" arriving at a printer that is already printing can abort the job.
+  // So the probe is allowed to say "I cannot tell" (null), and that must stop
+  // the loop just as firmly as a confirmed start does — the alternative is
+  // firing three start commands blind at a machine mid-keychain.
+  const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
+  const tried = [];
+  const r = await startPrint(printer, '/sdcard/x.gcode', {}, {
+    publish: (_p, payload) => { tried.push(payload.print.command); return { ok: true }; },
+    confirmStarted: () => Promise.resolve(null),   // no status from this printer
+  });
+  assert.equal(tried.length, 1, `sent ${tried.length} start commands at a printer it could not see`);
+  assert.equal(r.ok, true, 'the file is still on the SD card — that much succeeded');
+  assert.equal(r.unverified, true, 'and we say we could not confirm it');
+
+  // Going quiet part-way through is the same situation.
+  const t2 = [];
+  let n = 0;
+  await startPrint(printer, '/sdcard/x.gcode', {}, {
+    publish: (_p, payload) => { t2.push(payload.print.command); return { ok: true }; },
+    confirmStarted: () => Promise.resolve(n++ === 0 ? false : null),
+  });
+  assert.equal(t2.length, 2, 'one retry after a definite idle, then stop when it goes dark');
+});

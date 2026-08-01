@@ -199,7 +199,7 @@
         if (!p.configured) return { cls: 'dead', st: 'NOT SET UP', sub: 'Add it on the setup page' };
         const live = p.live || {};
         const state = String(live.state || '').toUpperCase();
-        if (!state) return { cls: 'dead', st: 'NO SIGNAL', sub: 'Check it on the setup page' };
+        if (!state) return { cls: 'dead', st: 'NO SIGNAL', sub: 'Check it on the setup page', send: 'blind' };
 
         const holding = jobs.find((j) => j.printerId === p.id && ['assigned', 'printing', 'colour_change'].includes(j.status));
         const who = holding ? holding.name : '';
@@ -211,7 +211,14 @@
         if (state === 'PAUSE') {
           return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct, cols, next: 2 };
         }
-        if (state === 'FAILED') return { cls: 'busy', st: 'FAILED', sub: who, pct, cols };
+        // A printer that failed a print is not busy — it is standing idle with a
+        // ruined keychain on the bed. Calling it busy greyed its button out and
+        // left it that way for good, because a printer stays FAILED until it is
+        // given something else to do: one bad print took a machine out of the
+        // booth for the rest of the day. It wants attention, not exclusion.
+        if (state === 'FAILED') {
+          return { cls: 'soon', st: 'FAILED', sub: [who, 'clear the bed, then send again'].filter(Boolean).join(' · '), pct: null, cols, send: 'warn' };
+        }
         // Heating is not printing. The printer reports PREPARE while it brings
         // the bed and nozzle up, and during that its remaining-time estimate is
         // 0 — which the "1 minute or less" rule read as ALMOST DONE, on a print
@@ -234,7 +241,7 @@
         // idle by its own account, but a job was just handed to it. The
         // operator has to load colour 1 before it starts, so show it early.
         if (holding) return { cls: 'busy', st: 'STARTING', sub: who, pct, cols, next: 1 };
-        return { cls: 'free', st: 'READY', sub: 'Free for the next job' };
+        return { cls: 'free', st: 'READY', sub: 'Free for the next job', send: 'ok' };
       }
 
       function renderPrinters(list, jobs) {
@@ -278,12 +285,14 @@
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
         const when = past && j.createdAt
           ? `<span class="when">${new Date(j.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span>` : '';
+        const failed = j.status === 'failed' && j.failure
+          ? `<div class="swap-banner" style="background:var(--danger);color:#2b0b0b">⚠️ ${esc(j.failure)}</div>` : '';
         const swap = j.status === 'colour_change'
           ? `<div class="swap-banner">⚠️ SWAP NOW → load ${j.colours.layer2}, then Resume on the printer</div>` : '';
         const notify = j.notify ? (j.notify.ok ? '✅ sent' : (j.notify.queued ? '⏳ retrying' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed'))) : '';
         const lead = j.leadPush ? (j.leadPush.ok ? '· CRM ✓' : (j.leadPush.queued ? '· CRM ⏳' : '')) : '';
         return `<div class="card st-${j.status}${past ? ' past' : ''}">
-          ${swap}
+          ${swap}${failed}
           <div class="top">
             <div><div class="who">${esc(j.name)}</div><div class="seq">#${String(j.seq).padStart(4,'0')} · ${j.phone} ${when}</div></div>
             <span class="status ${j.status}">${j.status.replace('_',' ')}</span>
@@ -317,6 +326,15 @@
             <span class="seq" style="align-self:center">puts a fresh copy in the queue</span>
           </div>`;
         }
+        // A failed job on the live board is a kid with nothing. The one thing
+        // that helps is running it again, so lead with it rather than making
+        // the operator find the same job in History.
+        if (j.status === 'failed') {
+          return `<div class="actions">
+            <button class="primary" onclick="reprint('${j.id}')">↻ Print again</button>
+            <button class="ghost" onclick="setStatus('${j.id}','collected')">Dismiss</button>
+          </div>`;
+        }
         return liveActions(j);
       }
 
@@ -324,23 +342,24 @@
         // One button per printer, never "any free printer": the operator has to
         // know which machine is loaded with which colour before a job goes to
         // it, and a dropdown hides that decision behind a second tap.
+        // `send` says whether this machine can take work, which is not the same
+        // question as whether it is green. A printer can be amber — needing the
+        // bed cleared, or not reporting anything — and still be the right place
+        // to send the next job. Only a printer genuinely mid-print is refused.
         const send = printers.map((p) => {
           const s = printerState(p, allJobs);
-          const free = s.cls === 'free';
-          // A printer that is set up but silent used to be unpressable, which
-          // left a whole machine unusable for the day over a status feed. The
-          // file still uploads to its SD card over a different connection, so
-          // the send is offered — flagged, because the printer may need Print
-          // pressing on its own screen.
-          const blind = !free && s.cls === 'dead' && p.configured;
+          const can = s.send || null;                 // 'ok' | 'warn' | 'blind' | null
           const mine = p.id === j.printerId;
           const why = s.cls === 'dead' ? s.st.toLowerCase() : `${s.st.toLowerCase()}${s.sub ? ' — ' + s.sub : ''}`;
-          const title = free ? `Send ${j.colours.layer1} → ${j.colours.layer2} to ${p.name}`
-            : blind ? `${p.name} is not reporting its status. The file will still be copied to its SD card — you may have to press Print on the printer itself.`
+          const title =
+            can === 'ok' ? `Send ${j.colours.layer1} → ${j.colours.layer2} to ${p.name}`
+            : can === 'warn' ? `${p.name}'s last print failed. Take the old print off the bed first, then send this one.`
+            : can === 'blind' ? `${p.name} is not reporting its status. The file will still be copied to its SD card — you may have to press Print on the printer itself.`
             : `${p.name} is ${why}`;
-          return `<button class="pbtn ${free ? 'can' : ''} ${blind ? 'blind' : ''} ${mine ? 'on' : ''}" ${free || blind ? '' : 'disabled'}
+          const mark = can === 'warn' || can === 'blind' ? ' ⚠' : '';
+          return `<button class="pbtn ${can === 'ok' ? 'can' : ''} ${can === 'warn' || can === 'blind' ? 'blind' : ''} ${mine ? 'on' : ''}" ${can ? '' : 'disabled'}
             title="${esc(title)}"
-            onclick="sendTo('${j.id}','${p.id}')">${esc(p.name)}${blind ? ' ⚠' : ''}</button>`;
+            onclick="sendTo('${j.id}','${p.id}')">${esc(p.name)}${mark}</button>`;
         }).join('');
         const assign = printers.length ? `<div class="sendrow">${send}</div>` : '';
 
