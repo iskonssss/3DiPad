@@ -20,7 +20,20 @@ import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
 import { lastCommandSent } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cfg = loadConfig();
+
+// A hand-edited config.json that will not parse is an operator problem, not a
+// programmer one. Print what it says and stop, rather than a stack trace whose
+// last useful line is buried above six frames of module loader.
+let cfg;
+try {
+  cfg = loadConfig();
+} catch (e) {
+  if (!e.friendly) throw e;
+  console.error('');
+  console.error(e.message);
+  console.error('');
+  process.exit(1);
+}
 const queue = new Queue(root);
 outbox.init(root);
 const app = express();
