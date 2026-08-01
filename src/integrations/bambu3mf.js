@@ -181,7 +181,7 @@ const xmlEscape = (s) => String(s ?? '').replace(/[<>&"']/g, (c) =>
  * `meta` is the generator's own output — bbox, colours, estimated minutes and
  * grams — so the printer's screen shows the same numbers the tablet promised.
  */
-export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new Date() }) {
+export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new Date(), extraParts = [] }) {
   const body = Buffer.from(gcode, 'utf8');
   const md5 = crypto.createHash('md5').update(body).digest('hex').toUpperCase();
   const date = now.toISOString().slice(0, 10);
@@ -287,5 +287,10 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
     { name: 'Metadata/slice_info.config', data: sliceInfo },
     { name: 'Metadata/plate_1.gcode', data: body },
     { name: 'Metadata/plate_1.gcode.md5', data: md5 },
+    // For bisecting what the firmware actually requires: tools/probe-start.mjs
+    // builds variants of this archive with parts added, so the difference
+    // between a project the printer opens and one it refuses can be found a
+    // part at a time rather than guessed at.
+    ...extraParts,
   ], now);
 }

@@ -447,7 +447,10 @@ export function watchPrinter(printer, cfg, onStatus) {
     // recognise, this is where it will be visible.
     if (msg?.print?.command !== 'push_status') {
       const text = JSON.stringify(msg).slice(0, 600);
-      health.recent.push({ at: new Date().toISOString(), text });
+      // The parsed message is kept beside the text: the diagnostics print the
+      // text, and tools/probe-start.mjs reads the reply out of `msg` with the
+      // same parser the monitor uses, rather than pattern-matching the string.
+      health.recent.push({ at: new Date().toISOString(), text, msg });
       if (health.recent.length > 12) health.recent.shift();
       if (cfg.integrations.lan.debug) console.log(`[${printer.id}] REPORT ${text}`);
     }
