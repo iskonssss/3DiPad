@@ -86,6 +86,8 @@
       .sendrow { display:flex; gap:7px; flex-wrap:wrap; width:100%; margin-bottom:8px; }
       .pbtn { background:#2b3a63; color:var(--ink); border:2px solid transparent; font-weight:700; }
       .pbtn.can { background:var(--ok); color:#04371f; }
+      /* set up, but not telling us anything — sending works, starting might not */
+      .pbtn.blind { background:var(--warn); color:#241203; }
       .pbtn.on { border-color:var(--accent); }
       .pbtn[disabled] { background:#1b2440; color:#5d6a8c; cursor:not-allowed; }
     </style>
@@ -197,7 +199,17 @@
           return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct, cols, next: 2 };
         }
         if (state === 'FAILED') return { cls: 'busy', st: 'FAILED', sub: who, pct, cols };
-        if (state === 'RUNNING' || state === 'PREPARE') {
+        // Heating is not printing. The printer reports PREPARE while it brings
+        // the bed and nozzle up, and during that its remaining-time estimate is
+        // 0 — which the "1 minute or less" rule read as ALMOST DONE, on a print
+        // that had not laid a single line. Give the wait its own state and only
+        // trust the estimate once the print is genuinely under way.
+        if (state === 'PREPARE' || state === 'SLICING') {
+          return { cls: 'busy', st: 'HEATING UP', sub: [who, 'bed and nozzle'].filter(Boolean).join(' · '), pct: 0, cols, next: 1 };
+        }
+        if (state === 'RUNNING') {
+          const started = (pct ?? 0) > 0;
+          if (!started) return { cls: 'busy', st: 'STARTING', sub: [who, 'first layer'].filter(Boolean).join(' · '), pct: 0, cols };
           const soon = mins != null && mins <= 1;
           return {
             cls: soon ? 'soon' : 'busy',
@@ -279,11 +291,20 @@
         const send = printers.map((p) => {
           const s = printerState(p, allJobs);
           const free = s.cls === 'free';
+          // A printer that is set up but silent used to be unpressable, which
+          // left a whole machine unusable for the day over a status feed. The
+          // file still uploads to its SD card over a different connection, so
+          // the send is offered — flagged, because the printer may need Print
+          // pressing on its own screen.
+          const blind = !free && s.cls === 'dead' && p.configured;
           const mine = p.id === j.printerId;
           const why = s.cls === 'dead' ? s.st.toLowerCase() : `${s.st.toLowerCase()}${s.sub ? ' — ' + s.sub : ''}`;
-          return `<button class="pbtn ${free ? 'can' : ''} ${mine ? 'on' : ''}" ${free ? '' : 'disabled'}
-            title="${esc(free ? `Send ${j.colours.layer1} → ${j.colours.layer2} to ${p.name}` : `${p.name} is ${why}`)}"
-            onclick="sendTo('${j.id}','${p.id}')">${esc(p.name)}</button>`;
+          const title = free ? `Send ${j.colours.layer1} → ${j.colours.layer2} to ${p.name}`
+            : blind ? `${p.name} is not reporting its status. The file will still be copied to its SD card — you may have to press Print on the printer itself.`
+            : `${p.name} is ${why}`;
+          return `<button class="pbtn ${free ? 'can' : ''} ${blind ? 'blind' : ''} ${mine ? 'on' : ''}" ${free || blind ? '' : 'disabled'}
+            title="${esc(title)}"
+            onclick="sendTo('${j.id}','${p.id}')">${esc(p.name)}${blind ? ' ⚠' : ''}</button>`;
         }).join('');
         const assign = printers.length ? `<div class="sendrow">${send}</div>` : '';
 

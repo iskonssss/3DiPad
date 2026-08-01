@@ -42,15 +42,67 @@ export function sdName(filename) {
     .slice(-60);
 }
 
+/* ------------------------------------------------------------------ *
+ * Starting a print                                                     *
+ *                                                                      *
+ * The file uploads over FTPS and appears on the SD card, and then the   *
+ * start command goes out over MQTT and nothing happens. The printer     *
+ * sends no acknowledgement to a publish, so from our side a command it  *
+ * silently discarded looks exactly like one it obeyed.                  *
+ *                                                                      *
+ * Firmware is not consistent about the shape it wants — whether the     *
+ * path carries the /sdcard prefix, and whether a bare .gcode is started *
+ * with `gcode_file` or with `project_file` and a file:// url. Rather    *
+ * than pick one and hope, we try them in order and keep the one the     *
+ * printer actually acts on, which we can see because its own reported   *
+ * state turns over. The winner is logged so it can be pinned in config  *
+ * (integrations.lan.startCommand) and the probing stops.                *
+ * ------------------------------------------------------------------ */
+
+export const START_VARIANTS = ['gcode_file', 'gcode_file_bare', 'project_file'];
+
+/** Which shapes to try, in order. A pinned config value wins outright. */
+export function startVariants(cfg) {
+  const pinned = cfg?.integrations?.lan?.startCommand;
+  if (pinned && pinned !== 'auto') return [pinned];
+  return START_VARIANTS;
+}
+
 /** The MQTT payload that starts a print of an already-uploaded .gcode file. */
 export function buildPrintCommand(remotePath, opts = {}) {
-  return {
-    print: {
-      sequence_id: String(opts.sequenceId ?? Date.now()),
-      command: 'gcode_file',
-      param: remotePath,
-    },
-  };
+  const sequence_id = String(opts.sequenceId ?? Date.now());
+  const name = path.basename(remotePath);
+  const bare = name.replace(/\.[^.]+$/, '');
+
+  switch (opts.variant) {
+    // Same shape Bambu Studio uses for a real project. The flags are print-task
+    // parameters — this is the only route by which bed levelling and flow
+    // calibration can be turned off from our side rather than by leaving G29
+    // out of the file.
+    case 'project_file':
+      return {
+        print: {
+          sequence_id,
+          command: 'project_file',
+          param: '',
+          url: `file://${remotePath}`,
+          subtask_name: bare,
+          timelapse: false,
+          bed_leveling: false,
+          flow_cali: false,
+          vibration_cali: false,
+          layer_inspect: false,
+          use_ams: false,
+          profile_id: '0', project_id: '0', subtask_id: '0', task_id: '0',
+        },
+      };
+    // Some firmware wants the name as it appears in the file browser, with no
+    // /sdcard in front of it.
+    case 'gcode_file_bare':
+      return { print: { sequence_id, command: 'gcode_file', param: name } };
+    default:
+      return { print: { sequence_id, command: 'gcode_file', param: remotePath } };
+  }
 }
 
 /** Upload a local file to the printer's SD card over implicit-TLS FTPS. */
@@ -208,9 +260,33 @@ export async function sendToPrinter(printer, filePath, cfg, opts = {}) {
   } catch (e) {
     return { ok: false, sent: false, stage: 'upload', error: String(e.message || e) };
   }
-  const pub = await publishCommand(printer, buildPrintCommand(up.remotePath, opts), cfg);
-  if (!pub.ok) return { ok: false, sent: false, stage: 'start', uploaded: up.name, error: pub.error };
-  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath };
+
+  const started = await startPrint(printer, up.remotePath, cfg, opts);
+  if (!started.ok) return { ...started, sent: false, uploaded: up.name };
+  return { ok: true, sent: true, name: up.name, remotePath: up.remotePath, variant: started.variant };
+}
+
+/**
+ * Get the printer to act on a file already on its SD card.
+ *
+ * Tries each command shape in turn and stops at the one that visibly starts the
+ * machine. Without a probe (or with a shape pinned in config) this is a single
+ * publish, exactly as the booth has always done it.
+ */
+export async function startPrint(printer, remotePath, cfg, opts = {}) {
+  const variants = startVariants(cfg);
+  const publish = opts.publish || publishCommand;
+  const probe = opts.confirmStarted;
+  let last = null;
+  for (let i = 0; i < variants.length; i++) {
+    const variant = variants[i];
+    const pub = await publish(printer, buildPrintCommand(remotePath, { ...opts, variant }), cfg);
+    if (!pub.ok) return { ok: false, stage: 'start', error: pub.error, variant };
+    last = variant;
+    if (!probe || i === variants.length - 1) break;
+    if (await probe(printer, variant)) break;
+  }
+  return { ok: true, variant: last };
 }
 
 /* ------------------------------------------------------------------ *
@@ -229,6 +305,25 @@ export function readStatus(msg) {
   if (p.subtask_name) out.file = p.subtask_name;
   if (typeof p.print_error === 'number' && p.print_error !== 0) out.errorCode = p.print_error;
   return Object.keys(out).length ? out : null;
+}
+
+/**
+ * A reply to a command we sent, as opposed to a routine status push. Exported
+ * for testing.
+ */
+export function readCommandReply(msg) {
+  const p = msg?.print;
+  if (!p || !p.command) return null;
+  // push_status is the printer talking to itself on a timer, not to us
+  if (p.command === 'push_status' || p.command === 'pushall') return null;
+  if (p.result == null && p.reason == null && p.errno == null) return null;
+  return {
+    command: String(p.command),
+    result: p.result != null ? String(p.result) : null,
+    reason: p.reason != null ? String(p.reason) : (p.errno ? `errno ${p.errno}` : null),
+    sequenceId: p.sequence_id != null ? String(p.sequence_id) : null,
+    at: new Date().toISOString(),
+  };
 }
 
 /**
@@ -268,6 +363,17 @@ export function watchPrinter(printer, cfg, onStatus) {
     health.lastMessageAt = new Date().toISOString();
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
+    // The printer does answer commands — it just answers on the report topic,
+    // mixed in with status. We were parsing these messages for status only and
+    // dropping everything else, so a start command the printer refused was
+    // refused silently. If it is telling us why it will not print, say so.
+    const reply = readCommandReply(msg);
+    if (reply) {
+      health.lastCommand = reply;
+      const bad = reply.result && reply.result.toUpperCase() !== 'SUCCESS';
+      const line = `[${printer.id}] printer answered "${reply.command}": ${reply.result || '?'}${reply.reason ? ` — ${reply.reason}` : ''}`;
+      if (bad) console.error(line); else console.log(line);
+    }
     const status = readStatus(msg);
     if (status) { try { onStatus(status); } catch (e) { console.error('printer status handler failed', e); } }
   });

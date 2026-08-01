@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
+  readCommandReply, startVariants, START_VARIANTS, startPrint,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -145,4 +146,85 @@ test('monitor transitions a job and fires ready exactly once', async () => {
   apply(readStatus({ print: { gcode_state: 'FINISH' } }).state);
   assert.equal(job.status, 'ready');
   assert.deepEqual(readyCalls, ['j1'], 'ready fires once');
+});
+
+test('the start command comes in the shapes different firmware wants', () => {
+  const p = '/sdcard/BLUE-PINK_0001.gcode';
+  const bare = buildPrintCommand(p, { sequenceId: 7, variant: 'gcode_file_bare' });
+  assert.equal(bare.print.command, 'gcode_file');
+  assert.equal(bare.print.param, 'BLUE-PINK_0001.gcode', 'no /sdcard in front of it');
+
+  const proj = buildPrintCommand(p, { sequenceId: 7, variant: 'project_file' });
+  assert.equal(proj.print.command, 'project_file');
+  assert.equal(proj.print.url, 'file:///sdcard/BLUE-PINK_0001.gcode');
+  assert.equal(proj.print.subtask_name, 'BLUE-PINK_0001', 'no extension');
+  // the whole point of this shape: calibration is a print-task parameter, and
+  // this is the only command that carries it
+  assert.equal(proj.print.bed_leveling, false);
+  assert.equal(proj.print.flow_cali, false);
+  assert.equal(proj.print.use_ams, false);
+
+  // default is unchanged from what the booth has been sending all along
+  assert.deepEqual(buildPrintCommand(p, { sequenceId: 7 }), buildPrintCommand(p, { sequenceId: 7, variant: 'gcode_file' }));
+});
+
+test('start shapes are tried in turn until the printer moves', async () => {
+  assert.deepEqual(startVariants({}), START_VARIANTS);
+  assert.deepEqual(startVariants({ integrations: { lan: { startCommand: 'project_file' } } }), ['project_file'],
+    'a pinned command stops the probing');
+
+  const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
+  const run = async (obeys, cfg = {}) => {
+    const tried = [];
+    const r = await startPrint(printer, '/sdcard/x.gcode', cfg, {
+      publish: (_p, payload) => { tried.push(payload.print.command === 'gcode_file' ? (payload.print.param.startsWith('/') ? 'gcode_file' : 'gcode_file_bare') : payload.print.command); return { ok: true }; },
+      confirmStarted: (_p, v) => Promise.resolve(v === obeys),
+    });
+    return { tried, r };
+  };
+
+  // A printer that obeys the first shape is asked exactly once.
+  const first = await run('gcode_file');
+  assert.deepEqual(first.tried, ['gcode_file']);
+  assert.equal(first.r.variant, 'gcode_file');
+
+  // One that only obeys project_file gets there, and we learn which it was.
+  const third = await run('project_file');
+  assert.deepEqual(third.tried, START_VARIANTS);
+  assert.equal(third.r.variant, 'project_file');
+
+  // One that obeys nothing still reports ok — the file is on the SD card and
+  // the operator can press Print. It is confirmStart, not this, that decides
+  // the job did not start.
+  const none = await run('nothing');
+  assert.deepEqual(none.tried, START_VARIANTS);
+  assert.equal(none.r.ok, true);
+
+  // Pinned: one shape, no probing, whatever the printer does.
+  const pinned = await run('nothing', { integrations: { lan: { startCommand: 'gcode_file_bare' } } });
+  assert.deepEqual(pinned.tried, ['gcode_file_bare']);
+
+  // A transport failure stops the loop rather than trying the rest blind.
+  const dead = await startPrint(printer, '/sdcard/x.gcode', {}, {
+    publish: () => ({ ok: false, error: 'MQTT timeout' }),
+    confirmStarted: () => Promise.resolve(false),
+  });
+  assert.equal(dead.ok, false);
+  assert.equal(dead.stage, 'start');
+});
+
+test('the printer answering a command is not mistaken for status', () => {
+  // routine pushes carry no result and must not be logged as command replies
+  assert.equal(readCommandReply({ print: { command: 'push_status', gcode_state: 'RUNNING' } }), null);
+  assert.equal(readCommandReply({ print: { gcode_state: 'IDLE' } }), null);
+  assert.equal(readCommandReply({}), null);
+
+  const r = readCommandReply({ print: { command: 'gcode_file', sequence_id: '12', result: 'FAIL', reason: 'file not found' } });
+  assert.equal(r.command, 'gcode_file');
+  assert.equal(r.result, 'FAIL');
+  assert.equal(r.reason, 'file not found');
+  assert.equal(r.sequenceId, '12');
+
+  // an errno with no reason is still a reason
+  assert.equal(readCommandReply({ print: { command: 'project_file', errno: 5 } }).reason, 'errno 5');
 });

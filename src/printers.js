@@ -176,7 +176,27 @@ export async function checkPrinter(printer, liveState = null, health = null) {
   } else if (health && !health.connected && health.connections > 0) {
     fail('The control connection dropped', 'It reconnects on its own every 10s — check again shortly, and check the Wi-Fi if it keeps dropping');
   } else if (mqttPort) {
-    findings.push({ ok: null, msg: 'No status received yet', hint: 'Give it a few seconds after saving, then check again' });
+    // Not a pass. This test used to end "all okay" here while the dashboard
+    // greyed that printer's button out, because the button needs a reported
+    // state and there isn't one — two screens disagreeing about the same
+    // printer. Say what it means for the booth.
+    findings.push({
+      ok: null,
+      msg: 'No status received yet — the dashboard will show this printer as NO SIGNAL',
+      hint: 'Give it a few seconds after saving and check again. If it stays this way the serial is the thing to re-check. You can still send to it: the file goes to the SD card and you press Print on the printer.',
+    });
+  }
+
+  // Whatever the printer last said about a command we sent it. When a file
+  // uploads but never starts, this is usually the only place the reason exists.
+  if (health?.lastCommand) {
+    const c = health.lastCommand;
+    const good = String(c.result || '').toUpperCase() === 'SUCCESS';
+    findings.push({
+      ok: good ? true : false,
+      msg: `Last command "${c.command}": ${c.result || 'no result'}${c.reason ? ` — ${c.reason}` : ''}`,
+      hint: good ? undefined : 'This is the printer refusing the start command, not a network problem.',
+    });
   }
 
   return { ok: findings.every((f) => f.ok !== false), findings };

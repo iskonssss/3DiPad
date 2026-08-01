@@ -163,7 +163,10 @@
       "_qos_comment": "The printer does not acknowledge MQTT publishes, so the start command goes out at QoS 0 and whether it worked is read from the printer's own reported state. startConfirmMs is how long to give it to turn over before saying it never started; maxDispatchAttempts stops a switched-off printer from spinning the whole queue.",
       "qos": 0,
       "startConfirmMs": 25000,
-      "maxDispatchAttempts": 3
+      "maxDispatchAttempts": 3,
+      "_start_comment": "Firmware disagrees about how a bare .gcode on the SD card is started: whether the path carries the /sdcard prefix, and whether the command is gcode_file or project_file with a file:// url. 'auto' tries each in order and keeps the one the printer visibly acts on, waiting startProbeMs between tries. The server logs the winner — pin it here ('gcode_file', 'gcode_file_bare' or 'project_file') to stop the probing. project_file also carries bed_leveling/flow_cali false as print-task parameters.",
+      "startCommand": "auto",
+      "startProbeMs": 8000
     },
     "printers": [
       {

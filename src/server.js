@@ -343,10 +343,39 @@ function confirmStart(printer) {
   });
 }
 
+/**
+ * Short version of confirmStart, used to find out which start command this
+ * firmware actually obeys. A printer that accepted the command leaves idle
+ * within a few seconds — it starts heating before it does anything else — so
+ * this does not need the full start timeout.
+ */
+function probeStart(printer) {
+  const waitMs = cfg.integrations?.lan?.startProbeMs ?? 8000;
+  const deadline = Date.now() + waitMs;
+  const moved = (s) => s && (['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(s.state) || (s.percent ?? 0) > 0);
+  return new Promise((resolve) => {
+    const poll = () => {
+      if (moved(monitor.states()[printer.id])) return resolve(true);
+      if (Date.now() >= deadline) return resolve(false);
+      setTimeout(poll, 500).unref?.();
+    };
+    poll();
+  });
+}
+
 const dispatcher = createDispatcher({
-  cfg, queue, outDir, confirmStart,
+  cfg, queue, outDir, confirmStart, probeStart,
   onEvent: (e) => {
-    if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
+    if (e.type === 'variant') {
+      const pinned = cfg.integrations?.lan?.startCommand;
+      if (!pinned || pinned === 'auto') {
+        console.log(`[${e.printer.id}] start command that worked: "${e.variant}"`);
+        if (e.variant !== 'gcode_file') {
+          console.log(`           Pin it to skip the probing: integrations.lan.startCommand = "${e.variant}"`);
+        }
+      }
+    }
+    else if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
     else if (e.type === 'failed') console.error(`[${e.printer.id}] send failed at ${e.stage}: ${e.error} — ${e.job.filename} back in the queue`);
     else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
     else if (e.type === 'notstarted') {
@@ -355,6 +384,10 @@ const dispatcher = createDispatcher({
       // if nothing is arriving, nothing is being delivered either — and the
       // usual reason is a serial number that does not match the printer.
       const h = monitor.health()[e.printer.id] || {};
+      if (h.lastCommand) {
+        const c = h.lastCommand;
+        console.error(`           It answered "${c.command}" with ${c.result || '?'}${c.reason ? ` — ${c.reason}` : ''}.`);
+      }
       if (h.connected && !h.messages) {
         console.error(`           The printer has never sent anything on device/${e.printer.serial}/report.`);
         console.error('           That serial number is probably wrong — check Settings > Device on the printer');
