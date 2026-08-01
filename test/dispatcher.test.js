@@ -29,11 +29,15 @@ const PRINTERS = [
   { id: 'A1-2', name: 'Printer 2', ip: '10.0.0.2', serial: 'S2', accessCode: 'c' },
 ];
 
-/** A dispatcher whose printer transport is faked, recording every call. */
+/**
+ * A dispatcher whose printer transport is faked, recording every call.
+ * autoDispatch is switched on here because these tests are about the automatic
+ * path; the booth default is off, covered separately at the bottom.
+ */
 function harness(printers = PRINTERS, sendImpl) {
   const { root, queue, outDir } = scratchQueue();
   const sends = [];
-  const cfg = { integrations: { lan: { enabled: true }, printers } };
+  const cfg = { integrations: { lan: { enabled: true, autoDispatch: true }, printers } };
   const transport = async (printer, filePath, _cfg, opts) => {
     sends.push({ printer: printer.id, seq: opts.sequenceId });
     return sendImpl ? sendImpl(printer, opts) : { ok: true, sent: true, remotePath: '/sdcard/x.gcode' };
@@ -170,7 +174,7 @@ test('a print that never starts is caught and handed back to the operator', asyn
   let asked = 0;
   const confirm = () => { asked++; return Promise.resolve(false); };
   const d2 = createDispatcher({
-    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    cfg: { integrations: { lan: { enabled: true, autoDispatch: true }, printers: [PRINTERS[0]] } },
     queue, outDir: '/tmp', confirmStart: confirm,
     transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
   });
@@ -188,7 +192,7 @@ test('a print that never starts is caught and handed back to the operator', asyn
 test('a confirmed start stays printing', async () => {
   const { queue } = harness([PRINTERS[0]]);
   const d2 = createDispatcher({
-    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    cfg: { integrations: { lan: { enabled: true, autoDispatch: true }, printers: [PRINTERS[0]] } },
     queue, outDir: '/tmp', confirmStart: () => Promise.resolve(true),
     transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
   });
@@ -204,7 +208,7 @@ test('confirmation does not hold up the other printers', async () => {
   let released;
   const slow = () => new Promise((r) => { released = r; });
   const d2 = createDispatcher({
-    cfg: { integrations: { lan: { enabled: true }, printers: PRINTERS } },
+    cfg: { integrations: { lan: { enabled: true, autoDispatch: true }, printers: PRINTERS } },
     queue, outDir: '/tmp', confirmStart: slow,
     transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
   });
@@ -224,7 +228,7 @@ test('the monitor seeing the print run beats a late confirmation timeout', async
   const { queue } = harness([PRINTERS[0]]);
   let release;
   const d2 = createDispatcher({
-    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    cfg: { integrations: { lan: { enabled: true, autoDispatch: true }, printers: [PRINTERS[0]] } },
     queue, outDir: '/tmp',
     confirmStart: () => new Promise((r) => { release = r; }),
     transport: async () => ({ ok: true, sent: true, remotePath: '/sdcard/x.gcode' }),
@@ -237,4 +241,72 @@ test('the monitor seeing the print run beats a late confirmation timeout', async
   release(false);
   await settle();
   assert.equal(queue.get(job.id).status, 'colour_change', 'a stale timeout must not clobber real progress');
+});
+
+// --- the booth default: nothing moves without an operator -------------------
+//
+// Every printer holds particular filament, so which machine a job goes to is a
+// decision about colour. Sending to "whichever is free" is exactly how a kid's
+// drawing comes out in the wrong colour, so by default it does not happen.
+
+function manualHarness(printers = PRINTERS) {
+  const { queue, outDir } = scratchQueue();
+  const sends = [];
+  const cfg = { integrations: { lan: { enabled: true }, printers } };  // autoDispatch absent
+  const dispatcher = createDispatcher({
+    cfg, queue, outDir,
+    transport: async (printer, _f, _c, opts) => {
+      sends.push({ printer: printer.id, seq: opts.sequenceId });
+      return { ok: true, sent: true, remotePath: '/sdcard/x.gcode' };
+    },
+  });
+  return { queue, dispatcher, sends, cfg };
+}
+
+test('a submitted job waits in the queue, even with a printer sitting idle', async () => {
+  const { queue, dispatcher, sends } = manualHarness();
+  const job = addJob(queue, 'Ada');
+  assert.equal(dispatcher.submit(job), null, 'no printer is reserved');
+  await settle();
+  assert.equal(queue.get(job.id).status, 'queued');
+  assert.equal(queue.get(job.id).printerId, null);
+  assert.equal(sends.length, 0, 'nothing was uploaded anywhere');
+});
+
+test('a printer finishing does not pull the next job onto it', async () => {
+  const { queue, dispatcher, sends } = manualHarness();
+  const first = addJob(queue, 'Ada');
+  const second = addJob(queue, 'Bo');
+  await dispatcher.send(first, PRINTERS[0]);      // operator sends the first
+  assert.equal(sends.length, 1);
+
+  queue.setStatus(first.id, 'ready');             // it finishes
+  await dispatcher.pump();
+  await settle();
+
+  assert.equal(queue.get(second.id).status, 'queued', 'the next kid still waits for a person');
+  assert.equal(sends.length, 1, 'and nothing was sent');
+});
+
+test('the operator sending it explicitly does upload and start it', async () => {
+  const { queue, dispatcher, sends } = manualHarness();
+  const job = addJob(queue, 'Ada');
+  dispatcher.submit(job);
+  await settle();
+
+  // this is what the dashboard's printer button does
+  const r = await dispatcher.send(job, PRINTERS[1]);
+  assert.equal(r.sent, true);
+  assert.equal(queue.get(job.id).status, 'printing');
+  assert.equal(queue.get(job.id).printerId, 'A1-2', 'onto the printer that was chosen, not the first free one');
+  assert.deepEqual(sends, [{ printer: 'A1-2', seq: job.seq }]);
+});
+
+test('the automatic path is still there when it is asked for', async () => {
+  const { queue, dispatcher, cfg } = manualHarness();
+  cfg.integrations.lan.autoDispatch = true;
+  const job = addJob(queue, 'Ada');
+  assert.ok(dispatcher.submit(job), 'now it reserves a printer');
+  await settle();
+  assert.equal(queue.get(job.id).status, 'printing');
 });
