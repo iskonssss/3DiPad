@@ -16,6 +16,7 @@ export function loadConfig() {
 
   const cfg = hasUser ? mergeDefaults(defaults, user) : defaults;
   resolveTemplates(cfg);
+  resolveDataDirs(cfg);
   cfg._root = root;
   cfg._configPath = hasUser ? userPath : examplePath;
   cfg._defaulted = hasUser ? missingKeys(defaults, user) : [];
@@ -55,6 +56,45 @@ export function missingKeys(defaults, override, prefix = '') {
 }
 
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Where generated g-code and lead records are written.
+ *
+ * These were pinned to the repo folder, so the only way to get the day's files
+ * into a synced drive was to put the whole checkout there — node_modules, .git
+ * and all — which is a bad place to run from. Point these at the synced folder
+ * instead and leave the app on local disk.
+ *
+ * Absolute paths are used as given; anything else is relative to the project.
+ */
+function resolveDataDirs(cfg) {
+  const out = cfg.output || (cfg.output = {});
+  const at = (v, fallback) => {
+    const p = String(v || fallback);
+    return path.isAbsolute(p) ? p : path.join(root, p);
+  };
+  out.dirResolved = at(out.dir, 'output');
+  out.leadsResolved = at(out.leadsDir, 'leads');
+}
+
+/**
+ * Cloud-synced folders are a poor place to RUN from: the sync client copies
+ * node_modules and .git file by file, locks files mid-write, and answers reads
+ * with placeholders it has to fetch first. Google Drive's "Other computers"
+ * area is a backup of another machine and is normally read-only outright.
+ * Worth one line at startup — it is otherwise diagnosed as random breakage.
+ */
+export function syncedFolderWarning(dir = root) {
+  const p = dir.replace(/\\/g, '/');
+  if (/\/Other computers\//i.test(p)) {
+    return 'This folder is Google Drive > Other computers, which is a read-only backup of another machine. Copy the project to a local folder (e.g. C:\\Users\\<you>\\3DiPad) and run it from there.';
+  }
+  const m = /\/(Google ?Drive|My Drive|OneDrive[^/]*|Dropbox)\//i.exec(p);
+  if (m) {
+    return `This folder is inside ${m[1]}, which syncs every file as it changes — including node_modules and .git. Run the booth from a local folder instead, and point output.dir / output.leadsDir at the synced folder if you want the files backed up.`;
+  }
+  return null;
+}
 
 function resolveTemplates(cfg) {
   const read = (rel, fallback) => {

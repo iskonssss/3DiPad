@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { shapePolygon } from './gcode/geometry.js';
 
-export function saveLead(root, job, design, cfg) {
-  const dir = path.join(root, 'leads');
+/** `dir` is where lead records go — see output.leadsDir. */
+export function saveLead(dir, job, design, cfg) {
   fs.mkdirSync(dir, { recursive: true });
 
   // 1) append to the CSV master list

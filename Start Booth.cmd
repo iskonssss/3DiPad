@@ -9,6 +9,32 @@ rem ===================================================================
 title 3DiPad Booth
 cd /d "%~dp0"
 
+rem A cloud-synced folder is a bad place to RUN from: the sync client copies
+rem node_modules and .git file by file and locks them mid-write. Drive's
+rem "Other computers" area is a read-only backup of a different machine, where
+rem npm and git fail outright. Say so before anything confusing happens.
+echo %CD% | findstr /I /C:"\Other computers\" >nul
+if not errorlevel 1 (
+  echo.
+  echo  ** This folder is Google Drive ^> Other computers. **
+  echo  That is a read-only backup of another machine, so the booth cannot run here.
+  echo  Copy the project to a local folder, e.g. C:\Users\%USERNAME%\3DiPad, and run it there.
+  echo.
+  pause
+  exit /b 1
+)
+echo %CD% | findstr /I /R /C:"\\Google Drive\\" /C:"\\My Drive\\" /C:"\\OneDrive" /C:"\\Dropbox\\" >nul
+if not errorlevel 1 (
+  echo.
+  echo  ** Warning: this folder is inside a cloud-synced drive. **
+  echo  It syncs every file as it changes, including node_modules and .git, which
+  echo  makes the booth slow and can corrupt it mid-fair.
+  echo  Better: copy the project to C:\Users\%USERNAME%\3DiPad and set output.dir
+  echo  and output.leadsDir in config.json to a folder in your Drive instead.
+  echo.
+  pause
+)
+
 where node >nul 2>nul
 if errorlevel 1 (
   echo Node.js is not installed on this laptop.

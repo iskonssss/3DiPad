@@ -110,7 +110,9 @@
     "TEAL"
   ],
   "output": {
+    "_comment": "Where the day's files land. Both accept an absolute path, so they can point at a synced or backup folder while the booth itself runs from local disk — do NOT run the project from inside Google Drive/OneDrive/Dropbox, which sync node_modules and .git file by file and lock them mid-write. e.g. \"dir\": \"G:/My Drive/3DiPad/gcode\"",
     "dir": "output",
+    "leadsDir": "leads",
     "filenamePattern": "{c1}-{c2}_{seq}.gcode"
   },
   "integrations": {

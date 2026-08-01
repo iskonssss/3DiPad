@@ -76,6 +76,27 @@ defaults without re-copying the file.
 - Operator dashboard: `http://<laptop-ip>:3000/dashboard/`
 - Printer setup: `http://<laptop-ip>:3000/dashboard/setup.html`
 
+> ⚠️ **Don't run the project from Google Drive, OneDrive or Dropbox.** The sync client
+> copies `node_modules` (2,000+ files) and `.git` one file at a time and locks them
+> mid-write, which is slow and can corrupt the checkout in the middle of a fair. Drive's
+> **"Other computers"** area is worse — it is a read-only backup of a different machine, so
+> `npm` and `git` fail outright there.
+>
+> To get the day's files into a synced folder, keep the project on local disk and point the
+> **output** at the drive instead:
+>
+> ```json
+> "output": {
+>   "dir": "G:/My Drive/3DiPad/gcode",
+>   "leadsDir": "G:/My Drive/3DiPad/leads"
+> }
+> ```
+>
+> Both accept an absolute path; anything relative hangs off the project folder. The g-code
+> and the lead records (`leads.csv` + a per-design `.svg`) then sync automatically, while
+> the code, `node_modules` and `.git` stay where they belong. The launcher and the server
+> both warn if the project itself is sitting in a synced folder.
+
 On each iPad: open the kiosk URL in Safari → Share → **Add to Home Screen** for a
 full-screen, no-address-bar kiosk. Apple Pencil works out of the box (palm-rejected once
 the pencil is in use).
