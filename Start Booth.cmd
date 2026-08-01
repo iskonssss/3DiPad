@@ -44,6 +44,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Explorer and cloud-sync clients drop desktop.ini into folders they touch.
+rem One inside .git\refs is read as a branch pointer and kills every fetch with
+rem "fatal: bad object refs/desktop.ini". Clear them before pulling.
+if exist .git (
+  del /s /q /f /a .git\desktop.ini >nul 2>nul
+)
+
 echo Updating to the latest version...
 git pull origin main 2>nul
 if errorlevel 1 echo   ^(no update — carrying on with the version already here^)
