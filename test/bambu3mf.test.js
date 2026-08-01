@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { build3mf, zip, solidPng, colourHex } from '../src/integrations/bambu3mf.js';
+import { build3mf, zip, solidPng, colourHex, zipNames, zipMember, isBambuStudio3mf, plateGcodeName } from '../src/integrations/bambu3mf.js';
 import { buildPrintCommand, startVariants, container } from '../src/integrations/bambu.js';
 
 /**
@@ -134,4 +134,28 @@ test('extra parts can be added, for bisecting what the firmware requires', () =>
   // adding nothing changes nothing
   const plain = unzip(build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' }));
   assert.equal(Object.keys(files).length, Object.keys(plain).length + 1);
+});
+
+test('a Bambu Studio 3mf can be told apart from one of ours', () => {
+  // So a reference file can be found in a folder rather than typed as a path.
+  // The last person asked for one pasted the words "path\to" from the example,
+  // which is a fair reading of an example that looks like a command.
+  const ours = build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' });
+  assert.equal(isBambuStudio3mf(ours), false, 'ours has never carried a slicer profile');
+  assert.equal(plateGcodeName(ours), 'Metadata/plate_1.gcode');
+
+  const theirs = build3mf({
+    gcode: GCODE, meta: META, cfg: CFG, name: 'k',
+    extraParts: [{ name: 'Metadata/project_settings.config', data: '{"printer_model":"Bambu Lab A1 mini"}' }],
+  });
+  assert.equal(isBambuStudio3mf(theirs), true);
+
+  // and nothing here may throw on a file that is not a zip at all — the folder
+  // being searched belongs to the user and can contain anything
+  const junk = Buffer.from('this is not a zip, it is a sentence');
+  assert.equal(isBambuStudio3mf(junk), false);
+  assert.equal(plateGcodeName(junk), null);
+  assert.deepEqual(zipNames(junk), []);
+  assert.equal(zipMember(junk, 'anything'), null);
+  assert.equal(zipMember(ours, 'Metadata/nope'), null, 'a missing member is null, not a throw');
 });

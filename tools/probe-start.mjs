@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { generate } from '../src/gcode/engine.js';
-import { build3mf } from '../src/integrations/bambu3mf.js';
+import { build3mf, zipMember, isBambuStudio3mf, plateGcodeName } from '../src/integrations/bambu3mf.js';
 import {
   uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured, readCommandReply,
 } from '../src/integrations/bambu.js';
@@ -42,14 +42,59 @@ if (!printer) {
   process.exit(2);
 }
 
-const reference = flag('reference');
-if (reference && !fs.existsSync(reference)) {
-  console.error(`--reference ${reference} does not exist.`);
-  process.exit(2);
-}
-
 const work = fs.mkdtempSync(path.join(os.tmpdir(), '3dipad-probe-'));
 const waitMs = Number(flag('wait', '18000'));
+
+const given = flag('reference');
+if (given && !fs.existsSync(given)) {
+  console.error('');
+  console.error(`  No such file: ${path.resolve(given)}`);
+  console.error('');
+  console.error('  Run it with no --reference and it will look for one itself:');
+  console.error('     npm run probe-start');
+  console.error('');
+  process.exit(2);
+}
+// Nobody should have to type a Windows path into a terminal to run this. A 3mf
+// Bambu Studio produced is identifiable from the inside — it carries
+// project_settings.config, which ours does not — so the likely folders can be
+// searched and the newest genuine one used.
+const reference = given || findBambuThreeMf();
+const referenceFound = !given && reference;
+
+/** The newest .3mf in the usual places that Bambu Studio, not we, produced. */
+function findBambuThreeMf(dirs = defaultSearchDirs()) {
+  const found = [];
+  for (const dir of dirs) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isFile() || !/\.3mf$/i.test(e.name)) continue;
+      const full = path.join(dir, e.name);
+      try {
+        if (!isBambuStudio3mf(fs.readFileSync(full))) continue;
+        found.push({ full, at: fs.statSync(full).mtimeMs });
+      } catch { /* unreadable or not a zip — not a candidate */ }
+    }
+  }
+  return found.sort((a, b) => b.at - a.at)[0]?.full || null;
+}
+
+function defaultSearchDirs() {
+  const home = os.homedir();
+  return [
+    process.cwd(),
+    path.join(process.cwd(), 'output'),
+    path.join(home, 'Downloads'),
+    path.join(home, 'Desktop'),
+    path.join(home, 'Documents'),
+  ];
+}
+
+/** Which plate inside a 3mf holds the g-code, so --refparam need not be typed. */
+function plateInside(file) {
+  try { return plateGcodeName(fs.readFileSync(file)); } catch { return null; }
+}
 
 /* ---- the files we will try ------------------------------------------- */
 
@@ -78,31 +123,10 @@ function referenceSettings() {
   if (!reference) return null;
   try {
     const buf = fs.readFileSync(reference);
-    return readZipMember(buf, 'Metadata/project_settings.config');
+    return zipMember(buf, 'Metadata/project_settings.config');
   } catch { return null; }
 }
 
-/** Minimal central-directory reader — enough to pull one member out. */
-function readZipMember(buf, want) {
-  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (eocd < 0) return null;
-  const count = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-  for (let i = 0; i < count; i++) {
-    const method = buf.readUInt16LE(p + 10);
-    const csize = buf.readUInt32LE(p + 20);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const local = buf.readUInt32LE(p + 42);
-    const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
-    if (name === want) {
-      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
-      const body = buf.slice(start, start + csize);
-      return method === 8 ? zlib.inflateRawSync(body) : body;
-    }
-    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
-  }
-  return null;
-}
 
 /* ---- the experiments -------------------------------------------------- */
 
@@ -110,12 +134,12 @@ const EXPERIMENTS = [
   reference && {
     name: 'Bambu Studio 3mf, as Bambu sends it',
     why: 'if this starts, the request is fine and our 3mf is the problem',
-    file: reference, dir: 'cache', variant: 'project_file', param: flag('refparam', 'Metadata/plate_2.gcode'),
+    file: reference, dir: 'cache', variant: 'project_file', param: flag('refparam', plateInside(reference)),
   },
   reference && {
     name: 'Bambu Studio 3mf, from the SD card root',
     why: 'separates the directory from the file',
-    file: reference, dir: '', variant: 'project_file', param: flag('refparam', 'Metadata/plate_2.gcode'),
+    file: reference, dir: '', variant: 'project_file', param: flag('refparam', plateInside(reference)),
   },
   {
     name: 'our 3mf, in cache/',
@@ -156,11 +180,16 @@ const busy = () => ['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(String(st
 console.log('');
 console.log(`  Probing ${printer.name} (${printer.id}) at ${printer.ip}`);
 console.log(`  ${EXPERIMENTS.length} experiments, up to ${Math.round(waitMs / 1000)}s each.`);
-if (!reference) {
+if (reference) {
+  console.log(`  Reference:  ${reference}`);
+  console.log(`              ${referenceFound ? 'found automatically' : 'given with --reference'}, using ${plateInside(reference) || '(no plate g-code found inside!)'}`);
+} else {
   console.log('');
-  console.log('  NOTE: no --reference given, so the most useful experiment is missing.');
-  console.log('  Point it at a .3mf that Bambu Studio made and that has printed on this');
-  console.log('  printer:  npm run probe-start -- --reference "C:\\path\\to\\plate.3mf"');
+  console.log('  NO REFERENCE FILE — the most useful experiment cannot run.');
+  console.log('  It looked for a .3mf that Bambu Studio made in:');
+  for (const d of defaultSearchDirs()) console.log(`      ${d}`);
+  console.log('  Put one there (any file that has printed on this printer), or pass it:');
+  console.log('      npm run probe-start -- --reference "<full path to the file>"');
 }
 console.log('');
 

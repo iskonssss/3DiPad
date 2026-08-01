@@ -125,6 +125,65 @@ export function zip(entries, now = new Date()) {
   return Buffer.concat([...locals, cd, end]);
 }
 
+/* --------------------------------------------------------- reading zip --- */
+
+/** Every member name in a zip, read from the central directory. */
+export function zipNames(buf) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) return [];
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) break;
+    const nameLen = buf.readUInt16LE(p + 28);
+    out.push(buf.slice(p + 46, p + 46 + nameLen).toString('utf8'));
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return out;
+}
+
+/** One member's bytes, or null if the archive does not have it. */
+export function zipMember(buf, want) {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) return null;
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) return null;
+    const method = buf.readUInt16LE(p + 10);
+    const csize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
+    if (name === want) {
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const body = buf.slice(start, start + csize);
+      return method === 8 ? zlib.inflateRawSync(body) : body;
+    }
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return null;
+}
+
+/**
+ * Did Bambu Studio make this 3mf, or did we?
+ *
+ * Theirs carries the full slicer profile at Metadata/project_settings.config;
+ * ours has never had one. That is how a reference file can be picked out of a
+ * folder without anyone typing a path — which matters, because the last person
+ * asked to supply one pasted the words "path\to" from the example.
+ */
+export function isBambuStudio3mf(buf) {
+  try { return !!zipMember(buf, 'Metadata/project_settings.config'); } catch { return false; }
+}
+
+/** Which plate inside a 3mf holds the g-code: Metadata/plate_N.gcode. */
+export function plateGcodeName(buf) {
+  try { return zipNames(buf).filter((n) => /^Metadata\/plate_\d+\.gcode$/.test(n)).sort()[0] || null; }
+  catch { return null; }
+}
+
 /* ---------------------------------------------------------------- png ---- */
 
 function chunk(type, data) {
