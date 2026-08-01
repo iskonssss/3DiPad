@@ -112,3 +112,44 @@ test('the example config ships three empty slots for the dashboard to fill', () 
   assert.equal(example.integrations.printers.length, 3);
   for (const p of example.integrations.printers) assert.equal(p.accessCode, '', 'no access code is committed to the repo');
 });
+
+// --- telling apart the ways "no status" happens -----------------------------
+//
+// From a real booth: the file uploaded fine and the print never started. The
+// check said "no status received yet", which is true of every one of these and
+// useful for none of them. The port being open only proves something is
+// listening — the MQTT session's own state is what separates them.
+
+const REACHABLE = { id: 'A1-1', name: 'P1', ip: '203.0.113.0', serial: '0309BA46', accessCode: 'code' };
+
+test('connected but silent points at the serial number', async () => {
+  const r = await checkPrinter(REACHABLE, null, { connected: true, connections: 1, messages: 0 });
+  const bad = r.findings.filter((f) => f.ok === false);
+  const text = bad.map((f) => `${f.msg} ${f.hint}`).join(' ');
+  assert.match(text, /serial number/i, 'names the thing to check');
+  assert.match(text, /0309BA46/, 'and shows the topic it is listening on');
+  assert.equal(r.ok, false, 'this is a failure, not an informational note');
+});
+
+test('never connected points at the access code', async () => {
+  const r = await checkPrinter({ ...REACHABLE, ip: '127.0.0.1' }, null,
+    { connected: false, connections: 0, messages: 0, lastError: 'Connection refused: Not authorized' });
+  const text = r.findings.filter((f) => f.ok === false).map((f) => `${f.msg} ${f.hint}`).join(' ');
+  assert.match(text, /refused the control connection/i);
+  assert.match(text, /Not authorized/, 'passes the printer\'s own words through');
+});
+
+test('a dropped connection says it will come back on its own', async () => {
+  const r = await checkPrinter({ ...REACHABLE, ip: '127.0.0.1' }, null,
+    { connected: false, connections: 3, messages: 12 });
+  const text = r.findings.filter((f) => f.ok === false).map((f) => `${f.msg} ${f.hint}`).join(' ');
+  assert.match(text, /dropped/i);
+  assert.match(text, /reconnects/i);
+});
+
+test('a printer that is talking reports its state and stays a pass', async () => {
+  const r = await checkPrinter({ ...REACHABLE, ip: '127.0.0.1' }, { state: 'IDLE' },
+    { connected: true, connections: 1, messages: 40 });
+  assert.match(r.findings.map((f) => f.msg).join(' '), /Printer says: IDLE/);
+  assert.ok(!r.findings.some((f) => f.ok === false && /serial|control connection/.test(f.msg)));
+});
