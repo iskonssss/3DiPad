@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3DiPad — Printer Setup</title>
+    <style>
+      :root { --bg:#0e1526; --panel:#16203a; --panel2:#1d2947; --line:#2a3a63; --ink:#eaf0ff; --muted:#9fb0d6;
+              --accent:#ffd23f; --ok:#34d399; --warn:#ff8a34; --danger:#ff6b6b; }
+      * { box-sizing:border-box; }
+      body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+             background:var(--bg); color:var(--ink); }
+      header { display:flex; align-items:center; gap:14px; padding:14px 20px; border-bottom:1px solid #ffffff12; flex-wrap:wrap; }
+      header h1 { font-size:20px; margin:0; }
+      a.back { margin-left:auto; color:var(--muted); text-decoration:none; font-size:14px; }
+      a.back:hover { color:var(--ink); }
+      main { padding:18px; display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; max-width:1200px; }
+      .intro { grid-column:1/-1; color:var(--muted); font-size:14px; line-height:1.6; background:var(--panel);
+               border:1px solid #ffffff10; border-radius:14px; padding:14px 16px; margin:0; }
+      .intro b { color:var(--ink); }
+      .card { background:var(--panel); border-radius:16px; padding:16px; border:1px solid #ffffff10; }
+      .card.ready { border-color:var(--ok); }
+      .card h2 { font-size:16px; margin:0 0 2px; display:flex; align-items:center; gap:8px; }
+      .state { font-size:12px; color:var(--muted); margin:0 0 14px; }
+      label { display:block; font-size:12px; color:var(--muted); font-weight:600; margin:11px 0 4px; }
+      input { width:100%; padding:11px 12px; font-size:15px; font-family:inherit; color:var(--ink);
+              background:var(--panel2); border:1.5px solid var(--line); border-radius:10px; outline:none; }
+      input:focus { border-color:var(--accent); }
+      .row { display:flex; gap:9px; margin-top:14px; }
+      button { flex:1; appearance:none; border:0; cursor:pointer; font-family:inherit; font-weight:700; font-size:14px;
+               padding:11px 10px; border-radius:10px; background:var(--accent); color:#201a05; }
+      button.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); }
+      button:disabled { opacity:.5; cursor:default; }
+      .findings { margin:13px 0 0; padding:0; list-style:none; font-size:13px; line-height:1.5; }
+      .findings li { display:flex; gap:8px; padding:5px 0; border-top:1px solid #ffffff0d; }
+      .findings li:first-child { border-top:0; }
+      .findings .mark { flex:none; width:16px; text-align:center; }
+      .findings .ok .mark { color:var(--ok); }
+      .findings .no .mark { color:var(--danger); }
+      .findings .hm .mark { color:var(--warn); }
+      .findings .hint { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+      .note { font-size:12px; color:var(--muted); margin-top:10px; line-height:1.5; }
+      .busy { color:var(--muted); font-size:13px; margin-top:12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>🔌 Printer Setup</h1>
+      <a class="back" href="./">← Back to the booth</a>
+    </header>
+
+    <main>
+      <p class="intro">
+        Get these three from the <b>printer's own screen</b>, then press Save and Test.
+        <br />• <b>IP address</b> and <b>Access Code</b>: Settings → Network, with <b>LAN Mode ON</b>
+        <br />• <b>Serial</b>: Settings → Device
+        <br />The access code changes whenever LAN Mode is switched off and on again, so re-read it if a printer stops answering.
+      </p>
+    </main>
+
+    <script>
+      const $ = (s, r = document) => r.querySelector(s);
+      const esc = (v) => String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+      const cards = new Map();
+
+      /**
+       * Build each slot once, then only ever update the parts that change.
+       * Re-rendering on the poll wiped whatever the operator was halfway through
+       * typing, and threw away the test results they had just asked for.
+       */
+      async function load() {
+        const r = await (await fetch('../api/printers')).json();
+        const main = $('main');
+        for (const p of r.printers) {
+          const known = cards.get(p.slot);
+          if (known) refresh(known, p);
+          else { const el = cardFor(p); cards.set(p.slot, el); main.appendChild(el); }
+        }
+      }
+
+      function refresh(el, p) {
+        el.classList.toggle('ready', p.configured);
+        const live = p.live?.state ? `${p.live.state}${p.live.percent != null ? ' · ' + p.live.percent + '%' : ''}` : null;
+        $('.state', el).textContent = p.configured
+          ? (live ? '● ' + live : 'Set up — waiting for status')
+          : 'Not set up yet';
+        $('.codelabel', el).textContent = 'Access code'
+          + (p.accessCodeMask ? ` — saved as ${p.accessCodeMask}, leave blank to keep it` : '');
+        $('.code', el).placeholder = p.accessCodeMask ? 'unchanged' : '8 characters';
+        // only refill a field the operator is not busy in
+        for (const [cls, val] of [['.ip', p.ip], ['.serial', p.serial]]) {
+          const input = $(cls, el);
+          if (document.activeElement !== input && input.dataset.dirty !== '1') input.value = val;
+        }
+      }
+
+      function cardFor(p) {
+        const el = document.createElement('div');
+        el.className = 'card' + (p.configured ? ' ready' : '');
+        const live = p.live?.state ? `${p.live.state}${p.live.percent != null ? ' · ' + p.live.percent + '%' : ''}` : null;
+        el.innerHTML = `
+          <h2>${esc(p.name)} <span style="color:var(--muted);font-weight:400;font-size:13px">${esc(p.id)}</span></h2>
+          <p class="state">${p.configured ? (live ? '● ' + esc(live) : 'Set up — waiting for status') : 'Not set up yet'}</p>
+          <label>IP address</label>
+          <input class="ip" inputmode="decimal" placeholder="192.168.10.105" value="${esc(p.ip)}" />
+          <label>Serial number</label>
+          <input class="serial" placeholder="0309BA461400280" value="${esc(p.serial)}" />
+          <label class="codelabel">Access code${p.accessCodeMask ? ` — saved as ${esc(p.accessCodeMask)}, leave blank to keep it` : ''}</label>
+          <input class="code" placeholder="${p.accessCodeMask ? 'unchanged' : '8 characters'}" autocomplete="off" />
+          <div class="row">
+            <button class="save">Save</button>
+            <button class="ghost test">Test</button>
+          </div>
+          <div class="out"></div>`;
+
+        const out = $('.out', el);
+        // a field the operator has edited is theirs until they save
+        for (const cls of ['.ip', '.serial']) {
+          $(cls, el).addEventListener('input', (e) => { e.target.dataset.dirty = '1'; });
+        }
+        const body = () => ({
+          ip: $('.ip', el).value.trim(),
+          serial: $('.serial', el).value.trim(),
+          accessCode: $('.code', el).value.trim(),
+        });
+        const post = (url, payload) => fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}),
+        }).then((r) => r.json());
+
+        $('.save', el).addEventListener('click', async () => {
+          out.innerHTML = '<p class="busy">Saving…</p>';
+          const r = await post(`../api/printers/${p.slot}`, body());
+          if (!r.ok) { out.innerHTML = list([{ ok: false, msg: r.error || 'Could not save' }]); return; }
+          $('.code', el).value = '';
+          for (const cls of ['.ip', '.serial']) delete $(cls, el).dataset.dirty;
+          out.innerHTML = '<p class="busy">Saved. Checking the printer…</p>';
+          await load();      // picks up the new mask and state
+          await runTest();   // findings land last, and stay put
+        });
+
+        $('.test', el).addEventListener('click', runTest);
+
+        async function runTest() {
+          out.innerHTML = '<p class="busy">Checking…</p>';
+          const r = await post(`../api/printers/${p.slot}/test`);
+          out.innerHTML = list(r.findings || [{ ok: false, msg: r.error || 'Check failed' }])
+            + (r.ok ? '<p class="note">This printer is ready. Drawings sent from an iPad will print on it.</p>' : '');
+        }
+
+        return el;
+      }
+
+      function list(findings) {
+        return '<ul class="findings">' + findings.map((f) => {
+          const cls = f.ok === true ? 'ok' : f.ok === false ? 'no' : 'hm';
+          const mark = f.ok === true ? '✓' : f.ok === false ? '✕' : '·';
+          return `<li class="${cls}"><span class="mark">${mark}</span><span>${esc(f.msg)}`
+            + (f.hint ? `<span class="hint">${esc(f.hint)}</span>` : '') + '</span></li>';
+        }).join('') + '</ul>';
+      }
+
+      load();
+      setInterval(load, 15000);
+    </script>
+  </body>
+</html>

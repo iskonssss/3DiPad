@@ -44,15 +44,37 @@ The kid's **name and phone are not in the filename** — they live in the lead r
 
 ## Quick start
 
+**On the booth laptop, no terminal needed:** double-click **`Start Booth.cmd`** (Windows) or
+run `./start-booth.sh` (macOS/Linux). It updates to the latest version, installs anything
+missing the first time, starts the server and opens the dashboard. Leave the window open;
+closing it stops the booth.
+
+The address to open on the iPads is printed when it starts:
+
+```
+  ON THE IPADS, OPEN:
+     http://192.168.10.162:3000      (Wi-Fi)
+```
+
+Printers are set up from **Printer setup** on the dashboard — no config file editing.
+
+<details>
+<summary>The equivalent by hand</summary>
+
 ```bash
 npm install
-cp config.example.json config.json     # edit for your booth
-cp .env.example .env                    # add secrets here (never committed)
+cp .env.example .env                    # secrets only; config.json is written for you
 npm start
 ```
 
+`config.json` is created on first use from `config.example.json`, and any setting added to
+the example later is picked up automatically — a booth set up months ago still gets new
+defaults without re-copying the file.
+</details>
+
 - Kiosk (open on each tablet): `http://<laptop-ip>:3000/`
 - Operator dashboard: `http://<laptop-ip>:3000/dashboard/`
+- Printer setup: `http://<laptop-ip>:3000/dashboard/setup.html`
 
 On each iPad: open the kiosk URL in Safari → Share → **Add to Home Screen** for a
 full-screen, no-address-bar kiosk. Apple Pencil works out of the box (palm-rejected once
@@ -147,19 +169,34 @@ automatically, and the print's progress drives the job forward with no operator 
 | `FINISH` | `ready` | **fires the pickup WhatsApp automatically** |
 | `FAILED` | `failed` | flagged red for the operator |
 
-**Setup**
+**Setup — from the dashboard**
 
-1. On each printer: **Settings → Network → LAN Mode ON**. Note its **Access Code** and **Serial**.
-2. Put the IP, serial and access code into `config.json → integrations.printers[]`,
-   and set `integrations.lan.enabled = true`.
-3. Verify before the fair:
-   ```bash
-   npm run test-printer            # checks every configured printer
-   npm run test-printer A1-2       # just one
-   npm run test-printer A1-2 send  # ALSO uploads a sample and starts a real print
-   ```
-   It checks port reachability, FTPS login (proves the access code), and MQTT state — and
-   tells you exactly which step failed.
+1. On each printer: **Settings → Network → LAN Mode ON**. Note its **Access Code**
+   (Settings → Network) and **Serial** (Settings → Device).
+2. Open **`/dashboard/setup.html`**, type them into a printer slot, press **Save**.
+   Saving turns LAN auto-send on and reopens the printer connection straight away — no
+   restart. Access codes are stored in `config.json` (git-ignored) and are never sent back
+   to the browser, so leaving the field blank keeps the one already saved.
+3. Press **Test**. It reports reachability, whether the access code was accepted, and the
+   printer's live state, with something to try for each failure.
+
+> The access code changes whenever LAN Mode is switched off and on again. If a printer
+> stops answering, re-read it from the printer screen — that is usually all it is.
+
+<details>
+<summary>The equivalent by hand</summary>
+
+```bash
+node tools/set-printer.mjs 1 192.168.10.105 0309BA461400280 e94e9beb
+npm run test-printer            # checks every configured printer
+npm run test-printer A1-2       # just one
+npm run test-printer A1-2 send  # ALSO uploads a sample and starts a real print
+```
+
+`test-printer` opens its own MQTT connection, and the printer only accepts one at a time —
+stop the booth server first, or use the dashboard's Test button, which reads the connection
+the server already holds.
+</details>
 
 **How it works:** FTPS upload (implicit TLS, port 990, user `bblp`, password = access code)
 puts the `.gcode` on the printer's SD card, then an MQTT publish (TLS, port 8883) to
@@ -167,10 +204,11 @@ puts the `.gcode` on the printer's SD card, then an MQTT publish (TLS, port 8883
 subscribed for status. Both use the printer's self-signed certificate, so TLS verification is
 disabled for these direct-to-printer connections — traffic stays on your booth LAN.
 
-> ⚠️ **Verify on real hardware before the fair.** The protocol implementation has not been
-> run against a physical A1 — `npm run test-printer` is there to prove it end to end in one
-> command. Bambu firmware versions differ in how strictly they gate LAN access; if a step
-> fails, the message tells you whether it was reachability, credentials, or the start command.
+The start command is published at **QoS 0**: the printer sends no PUBACK, so waiting for one
+times out even when the command worked. Because that removes the only transport-level signal,
+the server instead watches the printer's own reported state for `startConfirmMs` (25 s) after
+a send. If it never turns over from idle, the job goes back to `assigned` with the file still
+on the SD card, and the log says to start it from the printer screen or the dashboard.
 
 **If it fails, nothing is lost:** the design is still generated, saved, and recorded as a lead;
 the job simply stays `queued` for manual dispatch from the dashboard, and the error is logged.
