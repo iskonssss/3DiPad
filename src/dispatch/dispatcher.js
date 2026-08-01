@@ -16,7 +16,7 @@
 import path from 'node:path';
 import { sendToPrinter } from '../integrations/bambu.js';
 
-export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter, confirmStart = null }) {
+export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter, confirmStart = null, probeStart = null }) {
   let running = false;
   let again = false;
 
@@ -49,8 +49,13 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
   /** Upload + start a job already assigned to `printer`. Never throws. */
   async function send(job, printer) {
     const filePath = path.join(outDir, job.filename);
-    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq }))
+    // probeStart lets the transport find out which start command this firmware
+    // obeys, by watching whether the printer moved after each one. It is a short
+    // wait (a few seconds each) and only happens while the shape is unknown.
+    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart }))
       .catch((e) => ({ ok: false, stage: 'send', error: String(e.message || e) }));
+
+    if (r.variant) onEvent({ type: 'variant', job, printer, variant: r.variant });
 
     if (r.sent) {
       queue.setStatus(job.id, 'printing', { printerId: printer.id, dispatchAttempts: 0, dispatch: { ok: true, remotePath: r.remotePath } });
