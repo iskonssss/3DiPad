@@ -380,11 +380,21 @@ test('the visible top layer is printed slower than the buried ones', () => {
   const layers = gcode.split(/^; layer /m).slice(1);
   const feedsOf = (L) => [...L.matchAll(/^G1 X[-\d.]+ Y[-\d.]+ E[\d.]+ F(\d+)/gm)].map((m) => +m[1]);
 
+  // The fill, not the walls: a top layer still has perimeter loops around it,
+  // and those run at the perimeter feedrate on every layer. Take the feedrate
+  // most of the moves use, which is the fill.
+  const commonest = (feeds) => [...feeds.reduce((m, f) => m.set(f, (m.get(f) || 0) + 1), new Map())]
+    .sort((a, b) => b[1] - a[1])[0][0];
+
   const top = feedsOf(layers[layers.length - 1]);
   const buried = feedsOf(layers[Math.floor(layers.length / 2)]);
   assert.ok(top.length && buried.length, 'found extrusions on both layers');
-  assert.equal(Math.max(...top), cfg.speed.topSurface, 'the top layer runs at the top-surface feedrate');
-  assert.ok(Math.max(...top) < Math.max(...buried), 'and slower than a buried layer');
+  assert.equal(commonest(top), cfg.speed.topSurface, 'the top layer runs at the top-surface feedrate');
+  assert.ok(commonest(top) < commonest(buried), 'and slower than a buried layer');
+  // The setting only means something if it sits below the volumetric ceiling —
+  // otherwise the cap flattens it into the same speed as everything else.
+  const cap = (cfg.speed.maxVolumetricMmps * 60) / (cfg.build.lineWidth * cfg.build.layerHeight);
+  assert.ok(cfg.speed.topSurface < cap, `topSurface ${cfg.speed.topSurface} is above the flow cap ${cap.toFixed(0)}`);
 });
 
 test('the colour change parks, pauses, purges and wipes', () => {
@@ -428,4 +438,50 @@ test('the colour change can be put back to a plain pause', () => {
   const custom = { ...cfg, colourChange: { gcode: ['M600 ; my own thing'] } };
   const g2 = generate(design('rectangle'), custom).gcode;
   assert.match(g2.slice(g2.indexOf('COLOUR CHANGE'), g2.indexOf('DESIGN (colour 2)')), /M600 ; my own thing/);
+});
+
+test('no move asks the hotend for more plastic than it can melt', () => {
+  // ORANGE-BLACK_0010 failed three times, with three different filaments, and
+  // always in the infill: it tore, blobbed, and finally knocked the plate off
+  // the bed. The cause was flow, not filament — sparse infill was commanded at
+  // 200mm/s, which at 0.28 x 0.45 is 25.2 mm3/s against an A1 mini hotend that
+  // melts about 12. Nothing in the generator knew the ceiling existed.
+  const cap = cfg.speed.maxVolumetricMmps;
+  assert.ok(cap > 0, 'the config must carry a volumetric ceiling');
+
+  const { gcode, meta } = generate(design('rectangle'), cfg);
+  const area = Math.PI * (cfg.build.filamentDiameter / 2) ** 2;
+
+  let x = 0, y = 0, feed = 0, worst = 0, worstLine = '';
+  for (const raw of gcode.split('\n')) {
+    const line = raw.split(';')[0].trim();
+    if (!/^G[01]\b/.test(line)) continue;
+    const g = Object.fromEntries([...line.matchAll(/([XYZEF])(-?[\d.]+)/g)].map((m) => [m[1], +m[2]]));
+    if (g.F != null) feed = g.F;
+    const nx = g.X ?? x, ny = g.Y ?? y;
+    const d = Math.hypot(nx - x, ny - y);
+    // Only printing moves: the purge and retracts move filament without moving
+    // the head, and are not limited by the same thing.
+    if ((g.E ?? 0) > 0 && d > 0.05) {
+      const flow = (g.E * area / d) * (feed / 60);
+      if (flow > worst) { worst = flow; worstLine = line; }
+    }
+    x = nx; y = ny;
+  }
+  assert.ok(worst <= cap * 1.02, `asks for ${worst.toFixed(1)} mm3/s, ceiling is ${cap}: ${worstLine}`);
+  assert.ok(meta.flowClampedMoves > 0, 'the cap should be doing something at these speeds');
+});
+
+test('the flow cap slows the print rather than changing the part', () => {
+  const uncapped = { ...cfg, speed: { ...cfg.speed, maxVolumetricMmps: 0 } };
+  const a = generate(design('rectangle'), cfg);
+  const b = generate(design('rectangle'), uncapped);
+  // Same plastic, same toolpath — only the F words and the estimate differ.
+  // (Line counts do differ: M73 progress marks are taken on a time tick, and a
+  // slower print earns more of them.)
+  const path = (g) => g.split('\n').filter((l) => /^G1 X/.test(l)).map((l) => l.replace(/ F\d+/, ''));
+  assert.equal(a.meta.estGrams, b.meta.estGrams);
+  assert.deepEqual(path(a.gcode), path(b.gcode));
+  assert.ok(a.meta.estMinutes > b.meta.estMinutes, 'a capped print takes longer, honestly');
+  assert.equal(b.meta.flowClampedMoves, 0, 'cap off means nothing is clamped');
 });

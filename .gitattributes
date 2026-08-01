@@ -1,0 +1,23 @@
+# Line endings, pinned.
+#
+# The booth laptop is Windows, where Git's default (core.autocrlf=true) checks
+# files out with CRLF endings. `npm run build` — which "Start Booth.cmd" runs on
+# every launch — writes public/*.html with LF. So every single launch left those
+# two files "modified" against a checkout that only differed in invisible
+# characters, and the next `git pull` refused to run:
+#
+#     error: Your local changes to the following files would be overwritten
+#            by merge: public/index.html, public/standalone.html
+#
+# Pinning everything to LF means the file on disk matches the file in the repo
+# byte for byte, so the build no longer dirties the tree.
+* text=auto eol=lf
+
+# The two exceptions. Windows' batch interpreter is genuinely unhappy with LF
+# endings in some constructs, and binaries must never be touched at all.
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.gcode text eol=lf

@@ -436,6 +436,30 @@ const server = app.listen(port, () => {
   }
 });
 
+/**
+ * Starting the booth twice is the easiest mistake to make — close the window
+ * without stopping the server, double-click the launcher again, and Node dumps
+ * a twenty-line stack trace whose actual meaning is "it is already running".
+ * At the fair that reads as a broken booth. Say the true thing instead.
+ */
+server.on('error', (err) => {
+  if (err.code !== 'EADDRINUSE') throw err;
+  console.error('');
+  console.error(`  The booth server is already running on port ${port}.`);
+  console.error('');
+  console.error('  If that is the one you want, just open it:');
+  console.error(`     http://localhost:${port}/dashboard/`);
+  console.error('');
+  console.error('  If it is a leftover from earlier and you want a fresh one, stop it first:');
+  console.error(process.platform === 'win32'
+    ? `     Get-NetTCPConnection -LocalPort ${port} | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`
+    : `     kill $(lsof -ti tcp:${port})`);
+  console.error('');
+  console.error(`  Or run this one somewhere else:   PORT=3001 npm start`);
+  console.error('');
+  process.exit(1);
+});
+
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => { monitor.stop(); server.close(() => process.exit(0)); });
 }

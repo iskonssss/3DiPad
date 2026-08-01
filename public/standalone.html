@@ -390,11 +390,12 @@ const CFG = {
   "speed": {
     "infill": 12000,
     "solidInfill": 9000,
-    "topSurface": 6000,
+    "topSurface": 5400,
     "perimeter": 6000,
     "bead": 3000,
     "travel": 15000,
     "firstLayer": 3000,
+    "maxVolumetricMmps": 12,
     "zHopMm": 0.4,
     "retractMm": 0.8,
     "retractSpeed": 2400
@@ -413,9 +414,9 @@ const CFG = {
     "bedFirst": 60
   },
   "limits": {
-    "maxPrintMinutes": 15,
+    "maxPrintMinutes": 18,
     "maxStrokeLengthMm": 5000,
-    "warnPrintMinutes": 13
+    "warnPrintMinutes": 16
   },
   "colourChange": {
     "mode": "purge",
@@ -1487,6 +1488,10 @@ function generate(design, cfg) {
       drawnLengthMm: Math.round(totalLength(strokes)),
       estMinutes: +estMinutes.toFixed(1), estGrams: +grams.toFixed(1),
       overBudget: estMinutes > cfg.limits.maxPrintMinutes, nearBudget: estMinutes > cfg.limits.warnPrintMinutes,
+      // How much of the print is limited by how fast the hotend can melt rather
+      // than by the speed settings. Non-zero is normal and healthy: it means the
+      // speeds are aspirations and the ceiling is being respected.
+      flowClampedMoves: raw.flowClampedMoves, flowClampedMm: raw.flowClampedMm,
     },
   };
 }
@@ -1705,8 +1710,39 @@ function makeEmitter(cfg, crossSection) {
   };
 
   const eFor = (len, width, h) => (width * h * len) / crossSection;
+
+  /**
+   * The hotend's melt rate, not the motion system's speed, is what actually
+   * limits a print. An A1 mini can move at 250 mm/s all day; it can only melt
+   * about 12 mm³ of PLA per second. Asking for more does not print faster — the
+   * extruder grinds, what comes out is half-melted and lumpy, the nozzle then
+   * ploughs through its own blobs, and on a 100 x 40 plate the sideways force
+   * eventually knocks the part off the bed.
+   *
+   * We were asking for 25.2 mm³/s on sparse infill and 18.9 on solid, against
+   * a ceiling of 12 — this is why ORANGE-BLACK_0010 tore itself apart three
+   * times with three different filaments. Bambu Studio caps every extruding
+   * move the same way (filament_max_volumetric_speed = 12 in the profile on
+   * this very printer); its 270 mm/s infill setting is a ceiling that is never
+   * reached at this layer height.
+   *
+   * Capping here, at the one place every extruding move passes through, means
+   * the speed settings can stay as aspirations and the geometry decides what is
+   * actually achievable.
+   */
+  const maxVol = s.maxVolumetricMmps ?? 12;
+  let clamped = 0, clampedMm = 0;
+  function capFeed(feed, width, h, len) {
+    if (!(maxVol > 0)) return feed;
+    const limit = (maxVol * 60) / (width * h);   // mm/min at this cross-section
+    if (feed <= limit) return feed;
+    clamped++; clampedMm += len;
+    return limit;
+  }
+
   return {
-    lines, progress, meta: () => ({ timeMin, filamentMm }),
+    lines, progress,
+    meta: () => ({ timeMin, filamentMm, flowClampedMoves: clamped, flowClampedMm: +clampedMm.toFixed(1) }),
     comment: (t) => lines.push('; ' + t),
     raw: (t) => { if (t && t.length) lines.push(t); },
     setZ(z) { lines.push(`G1 Z${z.toFixed(3)} F${Math.round(s.travel)}`); timeMin += Math.abs(z - pos.z) / s.travel; pos.z = z; tick(); },
@@ -1734,8 +1770,9 @@ function makeEmitter(cfg, crossSection) {
       const L = Math.hypot(x - pos.x, y - pos.y);
       if (L < 1e-4) return;
       const e = eFor(L, width, h);
-      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(feed)}`);
-      timeMin += L / feed; filamentMm += e; pos.x = x; pos.y = y; tick();
+      const f = capFeed(feed, width, h, L);
+      lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(f)}`);
+      timeMin += L / f; filamentMm += e; pos.x = x; pos.y = y; tick();
     },
   };
 }
