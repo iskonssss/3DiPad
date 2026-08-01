@@ -346,3 +346,33 @@ test('a collected job can be sent to a printer again', async () => {
   assert.equal(queue.get(job.id).status, 'printing', 'it comes back out of history and prints');
   assert.equal(sends.length, 1);
 });
+
+test('an old job can be run again without rewriting what happened to it', () => {
+  const { queue: q } = scratchQueue();
+  const first = q.add({ id: 'j1', seq: q.nextSeq(), filename: 'RED-BLUE_0001.gcode', contact: { name: 'Ana' }, colours: { layer1: 'RED', layer2: 'BLUE' }, printerId: null });
+  q.setStatus(first.id, 'printing', { printerId: 'A1-1' });
+  q.setStatus(first.id, 'ready', { notify: { ok: true } });
+  q.setStatus(first.id, 'collected');
+
+  const again = q.reprint(first.id);
+  assert.ok(again, 'reprint returns the new job');
+  assert.notEqual(again.id, first.id, 'a new job, not the old one moved back');
+  assert.equal(again.status, 'queued');
+  assert.equal(again.filename, first.filename, 'points at the g-code already on disk');
+  assert.equal(again.reprintOf, first.id);
+  assert.equal(again.printerId, null, 'not still on the printer it used last time');
+  assert.equal(again.notify, null, 'the first run notified — this one has not');
+  assert.equal(again.history.length, 1, 'its own history starts here');
+
+  // the original is untouched: it really was collected
+  assert.equal(q.get(first.id).status, 'collected');
+  assert.equal(q.get(first.id).printerId, 'A1-1');
+
+  // and it shows on the live board again, which history alone did not
+  assert.ok(q.active().some((j) => j.id === again.id));
+  assert.ok(!q.active().some((j) => j.id === first.id));
+
+  // a reprint of a reprint still points back at the original
+  assert.equal(q.reprint(again.id).reprintOf, first.id);
+  assert.equal(q.reprint('nope'), null);
+});

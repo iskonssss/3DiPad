@@ -139,7 +139,7 @@
       async function renderHistory() {
         const d = await (await fetch('/api/history?limit=300')).json();
         document.getElementById('histbar').textContent =
-          `${d.jobs.length} of ${d.total} jobs, newest first. Press a printer to run one again — the file is still on disk.`;
+          `${d.jobs.length} of ${d.total} jobs, newest first. "Print again" puts a fresh copy of a finished job in the queue — the g-code is still on disk.`;
         const board = document.getElementById('board');
         if (!d.jobs.length) { board.innerHTML = '<div class="empty">Nothing has been submitted yet.</div>'; return; }
         board.innerHTML = d.jobs.map((j) => card(j, true)).join('');
@@ -254,6 +254,13 @@
                       style="background:${COLOUR_HEX[String(name).toUpperCase()]||'#888'}"></span>`;
       }
       function dot(name) { return `<span class="dot" style="background:${COLOUR_HEX[name]||'#888'}"></span>`; }
+      // The keyring hole is stored as the coordinates the generator settled on.
+      // Printed straight into the card that read "Hole: [object Object]".
+      function hole(h) {
+        if (!h) return '';
+        if (typeof h === 'object') return `<span>Hole: ${Math.round(h.x)}, ${Math.round(h.y)} mm</span>`;
+        return `<span>Hole: ${esc(h)}</span>`;
+      }
       function card(j, past = false) {
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
         const when = past && j.createdAt
@@ -275,16 +282,32 @@
           </div>
           <img class="prev" src="${j.previewUrl}" alt="design" onerror="this.style.display='none'"/>
           <div class="meta">
-            <span>Hole: ${j.hole}</span><span>~${j.est} min</span>${pName?`<span>${pName}</span>`:''}
+            ${hole(j.hole)}<span>~${j.est} min</span>${pName?`<span>${pName}</span>`:''}
+            ${j.reprintOf?`<span>↻ reprint</span>`:''}
             <a class="dl" href="${j.gcodeUrl}" download>⬇ ${j.filename}</a>
             ${j.driveLink?`<a class="dl" href="${j.driveLink}" target="_blank">Drive</a>`:''}
             ${notify?`<span>${notify}</span>`:''}${lead?`<span>${lead}</span>`:''}
           </div>
-          ${actions(j)}
+          ${actions(j, past)}
         </div>`;
       }
 
-      function actions(j) {
+      function actions(j, past = false) {
+        // A finished job's buttons are about running it again, not about moving
+        // it through a lifecycle it already completed. And "send to printer 2"
+        // only works while printer 2 is free — re-queueing works whatever every
+        // machine happens to be doing right now, which is the normal case when
+        // you are looking at history in the middle of a busy booth.
+        if (past && ['collected', 'failed', 'ready'].includes(j.status)) {
+          return `<div class="actions">
+            <button class="primary" onclick="reprint('${j.id}')">↻ Print again</button>
+            <span class="seq" style="align-self:center">puts a fresh copy in the queue</span>
+          </div>`;
+        }
+        return liveActions(j);
+      }
+
+      function liveActions(j) {
         // One button per printer, never "any free printer": the operator has to
         // know which machine is loaded with which colour before a job goes to
         // it, and a dropdown hides that decision behind a second tap.
@@ -324,6 +347,13 @@
         })).json();
         if (!r.ok) alert('Could not send: ' + (r.error || r.result?.error || 'unknown'));
         tick();
+      }
+
+      async function reprint(id) {
+        const r = await (await fetch(`/api/jobs/${id}/reprint`, { method: 'POST' })).json();
+        if (!r.ok) { alert('Could not queue it again: ' + (r.error || 'unknown')); return; }
+        // Back to the live board, where the new copy is now waiting to be placed.
+        if (showingHistory) toggleView(); else tick();
       }
 
       async function setStatus(id, status, printerId) {

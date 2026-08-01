@@ -157,6 +157,23 @@ app.get('/api/history', (req, res) => {
   });
 });
 
+/**
+ * Run an old job again. Makes a new job pointing at the same g-code file and
+ * puts it in the queue, so it can be placed on a printer from the normal board
+ * even when every machine is busy right now.
+ */
+app.post('/api/jobs/:id/reprint', (req, res) => {
+  const job = queue.reprint(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
+  if (!fs.existsSync(path.join(outDir, job.filename))) {
+    queue.setStatus(job.id, 'failed', { dispatch: { ok: false, error: 'g-code file is gone' } });
+    return res.status(410).json({ ok: false, error: `${job.filename} is no longer in the output folder` });
+  }
+  console.log(`[reprint] ${job.filename} queued again as #${String(job.seq).padStart(4, '0')}`);
+  dispatcher.pump();
+  res.json({ ok: true, job: publicJob(job) });
+});
+
 app.post('/api/jobs/:id/status', async (req, res) => {
   const { status, printerId } = req.body || {};
   const job = queue.setStatus(req.params.id, status, printerId ? { printerId } : {});
@@ -247,6 +264,7 @@ function publicJob(j) {
   return {
     id: j.id, seq: j.seq, name: j.contact.name, phone: j.contact.phone,
     colours: j.colours, shape: j.shape, hole: j.hole, filename: j.filename, status: j.status,
+    reprintOf: j.reprintOf || null,
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
     driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',
