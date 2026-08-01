@@ -141,6 +141,22 @@ app.get('/api/jobs', (_req, res) => {
   });
 });
 
+// Everything ever submitted, so an old design can be printed again — the file
+// is still on disk. Kept off /api/jobs because the operator view polls every
+// couple of seconds and does not want the whole day's history each time.
+app.get('/api/history', (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+  const jobs = queue.history(limit).map(publicJob);
+  res.json({
+    jobs,
+    total: queue.jobs.length,
+    printers: (cfg.integrations?.printers || []).map((p) => ({
+      id: p.id, name: p.name, configured: !!(p.ip && p.serial && p.accessCode),
+      live: monitor.states()[p.id] || null,
+    })),
+  });
+});
+
 app.post('/api/jobs/:id/status', async (req, res) => {
   const { status, printerId } = req.body || {};
   const job = queue.setStatus(req.params.id, status, printerId ? { printerId } : {});

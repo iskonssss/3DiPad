@@ -60,6 +60,15 @@ export class Queue {
     return this.jobs.filter((j) => !['collected', 'failed'].includes(j.status)).slice().reverse();
   }
 
+  /**
+   * Everything ever submitted, newest first. The g-code files stay on disk, so
+   * an old job can be sent to a printer again — a failed print, a plate knocked
+   * off, or a parent who lost the keychain before they got home.
+   */
+  history(limit = 200) {
+    return this.jobs.slice().reverse().slice(0, Math.max(1, limit));
+  }
+
   /** First printer with no active job, or null. */
   freePrinter(printers) {
     const busy = new Set(this.jobs.filter((j) => ['assigned', 'printing', 'colour_change'].includes(j.status)).map((j) => j.printerId));

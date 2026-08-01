@@ -140,8 +140,8 @@ export function generate(design, cfg) {
   });
 
   // ---- colour change ----
-  em.comment('===== COLOUR CHANGE (M400 U1): load layer-2 colour, then Resume =====');
-  for (const line of asLines(cfg.colourChange.gcode)) em.raw(line);
+  em.comment(`===== COLOUR CHANGE: load ${design.colours?.layer2 ?? 'colour 2'}, then Resume =====`);
+  for (const line of colourChangeBlock(cfg, backingZs[nBack - 1])) em.raw(line);
 
   // ---- design (colour 2), raised beads ----
   const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
@@ -458,6 +458,70 @@ function makeEmitter(cfg, crossSection) {
 }
 
 const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
+
+/**
+ * The filament swap, in the shape Bambu Studio's own "multi-colour with
+ * external spool" uses — read off a real A1 mini file rather than invented:
+ * park clear of the part, back the old colour out of the melt zone, pause,
+ * then purge and wipe the new colour before printing with it.
+ *
+ * The plain pause left that last part to the operator via the printer's
+ * filament menu, and whatever colour was still in the nozzle went into the
+ * first few millimetres of the drawing.
+ *
+ * Bambu's own version is driven by `manual_color_change` in the print task,
+ * which only the project_file command carries — we send a bare .gcode, so the
+ * moves are emitted here instead. Set colourChange.mode to "pause" for the old
+ * behaviour, or colourChange.gcode to replace the block outright.
+ */
+export function colourChangeBlock(cfg, atZ = 0) {
+  const c = cfg.colourChange || {};
+  if (c.gcode) return asLines(c.gcode);           // explicit override wins
+  const pause = asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
+  if (c.mode === 'pause') return pause;
+
+  const t = cfg.temp?.nozzle ?? 220;
+  const lift = +(atZ + (c.liftMm ?? 4)).toFixed(2);
+  const purgeFeed = Math.round(c.purgeFeed ?? 300);
+  const out = [
+    'M400 ; finish everything queued',
+    'M106 P1 S0 ; part fan off — no draught over an open nozzle',
+    `G1 Z${lift} F1200 ; lift clear of the print`,
+    `G1 X${c.parkX ?? 180} Y${c.parkY ?? 90} F18000 ; park clear of the part`,
+    'G92 E0',
+    `G1 E-${(c.retractMm ?? 8).toFixed(1)} F1200 ; back the old colour out of the melt zone`,
+    'M400',
+    ...pause,
+    `M109 S${t} ; back to temperature after the swap`,
+    'G92 E0',
+    'M106 P1 S60 ; gentle fan so the purge does not weld to the nozzle',
+  ];
+
+  // Purged in bites, like the slicer does: a long slow push packs the melt zone
+  // and the short fast ones break the strand so it drops instead of trailing.
+  const purge = Math.max(0, c.purgeMm ?? 60);
+  if (purge > 0) {
+    const bites = Math.max(1, Math.round(c.purgeBites ?? 4));
+    const each = purge / bites;
+    out.push('; --- purge the new colour ---');
+    for (let i = 0; i < bites; i++) {
+      out.push(`G1 E${each.toFixed(2)} F${purgeFeed}`);
+      out.push('G1 E1.5 F50');
+    }
+    out.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
+  }
+
+  // Wipe on the brush at the left of the bed, the same moves the slicer uses.
+  const wipes = Math.max(0, Math.round(c.wipes ?? 4));
+  if (wipes > 0) {
+    out.push('M400', 'M106 P1 S178 ; full fan to set the strand', 'M400 S3');
+    for (let i = 0; i < wipes; i++) out.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');
+    out.push('M400', 'M106 P1 S0');
+  }
+
+  out.push('G92 E0', `G1 Z${lift} F3000`);
+  return out;
+}
 
 /**
  * The calibration block for the start template.

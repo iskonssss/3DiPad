@@ -310,3 +310,39 @@ test('the automatic path is still there when it is asked for', async () => {
   await settle();
   assert.equal(queue.get(job.id).status, 'printing');
 });
+
+// --- history ----------------------------------------------------------------
+//
+// Jobs do not stop being useful when they are collected: a print fails, a plate
+// gets knocked, a parent loses the keychain on the way home. The g-code is still
+// on disk, so the operator needs to find the old job and run it again.
+
+test('history keeps collected and failed jobs that the active view drops', () => {
+  const { queue } = scratchQueue();
+  const a = addJob(queue, 'Ada');
+  const b = addJob(queue, 'Bo');
+  const c = addJob(queue, 'Cy');
+  queue.setStatus(a.id, 'collected');
+  queue.setStatus(b.id, 'failed');
+
+  assert.deepEqual(queue.active().map((j) => j.contact.name), ['Cy'], 'the operator view shows only live work');
+  assert.deepEqual(queue.history().map((j) => j.contact.name), ['Cy', 'Bo', 'Ada'], 'history keeps everything, newest first');
+});
+
+test('history is capped so a long day does not ship the lot', () => {
+  const { queue } = scratchQueue();
+  for (let i = 0; i < 40; i++) addJob(queue, 'Kid' + i);
+  assert.equal(queue.history(10).length, 10);
+  assert.equal(queue.history(10)[0].contact.name, 'Kid39', 'the cap keeps the newest');
+  assert.equal(queue.history().length, 40, 'and the default is generous enough for a fair');
+});
+
+test('a collected job can be sent to a printer again', async () => {
+  const { queue, dispatcher, sends } = manualHarness();
+  const job = addJob(queue, 'Ada');
+  queue.setStatus(job.id, 'collected');
+
+  await dispatcher.send(job, PRINTERS[0]);
+  assert.equal(queue.get(job.id).status, 'printing', 'it comes back out of history and prints');
+  assert.equal(sends.length, 1);
+});

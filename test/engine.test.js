@@ -386,3 +386,46 @@ test('the visible top layer is printed slower than the buried ones', () => {
   assert.equal(Math.max(...top), cfg.speed.topSurface, 'the top layer runs at the top-surface feedrate');
   assert.ok(Math.max(...top) < Math.max(...buried), 'and slower than a buried layer');
 });
+
+test('the colour change parks, pauses, purges and wipes', () => {
+  // Shaped after Bambu Studio's "multi-colour with external spool", read off a
+  // real A1 mini file. A bare pause left purging to the operator's own filament
+  // menu, so whatever was still in the nozzle went into the first millimetres
+  // of the drawing.
+  const { gcode } = generate(design('rectangle'), cfg);
+  const block = gcode.slice(gcode.indexOf('COLOUR CHANGE'), gcode.indexOf('DESIGN (colour 2)'));
+
+  const at = (re) => block.search(re);
+  const park = at(/^G1 X\d+ Y\d+ F18000/m);
+  const back = at(/^G1 E-[\d.]+ F1200/m);
+  const pause = at(/^M400 U1/m);
+  const heat = at(/^M109 S\d+/m);
+  const purge = at(/^G1 E[\d.]+ F300/m);
+  const wipe = at(/^G1 X-13\.5 F3000/m);
+
+  for (const [name, i] of [['park', park], ['retract', back], ['pause', pause], ['reheat', heat], ['purge', purge], ['wipe', wipe]]) {
+    assert.ok(i > -1, `the ${name} step is missing`);
+  }
+  assert.ok(park < back && back < pause, 'it parks and backs the old colour out BEFORE pausing');
+  assert.ok(pause < heat && heat < purge && purge < wipe, 'and reheats, purges then wipes AFTER the swap');
+
+  // enough new filament to actually clear the old colour out of the nozzle
+  const pushed = [...block.matchAll(/^G1 E([\d.]+) F(?:300|50)$/gm)].reduce((a, m) => a + +m[1], 0);
+  assert.ok(pushed >= 40, `only ${pushed.toFixed(0)}mm purged — the drawing would start in the old colour`);
+
+  // the park must be clear of a 100mm-wide plate centred on the bed
+  const [, px] = /^G1 X(\d+) Y\d+ F18000/m.exec(block);
+  assert.ok(+px >= cfg.build.bedCenter[0] + 50, `parks at X${px}, which is over the plate`);
+});
+
+test('the colour change can be put back to a plain pause', () => {
+  const plain = { ...cfg, colourChange: { ...cfg.colourChange, mode: 'pause' } };
+  const { gcode } = generate(design('rectangle'), plain);
+  const block = gcode.slice(gcode.indexOf('COLOUR CHANGE'), gcode.indexOf('DESIGN (colour 2)'));
+  assert.match(block, /M400 U1/);
+  assert.ok(!/F300/.test(block), 'no purge');
+
+  const custom = { ...cfg, colourChange: { gcode: ['M600 ; my own thing'] } };
+  const g2 = generate(design('rectangle'), custom).gcode;
+  assert.match(g2.slice(g2.indexOf('COLOUR CHANGE'), g2.indexOf('DESIGN (colour 2)')), /M600 ; my own thing/);
+});

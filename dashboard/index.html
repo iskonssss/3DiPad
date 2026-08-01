@@ -40,6 +40,14 @@
       button.ghost { background:#20294a; color:var(--muted); }
       a.dl { font-size:12px; color:#7db9ff; text-decoration:none; }
       .empty { color:var(--muted); padding:60px 20px; text-align:center; grid-column:1/-1; }
+
+      /* history: same cards, dimmed, with when they were made */
+      .pill.tab { border:0; font:inherit; cursor:pointer; }
+      .pill.tab.on { background:var(--accent); color:#22252b; font-weight:700; }
+      .histbar { padding:12px 18px 0; color:var(--muted); font-size:13px; }
+      .card.past { opacity:.82; }
+      .card.past:hover { opacity:1; }
+      .when { color:var(--muted); }
       .swap-banner { background:var(--warn); color:#241203; font-weight:700; padding:8px; border-radius:8px; text-align:center; margin-bottom:8px; font-size:13px; }
       select { font:inherit; padding:8px; border-radius:8px; background:#20294a; color:var(--ink); border:1px solid #ffffff20; }
       /* Printer status, readable from across the booth: one big square each,
@@ -62,6 +70,16 @@
       @media (prefers-reduced-motion: reduce) { .ptile.swap { animation:none; border-color:#241203; } }
       .ptile .bar { width:100%; height:6px; background:#00000030; border-radius:4px; overflow:hidden; margin-top:5px; }
       .ptile .bar i { display:block; height:100%; background:#00000055; }
+      /* Which two filaments this job needs. The file name says it in words;
+         across a noisy booth the operator reads the squares, not the words. */
+      .ptile .cols { display:flex; align-items:center; gap:7px; margin-top:7px; font-size:12px; font-weight:700; }
+      .ptile .cols .arrow { color:#0b122099; font-weight:800; }
+      .ptile.dead .cols .arrow { color:var(--muted); }
+      .swatch { width:26px; height:26px; border-radius:7px; flex:none;
+                border:2px solid #0b122055; box-shadow:0 0 0 1px #ffffff99 inset; }
+      .swatch.big { width:30px; height:30px; }
+      /* The one still to be loaded, during a swap pause. */
+      .swatch.next { box-shadow:0 0 0 1px #ffffff99 inset, 0 0 0 4px #241203; }
 
       /* One button per printer, so a job is never sent to a machine whose
          filament the operator has not checked. */
@@ -80,9 +98,11 @@
       <span class="pill" id="p-lan">LAN</span>
       <span class="pill" id="p-outbox" style="display:none"></span>
       <a class="pill" href="setup.html" style="text-decoration:none">🔌 Printer setup</a>
+      <button class="pill tab" id="tab-toggle" onclick="toggleView()">🕘 History</button>
       <div class="stats" id="stats"></div>
     </header>
     <div class="printers" id="printer-strip"></div>
+    <div class="histbar" id="histbar" style="display:none"></div>
     <main id="board"><div class="empty">Loading…</div></main>
 
     <script>
@@ -91,13 +111,36 @@
       // the cards need every job's printer assignment, not just their own
       let allJobs = [];
 
+      // The operator view polls constantly; history is a separate, heavier fetch
+      // asked for on demand, so a full day's jobs are not shipped every 2s.
+      let showingHistory = false;
+
       async function tick() {
         try {
           const r = await fetch('/api/jobs');
           const d = await r.json();
           printers = d.printers || [];
           render(d);
+          if (showingHistory) await renderHistory();
         } catch { document.getElementById('board').innerHTML = '<div class="empty">No connection to booth server…</div>'; }
+      }
+
+      function toggleView() {
+        showingHistory = !showingHistory;
+        const btn = document.getElementById('tab-toggle');
+        btn.classList.toggle('on', showingHistory);
+        btn.textContent = showingHistory ? '← Back to active' : '🕘 History';
+        document.getElementById('histbar').style.display = showingHistory ? '' : 'none';
+        tick();
+      }
+
+      async function renderHistory() {
+        const d = await (await fetch('/api/history?limit=300')).json();
+        document.getElementById('histbar').textContent =
+          `${d.jobs.length} of ${d.total} jobs, newest first. Press a printer to run one again — the file is still on disk.`;
+        const board = document.getElementById('board');
+        if (!d.jobs.length) { board.innerHTML = '<div class="empty">Nothing has been submitted yet.</div>'; return; }
+        board.innerHTML = d.jobs.map((j) => card(j, true)).join('');
       }
 
       function render(d) {
@@ -122,9 +165,10 @@
         document.getElementById('stats').innerHTML =
           `<span>Leads: <b>${d.stats.leads}</b></span><span>Queued: ${s.queued||0}</span><span>Printing: ${s.printing||0}</span><span>Ready: ${s.ready||0}</span>`;
 
+        if (showingHistory) return; // the history fetch owns the board
         const board = document.getElementById('board');
         if (!d.jobs.length) { board.innerHTML = '<div class="empty">No active jobs. Waiting for the next little artist ✏️</div>'; return; }
-        board.innerHTML = d.jobs.map(card).join('');
+        board.innerHTML = d.jobs.map((j) => card(j)).join('');
       }
 
       /**
@@ -146,22 +190,25 @@
         const who = holding ? holding.name : '';
         const mins = typeof live.remainingMin === 'number' ? live.remainingMin : null;
         const pct = typeof live.percent === 'number' ? live.percent : null;
+        // The two filaments this machine is committed to while it holds a job.
+        const cols = holding ? holding.colours : null;
 
         if (state === 'PAUSE') {
-          return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct };
+          return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct, cols, next: 2 };
         }
-        if (state === 'FAILED') return { cls: 'busy', st: 'FAILED', sub: who, pct };
+        if (state === 'FAILED') return { cls: 'busy', st: 'FAILED', sub: who, pct, cols };
         if (state === 'RUNNING' || state === 'PREPARE') {
           const soon = mins != null && mins <= 1;
           return {
             cls: soon ? 'soon' : 'busy',
             st: soon ? 'ALMOST DONE' : 'PRINTING',
             sub: [who, mins != null ? `${mins} min left` : null].filter(Boolean).join(' · '),
-            pct,
+            pct, cols,
           };
         }
-        // idle by its own account, but a job was just handed to it
-        if (holding) return { cls: 'busy', st: 'STARTING', sub: who, pct };
+        // idle by its own account, but a job was just handed to it. The
+        // operator has to load colour 1 before it starts, so show it early.
+        if (holding) return { cls: 'busy', st: 'STARTING', sub: who, pct, cols, next: 1 };
         return { cls: 'free', st: 'READY', sub: 'Free for the next job' };
       }
 
@@ -174,21 +221,39 @@
             <span class="nm">${esc(p.name)}</span>
             <span class="st">${esc(s.st)}</span>
             <span class="sub">${esc(s.sub || '')}</span>
+            ${filaments(s.cols, s.next)}
             ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
           </div>`;
         }).join('');
       }
+
+      /** Backing colour → design colour, as squares. `next` rings the one the
+       *  operator still has to put in the machine. */
+      function filaments(cols, next) {
+        if (!cols) return '';
+        return `<span class="cols">
+          ${swatch(cols.layer1, next === 1)}${esc(cols.layer1)}
+          <span class="arrow">→</span>
+          ${swatch(cols.layer2, next === 2)}${esc(cols.layer2)}
+        </span>`;
+      }
+      function swatch(name, ring) {
+        return `<span class="swatch${ring ? ' big next' : ''}" title="${esc(name)}"
+                      style="background:${COLOUR_HEX[String(name).toUpperCase()]||'#888'}"></span>`;
+      }
       function dot(name) { return `<span class="dot" style="background:${COLOUR_HEX[name]||'#888'}"></span>`; }
-      function card(j) {
+      function card(j, past = false) {
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
+        const when = past && j.createdAt
+          ? `<span class="when">${new Date(j.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span>` : '';
         const swap = j.status === 'colour_change'
           ? `<div class="swap-banner">⚠️ SWAP NOW → load ${j.colours.layer2}, then Resume on the printer</div>` : '';
         const notify = j.notify ? (j.notify.ok ? '✅ sent' : (j.notify.queued ? '⏳ retrying' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed'))) : '';
         const lead = j.leadPush ? (j.leadPush.ok ? '· CRM ✓' : (j.leadPush.queued ? '· CRM ⏳' : '')) : '';
-        return `<div class="card st-${j.status}">
+        return `<div class="card st-${j.status}${past ? ' past' : ''}">
           ${swap}
           <div class="top">
-            <div><div class="who">${esc(j.name)}</div><div class="seq">#${String(j.seq).padStart(4,'0')} · ${j.phone}</div></div>
+            <div><div class="who">${esc(j.name)}</div><div class="seq">#${String(j.seq).padStart(4,'0')} · ${j.phone} ${when}</div></div>
             <span class="status ${j.status}">${j.status.replace('_',' ')}</span>
           </div>
           <div class="colours">

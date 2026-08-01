@@ -87,10 +87,20 @@
     "warnPrintMinutes": 13
   },
   "colourChange": {
-    "_comment": "Inserted at the backing->design transition. M400 U1 is the Bambu A1 pause: it finishes moves and pauses so the operator uses the printer screen's filament menu to unload colour 1 / load colour 2, then Resume.",
-    "gcode": [
-      "M400 U1 ; ===== COLOUR CHANGE: unload colour 1, load colour 2 on the printer screen, then Resume ====="
-    ]
+    "_comment": "The filament swap at the backing->design transition, shaped like Bambu Studio's 'multi-colour with external spool': park clear, back the old colour out of the melt zone, pause for the swap, then purge and wipe the new colour so the drawing does not start in the old one. Set mode to 'pause' for a bare M400 U1 and let the printer's filament menu handle it. Setting a 'gcode' array replaces the whole block.",
+    "mode": "purge",
+    "pauseGcode": [
+      "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="
+    ],
+    "_purge_comment": "parkX/parkY put the nozzle clear of the part while it purges — 180,90 is the right-hand edge, which is where Bambu's own file purges. purgeMm is how much new filament to push through before printing with it; a dark colour needs less to cover, a light one after a dark one needs more. TEST THIS ONCE and watch where the purge lands before relying on it.",
+    "parkX": 180,
+    "parkY": 90,
+    "liftMm": 4,
+    "retractMm": 8,
+    "purgeMm": 60,
+    "purgeBites": 4,
+    "purgeFeed": 300,
+    "wipes": 4
   },
   "template": {
     "_comment": "Replace start.gcode / end.gcode with the header+footer from a REAL sliced A1 mini file for your filament, so bed levelling / flow calibration run correctly. Placeholders {nozzle} {bed} {nozzleFirst} {bedFirst} are substituted.",
