@@ -115,3 +115,23 @@ test('a 3mf is started as a project, with no shape to guess at', () => {
   assert.equal(cmd.print.bed_leveling, false);
   assert.equal(cmd.print.flow_cali, false);
 });
+
+test('extra parts can be added, for bisecting what the firmware requires', () => {
+  // The printer refuses our project with err_code 0x05024007 and Bambu's own
+  // 3mf carries fourteen parts ours does not. Guessing which one matters is
+  // what tools/probe-start.mjs exists to avoid: it builds variants with parts
+  // added and asks the printer, one at a time.
+  const settings = '{"printer_model":"Bambu Lab A1 mini","nozzle_diameter":["0.4"]}';
+  const files = unzip(build3mf({
+    gcode: GCODE, meta: META, cfg: CFG, name: 'k',
+    extraParts: [{ name: 'Metadata/project_settings.config', data: settings }],
+  }));
+  assert.equal(files['Metadata/project_settings.config'].toString(), settings);
+  // and the archive is still whole: the g-code and its digest survive
+  assert.equal(files['Metadata/plate_1.gcode'].toString(), GCODE);
+  assert.ok(files['Metadata/plate_1.gcode.md5']);
+
+  // adding nothing changes nothing
+  const plain = unzip(build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' }));
+  assert.equal(Object.keys(files).length, Object.keys(plain).length + 1);
+});
