@@ -25,7 +25,10 @@ git pull origin main || echo "  (no update — carrying on with the version alre
 echo "Building the tablet app..."
 npm run build
 
-(sleep 2 && (open http://localhost:3000/dashboard/ 2>/dev/null || xdg-open http://localhost:3000/dashboard/ 2>/dev/null)) &
+# Wait for the port to actually answer rather than guessing at two seconds — a
+# cold start after an npm install takes longer than that, and the browser then
+# lands on "connection refused" for a booth that is starting normally.
+node tools/open-when-ready.mjs 3000 /dashboard/ &
 
 echo
 echo "Leave this window open. Press Ctrl-C to stop the booth."
