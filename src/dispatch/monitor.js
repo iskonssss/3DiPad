@@ -14,10 +14,11 @@ import { watchPrinter } from '../integrations/bambu.js';
 
 export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   const printers = cfg.integrations?.printers || [];
-  if (!cfg.integrations?.lan?.enabled) return { stop() {}, states: () => ({}) };
+  if (!cfg.integrations?.lan?.enabled) return { stop() {}, states: () => ({}), health: () => ({}) };
 
   const states = {};
   const handles = [];
+  const watchers = new Map();
 
   for (const printer of printers) {
     const h = watchPrinter(printer, cfg, (status) => {
@@ -26,6 +27,7 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
       if (status.state && status.state !== prev.state) applyTransition(printer, status.state);
     });
     handles.push(h);
+    watchers.set(printer.id, h);
   }
 
   // The printer just let go of its job, so the next kid in the queue can have
@@ -60,5 +62,7 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   return {
     stop() { for (const h of handles) h.stop(); },
     states: () => states,
+    /** Per-printer MQTT health, for telling apart the ways "no status" happens. */
+    health: () => Object.fromEntries([...watchers].map(([id, h]) => [id, h.health()])),
   };
 }

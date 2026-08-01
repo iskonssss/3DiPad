@@ -128,12 +128,12 @@ export async function ftpsCheck(printer, timeout = 15000) {
 /**
  * Check a printer and return findings a person can act on.
  *
- * `liveState` is the status monitor's last report, passed in rather than fetched:
- * the printer accepts one MQTT client at a time and the monitor already holds
- * it, so opening another to test would be testing whether we can break our own
- * connection.
+ * `liveState` is the status monitor's last report and `health` its connection
+ * record, both passed in rather than fetched: the printer accepts one MQTT
+ * client at a time and the monitor already holds it, so opening another to test
+ * would be testing whether we can break our own connection.
  */
-export async function checkPrinter(printer, liveState = null) {
+export async function checkPrinter(printer, liveState = null, health = null) {
   const findings = [];
   const fail = (msg, hint) => findings.push({ ok: false, msg, hint });
   const pass = (msg) => findings.push({ ok: true, msg });
@@ -159,8 +159,25 @@ export async function checkPrinter(printer, liveState = null) {
     else fail('The printer refused the access code', 'Re-read it from the printer screen — it changes when LAN Mode is toggled');
   }
 
-  if (liveState?.state) pass(`Printer says: ${liveState.state}${liveState.percent != null ? ` ${liveState.percent}%` : ''}`);
-  else if (mqttPort) findings.push({ ok: null, msg: 'No status received yet', hint: 'Give it a few seconds after saving, then check again' });
+  // "No status" has two causes that look identical and need opposite fixes.
+  // The port being open only proves something is listening; whether the MQTT
+  // session got as far as connecting, and whether anything then arrived on this
+  // printer's report topic, is what tells them apart.
+  if (liveState?.state) {
+    pass(`Printer says: ${liveState.state}${liveState.percent != null ? ` ${liveState.percent}%` : ''}`);
+  } else if (health && health.connected && health.messages === 0) {
+    fail('Connected to the printer, but it is not sending anything back',
+      `Nothing has arrived on device/${printer.serial}/report — the serial number is almost certainly wrong. Check it against Settings > Device on the printer, digit for digit.`);
+  } else if (health && !health.connected && health.connections === 0 && (mqttPort || health.lastError)) {
+    // the port scan is beside the point once the session itself has reported
+    // back — an error from the printer is conclusive on its own
+    fail('The printer refused the control connection',
+      health.lastError ? `MQTT said: ${health.lastError}` : 'Re-read the access code from the printer screen, then Save again');
+  } else if (health && !health.connected && health.connections > 0) {
+    fail('The control connection dropped', 'It reconnects on its own every 10s — check again shortly, and check the Wi-Fi if it keeps dropping');
+  } else if (mqttPort) {
+    findings.push({ ok: null, msg: 'No status received yet', hint: 'Give it a few seconds after saving, then check again' });
+  }
 
   return { ok: findings.every((f) => f.ok !== false), findings };
 }

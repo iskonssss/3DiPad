@@ -236,7 +236,15 @@ export function readStatus(msg) {
  * update. Returns a handle with .stop(). Reconnects automatically.
  */
 export function watchPrinter(printer, cfg, onStatus) {
-  if (!isConfigured(printer) || !cfg?.integrations?.lan?.enabled) return { stop() {} };
+  // Health is reported separately from status because the two failures look
+  // identical from outside and need opposite fixes: an MQTT session that never
+  // connects is credentials or network, while one that connects and then hears
+  // nothing means we are subscribed to the wrong topic — i.e. the serial number
+  // is wrong. Both present as "no status yet".
+  const health = { connected: false, connections: 0, messages: 0, lastMessageAt: null, lastError: null };
+  if (!isConfigured(printer) || !cfg?.integrations?.lan?.enabled) {
+    return { stop() {}, health: () => ({ ...health, configured: false }) };
+  }
   const client = mqtt.connect(`mqtts://${printer.ip}:${MQTT_PORT}`, {
     username: USER,
     password: printer.accessCode,
@@ -247,16 +255,28 @@ export function watchPrinter(printer, cfg, onStatus) {
   registerLiveClient(printer, client);
   const topic = `device/${printer.serial}/report`;
   client.on('connect', () => {
+    health.connected = true;
+    health.connections += 1;
     client.subscribe(topic, { qos: 0 });
     // ask for a full state dump so we don't wait for the next natural push
     client.publish(`device/${printer.serial}/request`, JSON.stringify({ pushing: { sequence_id: '0', command: 'pushall' } }));
   });
+  client.on('close', () => { health.connected = false; });
+  client.on('offline', () => { health.connected = false; });
   client.on('message', (_t, buf) => {
+    health.messages += 1;
+    health.lastMessageAt = new Date().toISOString();
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
     const status = readStatus(msg);
     if (status) { try { onStatus(status); } catch (e) { console.error('printer status handler failed', e); } }
   });
-  client.on('error', (e) => console.error(`[${printer.id}] MQTT error:`, e.message || e));
-  return { stop() { releaseLiveClient(printer, client); try { client.end(true); } catch {} } };
+  client.on('error', (e) => {
+    health.lastError = String(e.message || e);
+    console.error(`[${printer.id}] MQTT error:`, health.lastError);
+  });
+  return {
+    stop() { releaseLiveClient(printer, client); try { client.end(true); } catch {} },
+    health: () => ({ ...health, configured: true, topic }),
+  };
 }

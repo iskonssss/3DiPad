@@ -215,7 +215,7 @@ app.post('/api/printers/:slot/test', async (req, res) => {
   const list = cfg.integrations?.printers || [];
   const printer = list[Number(req.params.slot) - 1];
   if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
-  const result = await checkPrinter(printer, monitor.states()[printer.id]);
+  const result = await checkPrinter(printer, monitor.states()[printer.id], monitor.health()[printer.id]);
   res.json({ ok: result.ok, findings: result.findings });
 });
 
@@ -335,7 +335,20 @@ const dispatcher = createDispatcher({
     else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
     else if (e.type === 'notstarted') {
       console.error(`[${e.printer.id}] ${e.job.filename} is on the SD card but the printer did not start it.`);
-      console.error('           Start it from the printer screen, or press Send on the dashboard.');
+      // The start command and the status stream travel the same MQTT topics, so
+      // if nothing is arriving, nothing is being delivered either — and the
+      // usual reason is a serial number that does not match the printer.
+      const h = monitor.health()[e.printer.id] || {};
+      if (h.connected && !h.messages) {
+        console.error(`           The printer has never sent anything on device/${e.printer.serial}/report.`);
+        console.error('           That serial number is probably wrong — check Settings > Device on the printer');
+        console.error('           and correct it on the setup page. Commands go to the same topic, which is');
+        console.error('           why the file uploads but nothing starts.');
+      } else if (!h.connected) {
+        console.error('           The control connection is down — check the setup page for this printer.');
+      } else {
+        console.error('           Start it from the printer screen, or press Send on the dashboard.');
+      }
     }
   },
 });
