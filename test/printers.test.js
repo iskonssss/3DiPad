@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { maskCode, publicPrinters, savePrinter, checkPrinter, configPath } from '../src/printers.js';
+import { maskCode, publicPrinters, savePrinter, checkPrinter, configPath , ftpErrorText} from '../src/printers.js';
 
 // Setting a printer up used to mean four positional arguments in a terminal.
 // These cover the pieces the dashboard now drives instead.
@@ -152,4 +152,19 @@ test('a printer that is talking reports its state and stays a pass', async () =>
     { connected: true, connections: 1, messages: 40 });
   assert.match(r.findings.map((f) => f.msg).join(' '), /Printer says: IDLE/);
   assert.ok(!r.findings.some((f) => f.ok === false && /serial|control connection/.test(f.msg)));
+});
+
+test('an FTP code on its own is translated into what it means here', () => {
+  // Seven uploads failed in a row with a bare "550" and no way to tell whether
+  // that was the access code, the folder, the file name, or the SD card.
+  assert.match(ftpErrorText(new Error('550')), /no SD card|full|formatting/);
+  assert.match(ftpErrorText(new Error('552')), /out of space/);
+  assert.match(ftpErrorText(new Error('530 Login incorrect')), /access code was rejected/);
+  assert.match(ftpErrorText(new Error('421')), /busy|LAN Mode/);
+
+  // the original text is always kept — the translation is added, not swapped in
+  assert.match(ftpErrorText(new Error('550 Permission denied')), /^550 Permission denied/);
+  // and something we have no note for passes through unharmed
+  assert.equal(ftpErrorText(new Error('ECONNREFUSED')), 'ECONNREFUSED');
+  assert.equal(ftpErrorText(null), '');
 });
