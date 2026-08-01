@@ -90,6 +90,17 @@
       .pbtn.blind { background:var(--warn); color:#241203; }
       .pbtn.on { border-color:var(--accent); }
       .pbtn[disabled] { background:#1b2440; color:#5d6a8c; cursor:not-allowed; }
+
+      /* Says what a button did. Nothing on this page should be able to do
+         nothing and say nothing. */
+      .toast { position:fixed; left:50%; bottom:26px; transform:translate(-50%, 20px);
+               background:var(--ok); color:#04371f; font-weight:700; font-size:15px;
+               padding:12px 18px; border-radius:12px; max-width:min(620px, 92vw);
+               box-shadow:0 10px 30px #0008; opacity:0; pointer-events:none;
+               transition:opacity .18s, transform .18s; z-index:20; text-align:center; }
+      .toast.show { opacity:1; transform:translate(-50%, 0); }
+      .toast.bad { background:var(--danger); color:#2b0b0b; }
+      @media (prefers-reduced-motion: reduce) { .toast { transition:none; } }
     </style>
   </head>
   <body>
@@ -106,6 +117,7 @@
     <div class="printers" id="printer-strip"></div>
     <div class="histbar" id="histbar" style="display:none"></div>
     <main id="board"><div class="empty">Loading…</div></main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
       const COLOUR_HEX = { BLACK:'#1c1c1e',WHITE:'#f5f5f7',RED:'#e23b3b',BLUE:'#2f6fed',GREEN:'#34a853',YELLOW:'#f4c20d',PINK:'#ff5fa2',PURPLE:'#8b5cf6',ORANGE:'#ff8a34',TEAL:'#14b8a6',GREY:'#8e8e93',GRAY:'#8e8e93',GOLD:'#d4af37',SILVER:'#c0c4cc',BROWN:'#8b5a2b' };
@@ -137,7 +149,8 @@
       }
 
       async function renderHistory() {
-        const d = await (await fetch('/api/history?limit=300')).json();
+        const d = await api('/api/history?limit=300');
+        if (!d) { document.getElementById('board').innerHTML = '<div class="empty">Could not load history.</div>'; return; }
         document.getElementById('histbar').textContent =
           `${d.jobs.length} of ${d.total} jobs, newest first. "Print again" puts a fresh copy of a finished job in the queue — the g-code is still on disk.`;
         const board = document.getElementById('board');
@@ -340,29 +353,74 @@
         return `<div class="actions">${assign}${btns.join('')}</div>`;
       }
 
+      /**
+       * Every button on this page goes through here, because every one of them
+       * used to be able to fail in silence.
+       *
+       * The dashboard is a static file and the server is a running process, so
+       * `git pull` updates the page the moment you refresh but leaves the old
+       * server answering. A button for a route that server does not have got
+       * Express' HTML 404 back, `.json()` threw, the promise rejected with
+       * nobody listening, and the operator saw nothing happen at all. That case
+       * is now named, because "restart the booth" is the fix and no one could
+       * have guessed it.
+       */
+      async function api(url, opts) {
+        let res, body;
+        try {
+          res = await fetch(url, opts);
+          body = await res.text();
+        } catch {
+          toast('No connection to the booth server — is the booth window still open?', true);
+          return null;
+        }
+        let json = null;
+        try { json = JSON.parse(body); } catch {}
+        if (json === null) {
+          toast(res.status === 404
+            ? 'The booth server is older than this page. Close the booth window, start it again, then reload.'
+            : `The booth server answered with something unexpected (HTTP ${res.status}).`, true);
+          return null;
+        }
+        if (!res.ok || json.ok === false) {
+          toast(json.error || json.result?.error || `That did not work (HTTP ${res.status})`, true);
+          return null;
+        }
+        return json;
+      }
+
+      let toastTimer = null;
+      function toast(msg, bad = false) {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = 'toast show' + (bad ? ' bad' : '');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { el.className = 'toast'; }, bad ? 9000 : 4500);
+      }
+
       async function sendTo(id, printerId) {
-        const r = await (await fetch(`/api/jobs/${id}/dispatch`, {
+        if (await api(`/api/jobs/${id}/dispatch`, {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(printerId ? { printerId } : {}),
-        })).json();
-        if (!r.ok) alert('Could not send: ' + (r.error || r.result?.error || 'unknown'));
+        })) toast('Sent to the printer.');
         tick();
       }
 
       async function reprint(id) {
-        const r = await (await fetch(`/api/jobs/${id}/reprint`, { method: 'POST' })).json();
-        if (!r.ok) { alert('Could not queue it again: ' + (r.error || 'unknown')); return; }
-        // Back to the live board, where the new copy is now waiting to be placed.
+        const r = await api(`/api/jobs/${id}/reprint`, { method: 'POST' });
+        if (!r) return;
+        toast(`Queued again as #${String(r.job.seq).padStart(4,'0')} — place it on a printer when one is free.`);
+        // Back to the live board, where the new copy is now waiting.
         if (showingHistory) toggleView(); else tick();
       }
 
       async function setStatus(id, status, printerId) {
-        await fetch(`/api/jobs/${id}/status`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status, printerId }) });
+        await api(`/api/jobs/${id}/status`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status, printerId }) });
         tick();
       }
       async function notify(id) {
-        const r = await (await fetch(`/api/jobs/${id}/notify`, { method:'POST' })).json();
-        alert(r.ok ? 'WhatsApp sent' : 'Failed: ' + (r.notify?.error || 'unknown'));
+        const r = await api(`/api/jobs/${id}/notify`, { method:'POST' });
+        if (r) toast(r.ok ? 'WhatsApp sent' : 'Failed: ' + (r.notify?.error || 'unknown'), !r.ok);
         tick();
       }
       const esc = (s) => String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
