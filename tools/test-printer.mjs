@@ -1,5 +1,8 @@
 // Verify LAN connectivity to each configured Bambu printer.
 //
+// Or press Test on the setup page instead — start the booth and open
+// http://localhost:3000/dashboard/setup.html — which needs no terminal.
+//
 //   npm run test-printer            # test every configured printer
 //   npm run test-printer A1-2       # test one
 //   npm run test-printer A1-2 send  # ALSO upload a sample file and start it

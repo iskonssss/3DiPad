@@ -16,6 +16,7 @@ import * as outbox from './integrations/outbox.js';
 import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
+import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = loadConfig();
@@ -164,6 +165,47 @@ app.post('/api/jobs/:id/dispatch', async (req, res) => {
   res.json({ ok: !!(r.sent || r.manual), printer: printer.name, result: r, job: publicJob(queue.get(job.id)) });
 });
 
+// ---- printer setup ----
+//
+// Configuring a printer used to mean a terminal, four positional arguments and a
+// second command to check it worked. None of that belongs on a fair floor, so
+// the dashboard does it. Access codes go in and never come back out.
+
+app.get('/api/printers', (_req, res) => {
+  const live = monitor.states();
+  res.json({
+    lan: !!cfg.integrations?.lan?.enabled,
+    printers: publicPrinters(cfg).map((p) => ({ ...p, live: live[p.id] || null })),
+  });
+});
+
+app.post('/api/printers/:slot', (req, res) => {
+  try {
+    const saved = savePrinter(cfg, {
+      slot: req.params.slot,
+      ip: String(req.body?.ip ?? '').trim(),
+      serial: String(req.body?.serial ?? '').trim(),
+      accessCode: String(req.body?.accessCode ?? '').trim(),
+      name: String(req.body?.name ?? '').trim() || undefined,
+    });
+    // the monitor holds one MQTT connection per printer, opened at boot with the
+    // old details — reopen them or the new printer is saved but unwatched
+    restartMonitor();
+    dispatcher.pump();
+    res.json({ ok: true, printer: publicPrinters(cfg).find((p) => p.id === saved.id) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/api/printers/:slot/test', async (req, res) => {
+  const list = cfg.integrations?.printers || [];
+  const printer = list[Number(req.params.slot) - 1];
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
+  const result = await checkPrinter(printer, monitor.states()[printer.id]);
+  res.json({ ok: result.ok, findings: result.findings });
+});
+
 app.post('/api/jobs/:id/notify', async (req, res) => {
   const job = queue.get(req.params.id);
   if (!job) return res.status(404).json({ ok: false, error: 'no such job' });
@@ -288,10 +330,18 @@ const dispatcher = createDispatcher({
 // Watch the printers so prints advance (and notify) with no operator tap.
 // A printer leaving its job — finished or failed — is the moment the next
 // queued kid can go on, so every transition gives the dispatcher a nudge.
-const monitor = startMonitor(cfg, queue, async (job) => {
+let monitor = startMonitor(cfg, queue, onPrintReady, () => dispatcher.pump());
+
+async function onPrintReady(job) {
   const r = await notify.onReady(cfg, job);
   queue.setStatus(job.id, 'ready', { notify: r });
-}, () => dispatcher.pump());
+}
+
+/** Reopen the printer connections after the setup page changes them. */
+function restartMonitor() {
+  try { monitor.stop(); } catch (e) { console.error('monitor stop failed', e); }
+  monitor = startMonitor(cfg, queue, onPrintReady, () => dispatcher.pump());
+}
 
 /**
  * This machine's addresses on the booth Wi-Fi, so the tablet URL is printed at
