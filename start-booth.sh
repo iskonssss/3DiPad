@@ -13,6 +13,10 @@ fi
 # branch pointer and kills every fetch ("fatal: bad object refs/desktop.ini")
 [ -d .git ] && find .git \( -name desktop.ini -o -name .DS_Store \) -delete 2>/dev/null
 
+# public/*.html are build output this script rewrites below. Leaving them
+# modified makes git refuse to pull, so the update step quietly stops working.
+git checkout -- public 2>/dev/null || true
+
 echo "Updating to the latest version..."
 git pull origin main || echo "  (no update — carrying on with the version already here)"
 

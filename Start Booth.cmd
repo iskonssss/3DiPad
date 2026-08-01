@@ -51,6 +51,16 @@ if exist .git (
   del /s /q /f /a .git\desktop.ini >nul 2>nul
 )
 
+rem public\*.html are build output — this launcher rewrites them on every start,
+rem a few lines below. That left them permanently "modified", and git refuses to
+rem pull over local changes, so this update step silently did nothing for weeks:
+rem
+rem   error: Your local changes to the following files would be overwritten
+rem
+rem .gitattributes now stops the churn, but throwing the generated copies away
+rem before pulling makes the update work even if something else touches them.
+git checkout -- public >nul 2>nul
+
 echo Updating to the latest version...
 git pull origin main 2>nul
 if errorlevel 1 echo   ^(no update — carrying on with the version already here^)
