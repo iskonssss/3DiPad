@@ -223,6 +223,11 @@ export async function publishCommand(printer, payload, cfg) {
   const qos = lan.qos ?? 0;
   const timeoutMs = (lan.timeoutMs ?? 10000) + 2000;
 
+  if (lan.debug) {
+    console.log(`[${printer.id}] PUBLISH ${topic}`);
+    console.log('           ' + JSON.stringify(payload));
+  }
+
   const shared = await awaitLiveClient(printer);
   if (shared) {
     return new Promise((resolve) => {
@@ -409,6 +414,12 @@ export function watchPrinter(printer, cfg, onStatus) {
     health.lastMessageAt = new Date().toISOString();
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
+    // With debug on, print everything that is not the routine status push. If a
+    // start command is being refused for a reason we have not learned to
+    // recognise, this is where it will be visible.
+    if (cfg.integrations.lan.debug && msg?.print?.command !== 'push_status') {
+      console.log(`[${printer.id}] REPORT ${JSON.stringify(msg).slice(0, 600)}`);
+    }
     // The printer does answer commands — it just answers on the report topic,
     // mixed in with status. We were parsing these messages for status only and
     // dropping everything else, so a start command the printer refused was

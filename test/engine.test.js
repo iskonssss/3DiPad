@@ -485,3 +485,37 @@ test('the flow cap slows the print rather than changing the part', () => {
   assert.ok(a.meta.estMinutes > b.meta.estMinutes, 'a capped print takes longer, honestly');
   assert.equal(b.meta.flowClampedMoves, 0, 'cap off means nothing is clamped');
 });
+
+test('the g-code is in the three blocks Bambu firmware reads', () => {
+  // A file with no blocks around it loads onto the SD card and then will not
+  // start: the printer has nothing to display and nothing to validate. Bambu's
+  // own files — including the one that printed on this booth's A1 mini — are
+  // always HEADER, CONFIG, then EXECUTABLE.
+  const { gcode, meta } = generate(design('rectangle'), cfg);
+  const lines = gcode.split('\n');
+  const at = (tag) => lines.indexOf(tag);
+
+  const order = ['; HEADER_BLOCK_START', '; HEADER_BLOCK_END', '; CONFIG_BLOCK_START',
+    '; CONFIG_BLOCK_END', '; EXECUTABLE_BLOCK_START', '; EXECUTABLE_BLOCK_END'];
+  for (const tag of order) assert.ok(at(tag) >= 0, `missing ${tag}`);
+  for (let i = 1; i < order.length; i++) {
+    assert.ok(at(order[i]) > at(order[i - 1]), `${order[i]} comes before ${order[i - 1]}`);
+  }
+  assert.equal(at('; HEADER_BLOCK_START'), 0, 'the header is the first thing in the file');
+
+  // Every move must be inside the executable block — a G1 in the header is a
+  // move the printer will not run.
+  const first = lines.findIndex((l) => /^G[01] /.test(l));
+  const last = lines.length - 1 - [...lines].reverse().findIndex((l) => /^G[01] /.test(l));
+  assert.ok(first > at('; EXECUTABLE_BLOCK_START'), 'a move escaped above the executable block');
+  assert.ok(last < at('; EXECUTABLE_BLOCK_END'), 'a move escaped below the executable block');
+
+  // The header is what the printer's screen reads, so the numbers have to be
+  // the real ones and in the units Bambu uses.
+  const header = lines.slice(0, at('; HEADER_BLOCK_END')).join('\n');
+  assert.match(header, /^; total layer number: \d+$/m);
+  assert.match(header, /^; filament_density: 1\.24$/m, 'g/cm^3, as Bambu writes it — not our g/mm^3');
+  assert.match(header, /^; filament_diameter: 1\.75$/m);
+  assert.match(header, new RegExp(`^; total filament weight \\[g\\] : ${meta.estGrams.toFixed(1)}`, 'm'));
+  assert.match(header, /^; max_z_height: \d+\.\d+$/m);
+});
