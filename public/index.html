@@ -1482,8 +1482,19 @@ function generate(design, cfg) {
     lines.splice(all[i].at, 0, reports[i]);
   }
 
+  const maxZ = designZs.length ? designZs[designZs.length - 1] : backingZs[nBack - 1];
   return {
-    gcode: lines.join('\n') + '\n',
+    gcode: bambuBlocks(lines, {
+      layers: nBack + designZs.length,
+      filamentMm: raw.filamentMm,
+      grams,
+      minutes: estMinutes,
+      maxZ,
+      // Bambu's header quotes density in g/cm^3 (1.24 for PLA); ours is the
+      // g/mm^3 the volume arithmetic wants.
+      density: +(FILAMENT_DENSITY * 1000).toFixed(2),
+      diameter: b.filamentDiameter,
+    }),
     meta: {
       shape, bbox, hole: { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
       backingLayers: nBack, designLayers: designZs.length, strokeCount: strokes.length,
@@ -1777,6 +1788,71 @@ function makeEmitter(cfg, crossSection) {
       timeMin += L / f; filamentMm += e; pos.x = x; pos.y = y; tick();
     },
   };
+}
+
+/**
+ * Bambu firmware does not read a .gcode as a flat stream of commands. Its own
+ * files — including the one that printed successfully on this booth's A1 mini —
+ * are divided into three labelled blocks, and the printer reads the first two
+ * before it will run the third:
+ *
+ *   HEADER_BLOCK      layer count, filament used, print time, max Z. This is
+ *                     what the printer's screen shows, and what it uses to
+ *                     decide the job is describable at all.
+ *   CONFIG_BLOCK      the slicer's settings, as comments.
+ *   EXECUTABLE_BLOCK  the moves.
+ *
+ * We were emitting the moves alone, with no blocks around them. A file like
+ * that loads and sits there: the printer has nothing to show and nothing to
+ * validate, and a start command against it does nothing at all — which is
+ * exactly the symptom, a file present on the SD card that will not start.
+ *
+ * These are comments, so they cost nothing if a firmware ignores them.
+ */
+function bambuBlocks(lines, info) {
+  const mins = Math.floor(info.minutes);
+  const secs = Math.round((info.minutes - mins) * 60);
+  const time = `${mins}m ${secs}s`;
+  const volumeCm3 = (info.filamentMm * Math.PI * (info.diameter / 2) ** 2) / 1000;
+
+  const header = [
+    '; HEADER_BLOCK_START',
+    '; 3DiPad booth generator',
+    `; model printing time: ${time}; total estimated time: ${time}`,
+    `; total layer number: ${info.layers}`,
+    `; total filament length [mm] : ${info.filamentMm.toFixed(2)}`,
+    `; total filament volume [cm^3] : ${volumeCm3.toFixed(2)}`,
+    `; total filament weight [g] : ${info.grams.toFixed(2)}`,
+    `; filament_density: ${info.density}`,
+    `; filament_diameter: ${info.diameter}`,
+    `; max_z_height: ${info.maxZ.toFixed(2)}`,
+    '; filament: 1',
+    '; HEADER_BLOCK_END',
+    '',
+  ];
+
+  // The moves already carry the settings that produced them in their own
+  // comments; this block exists so the structure matches, and carries the few
+  // values the printer is known to read back.
+  const config = [
+    '; CONFIG_BLOCK_START',
+    `; filament_diameter = ${info.diameter}`,
+    `; filament_density = ${info.density}`,
+    '; filament_type = PLA',
+    '; nozzle_diameter = 0.4',
+    '; printer_model = Bambu Lab A1 mini',
+    '; CONFIG_BLOCK_END',
+    '',
+  ];
+
+  return [
+    ...header,
+    ...config,
+    '; EXECUTABLE_BLOCK_START',
+    ...lines,
+    '; EXECUTABLE_BLOCK_END',
+    '',
+  ].join('\n');
 }
 
 const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
