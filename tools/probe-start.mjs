@@ -27,7 +27,7 @@ import { loadConfig } from '../src/config.js';
 import { generate } from '../src/gcode/engine.js';
 import { build3mf, zipMember, isBambuStudio3mf, plateGcodeName } from '../src/integrations/bambu3mf.js';
 import {
-  uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured, readCommandReply,
+  uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured, readCommandReply, readPattern,
 } from '../src/integrations/bambu.js';
 import { ftpsCheck, ftpErrorText } from '../src/printers.js';
 
@@ -278,11 +278,11 @@ if (started) {
   console.log(`  WORKS: ${started.name}`);
   console.log(`         command=${started.variant} dir=${started.dir || '(root)'} param=${started.param || '(none)'}`);
 } else {
-  console.log('  Nothing started. Paste this whole output — the pattern across the rows');
-  console.log('  says more than any single row does.');
+  console.log(readPattern(results).join('\n'));
 }
 console.log('');
 watch.stop();
+
 process.exit(0);
 
 /** Wait for the printer to move, or to complain about the command we just sent. */
