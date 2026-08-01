@@ -1,17 +1,17 @@
-// Keeps every free printer fed from the queue.
+// Getting a finished design onto a printer.
 //
-// Submitting used to be the ONLY moment a job could reach a printer: if all
-// printers were busy right then, the job sat 'queued' for ever — the g-code was
-// on disk and the lead was captured, but nothing ever printed it, and the
-// dashboard's buttons only relabel a job's status. At a booth with three
-// printers and a line of kids that loses every print past the third.
+// Nothing goes anywhere on its own. A submitted job lands in the queue and
+// stays there until an operator presses that printer's button on the dashboard,
+// which uploads it to the SD card and starts it.
 //
-// So dispatching is a pump, not a one-shot. It runs when a job is submitted AND
-// whenever a printer frees up, and it always works from the queue.
+// That is deliberate. Each printer is loaded with particular filament, so which
+// machine a job goes to is a decision about colour, and only a person standing
+// at the booth can make it — sending to "whichever is free" is exactly how a
+// kid's drawing comes out in the wrong colour.
 //
-// Reserving is instant; uploading is not. A job is marked 'assigned' to its
-// printer synchronously, so the kid's screen can name the printer straight
-// away, and the ~2s FTPS upload happens after the tablet has moved on.
+// integrations.lan.autoDispatch turns the automatic behaviour back on: jobs go
+// to the first free printer on submit, and queued jobs follow as printers free
+// up. That only makes sense if every printer carries the same two colours.
 
 import path from 'node:path';
 import { sendToPrinter } from '../integrations/bambu.js';
@@ -25,6 +25,8 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
   // ever would spin the whole queue against it, so a job that has failed this
   // many times waits for an operator (the dashboard's send button clears it).
   const maxAttempts = cfg.integrations?.lan?.maxDispatchAttempts ?? 3;
+  // off by default — see the note at the top of this file
+  const auto = () => cfg.integrations?.lan?.autoDispatch === true;
 
   /** Oldest queued job first — whoever has been waiting longest goes next. */
   function nextQueued() {
@@ -93,6 +95,7 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
    * printers finishing at once cannot hand the same job to both.
    */
   async function pump() {
+    if (!auto()) return; // operator-driven: the dashboard sends, nothing else does
     if (running) { again = true; return; }
     running = true;
     try {
@@ -123,9 +126,11 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
      * throw them at the same broken printer straight away.
      */
     submit(job) {
+      if (!auto()) return null; // straight into the queue for an operator to place
       const printer = reserve(job);
       if (printer) send(job, printer).then((r) => { if (r.sent) pump(); }).catch(() => {});
       return printer;
     },
+    autoDispatch: auto,
   };
 }

@@ -145,6 +145,8 @@
       "uploadDir": "",
       "sdPrefix": "/sdcard",
       "timeoutMs": 30000,
+      "_dispatch_comment": "autoDispatch false means a submitted design waits in the queue until an operator presses a printer's button on the dashboard. Each printer holds particular filament, so picking the machine is a decision about colour. Set true only if every printer carries the same two colours.",
+      "autoDispatch": false,
       "_qos_comment": "The printer does not acknowledge MQTT publishes, so the start command goes out at QoS 0 and whether it worked is read from the printer's own reported state. startConfirmMs is how long to give it to turn over before saying it never started; maxDispatchAttempts stops a switched-off printer from spinning the whole queue.",
       "qos": 0,
       "startConfirmMs": 25000,

@@ -2249,10 +2249,17 @@ async function submit(){
         body:JSON.stringify({contact:state.contact,...designObj()})});
       const data=await r.json();
       if(!r.ok||!data.ok){toast(data.error||'Something went wrong — please try again',true);$('#submit').disabled=false;return;}
+      // Jobs wait for an operator to put them on a printer with the right
+      // filament loaded, so the honest thing to show is the queue position —
+      // not a print time that starts whenever someone gets to it.
+      const mins=data.meta?.estMinutes??meta.estMinutes;
+      const ahead=data.queuedAhead??0;
       $('#done-title').textContent=`You're in the queue, ${first}!`;
       $('#done-msg').textContent=data.printer
-        ?`Printing on ${data.printer} — about ${data.meta?.estMinutes??meta.estMinutes} minutes.`
-        :`Saved! About ${data.meta?.estMinutes??meta.estMinutes} minutes to print.`;
+        ?`Printing on ${data.printer} — about ${mins} minutes.`
+        :ahead>1
+          ?`There ${ahead-1===1?'is':'are'} ${ahead-1} ahead of you, then yours takes about ${mins} minutes.`
+          :`Yours is next up — about ${mins} minutes once it starts.`;
       $('#done-foot').textContent='We’ll WhatsApp you the moment it’s ready to collect.';
       show('done');
     }catch{toast('No connection to the booth server',true);$('#submit').disabled=false;}

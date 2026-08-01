@@ -180,8 +180,16 @@ pill while anything is pending.
   that service account, and set `integrations.drive.folderId`. Files always save locally too.
 ## Bambu LAN auto-send + status monitoring
 
-With LAN mode configured, a submitted design is uploaded to a free printer and started
-automatically, and the print's progress drives the job forward with no operator tap:
+A submitted design lands in the **queue** and waits there. The operator presses that
+printer's button on the dashboard, which uploads it to the SD card and starts it — because
+each printer is loaded with particular filament, so which machine a job goes to is a
+decision about colour that only a person at the booth can make.
+
+Set `integrations.lan.autoDispatch` to `true` for the automatic behaviour (first free
+printer on submit, queued jobs follow as printers free up). That only makes sense if every
+printer carries the same two colours.
+
+Once a job is on a printer, its progress drives the job forward with no further taps:
 
 | Printer state | Job becomes | Effect |
 | --- | --- | --- |
