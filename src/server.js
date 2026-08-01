@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.js';
+import { loadConfig, syncedFolderWarning } from './config.js';
 import { generate } from './gcode/engine.js';
 import { Queue } from './dispatch/queue.js';
 import { saveLead } from './leads.js';
@@ -25,14 +25,27 @@ outbox.init(root);
 const app = express();
 app.use(express.json({ limit: '4mb' }));
 
-const outDir = path.join(root, 'output');
-fs.mkdirSync(outDir, { recursive: true });
+// Configurable so the day's files can land in a synced/backup folder while the
+// app itself runs from local disk — see output.dir / output.leadsDir.
+const outDir = cfg.output.dirResolved;
+const leadsDir = cfg.output.leadsResolved;
+for (const dir of [outDir, leadsDir]) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+  } catch (e) {
+    console.error(`Cannot write to ${dir}`);
+    console.error(`  ${e.message}`);
+    console.error('  Set output.dir / output.leadsDir in config.json to a folder you can write to.');
+    process.exit(1);
+  }
+}
 
 // ---- static ----
 app.use(express.static(path.join(root, 'public')));
 app.use('/dashboard', express.static(path.join(root, 'dashboard')));
 app.use('/output', express.static(outDir));
-app.use('/leads', express.static(path.join(root, 'leads')));
+app.use('/leads', express.static(leadsDir));
 
 // ---- kiosk API ----
 app.get('/api/config', (_req, res) => {
@@ -88,7 +101,7 @@ app.post('/api/submit', async (req, res) => {
     notify: null,
   });
 
-  try { saveLead(root, job, design, cfg); } catch (e) { console.error('lead save failed', e); }
+  try { saveLead(leadsDir, job, design, cfg); } catch (e) { console.error('lead save failed', e); }
 
   // push the lead to the CRM the moment they submit (captures them even if they
   // never collect the print). Best-effort + retried by the outbox.
@@ -378,12 +391,20 @@ const server = app.listen(port, () => {
   console.log(`  kiosk:     http://localhost:${port}/`);
   console.log(`  dashboard: http://localhost:${port}/dashboard/`);
   console.log(`  config:    ${cfg._configPath}`);
+  if (outDir !== path.join(root, 'output')) console.log(`  gcode:     ${outDir}`);
+  if (leadsDir !== path.join(root, 'leads')) console.log(`  leads:     ${leadsDir}`);
   if (cfg._defaulted?.length) {
     console.log(`             (${cfg._defaulted.length} newer settings not in your config.json — using shipped defaults: ${cfg._defaulted.slice(0, 6).join(', ')}${cfg._defaulted.length > 6 ? ', …' : ''})`);
   }
   const lan = cfg.integrations?.lan?.enabled;
   const ready = (cfg.integrations?.printers || []).filter((p) => p.ip && p.serial && p.accessCode).length;
   console.log(`  printers:  LAN ${lan ? 'ON' : 'off'}, ${ready} configured`);
+
+  const synced = syncedFolderWarning();
+  if (synced) {
+    console.log('');
+    console.log('  ⚠ ' + synced);
+  }
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {

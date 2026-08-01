@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mergeDefaults, missingKeys, root } from '../src/config.js';
+import { mergeDefaults, missingKeys, root, loadConfig, syncedFolderWarning } from '../src/config.js';
 
 // The booth laptop's config.json is copied once and then edited by hand, so it
 // goes stale as settings are added upstream. It must layer over the shipped
@@ -105,3 +105,67 @@ for (const file of bundles) {
     assert.ok(!JSON.stringify(cfg).includes('accessCode'));
   });
 }
+
+// --- where the day's files go -----------------------------------------------
+//
+// These were pinned to the repo folder, so the only way to get g-code and leads
+// into a synced drive was to put the whole checkout there — node_modules, .git
+// and all — which is a bad place to run a server from.
+
+/**
+ * Run `fn` against a specific config.json, restoring whatever was there.
+ * `patch === null` means "with no config.json at all" — without that, these
+ * tests pass or fail depending on what the machine they run on has configured.
+ */
+function withConfig(patch, fn) {
+  const file = path.join(root, 'config.json');
+  const had = fs.existsSync(file);
+  const backup = had ? fs.readFileSync(file, 'utf8') : null;
+  try {
+    if (patch === null) {
+      if (had) fs.rmSync(file);
+    } else {
+      const base = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8'));
+      patch(base);
+      fs.writeFileSync(file, JSON.stringify(base));
+    }
+    return fn();
+  } finally {
+    if (had) fs.writeFileSync(file, backup);
+    else if (fs.existsSync(file)) fs.rmSync(file);
+  }
+}
+
+test('output directories default to the project folder', () => {
+  withConfig(null, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.output.dirResolved, path.join(root, 'output'));
+    assert.equal(cfg.output.leadsResolved, path.join(root, 'leads'));
+  });
+});
+
+test('an absolute output path is taken as given, so files can land in a synced folder', () => {
+  const abs = process.platform === 'win32' ? 'D:\\Drive\\gcode' : '/mnt/drive/gcode';
+  withConfig((base) => { base.output.dir = abs; base.output.leadsDir = 'somewhere-else'; }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.output.dirResolved, abs, 'an absolute path is used unchanged');
+    assert.equal(cfg.output.leadsResolved, path.join(root, 'somewhere-else'), 'a relative one still hangs off the project');
+  });
+});
+
+test('running from a synced folder is called out, running from a normal one is not', () => {
+  assert.equal(syncedFolderWarning('/home/someone/3DiPad'), null);
+  assert.equal(syncedFolderWarning('C:\\Users\\info\\3DiPad'), null);
+
+  // the exact path this came up with: Drive's "Other computers" is a read-only
+  // backup of a different machine, so npm and git fail outright there
+  const other = syncedFolderWarning('G:\\Other computers\\My computer\\Desktop\\Projects\\3DiPad');
+  assert.match(other, /Other computers/);
+  assert.match(other, /read-only/);
+
+  for (const p of ['G:\\My Drive\\3DiPad', 'C:\\Users\\info\\OneDrive\\3DiPad', 'C:\\Users\\info\\Dropbox\\3DiPad']) {
+    const w = syncedFolderWarning(p);
+    assert.ok(w, `${p} should be flagged`);
+    assert.match(w, /node_modules/, 'says why it matters');
+  }
+});
