@@ -10,9 +10,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function loadConfig() {
   const examplePath = path.join(root, 'config.example.json');
   const userPath = path.join(root, 'config.json');
-  const defaults = JSON.parse(fs.readFileSync(examplePath, 'utf8'));
+  const defaults = readJson(examplePath);
   const hasUser = fs.existsSync(userPath);
-  const user = hasUser ? JSON.parse(fs.readFileSync(userPath, 'utf8')) : null;
+  const user = hasUser ? readJson(userPath) : null;
 
   const cfg = hasUser ? mergeDefaults(defaults, user) : defaults;
   resolveTemplates(cfg);
@@ -21,6 +21,54 @@ export function loadConfig() {
   cfg._configPath = hasUser ? userPath : examplePath;
   cfg._defaulted = hasUser ? missingKeys(defaults, user) : [];
   return cfg;
+}
+
+/**
+ * Read a JSON file, and if it will not parse, say where and why in terms an
+ * operator can act on.
+ *
+ * config.json is edited by hand — a printer's IP, a colour, a debug flag — and
+ * one missing comma took the whole booth down behind twelve lines of Node
+ * stack trace ending in `at async asyncRunEntryPointWithESMLoader`. That is
+ * unreadable at a fair, and it buries the one useful fact: which line.
+ */
+export function readJson(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const at = /position (\d+)/.exec(e.message);
+    const pos = at ? Number(at[1]) : -1;
+    const before = pos >= 0 ? text.slice(0, pos) : '';
+    const line = pos >= 0 ? before.split('\n').length : 0;
+    const col = pos >= 0 ? pos - before.lastIndexOf('\n') : 0;
+    const lines = text.split('\n');
+
+    const out = [`${path.basename(file)} is not valid JSON.`, ''];
+    if (line > 0) {
+      // the line before is usually where the missing comma belongs
+      for (let n = Math.max(1, line - 1); n <= Math.min(lines.length, line + 1); n++) {
+        out.push(`  ${String(n).padStart(4)} | ${lines[n - 1]}`);
+        if (n === line) out.push(`       | ${' '.repeat(Math.max(0, col - 1))}^`);
+      }
+      out.push('');
+    }
+    if (/Expected ',' or/.test(e.message)) {
+      out.push('  The line ABOVE this one is probably missing a comma at the end.');
+      out.push('  Every entry except the last one in a block needs a comma after it.');
+    } else if (/Unexpected token/.test(e.message) || /Expected double-quoted/.test(e.message)) {
+      out.push('  Check for a stray comma before a } or ], or a missing quote.');
+    }
+    out.push(`  (${e.message})`);
+    out.push('');
+    out.push(`  Fix ${file} and start the booth again.`);
+    out.push('  If you are stuck: delete config.json and run the printer setup page again,');
+    out.push('  or copy config.example.json over it — but that loses your printer details.');
+
+    const err = new Error(out.join('\n'));
+    err.friendly = true;
+    throw err;
+  }
 }
 
 /**

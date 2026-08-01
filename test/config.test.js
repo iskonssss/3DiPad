@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mergeDefaults, missingKeys, root, loadConfig, syncedFolderWarning } from '../src/config.js';
+import { mergeDefaults, missingKeys, root, loadConfig, syncedFolderWarning , readJson} from '../src/config.js';
 
 // The booth laptop's config.json is copied once and then edited by hand, so it
 // goes stale as settings are added upstream. It must layer over the shipped
@@ -168,4 +169,37 @@ test('running from a synced folder is called out, running from a normal one is n
     assert.ok(w, `${p} should be flagged`);
     assert.match(w, /node_modules/, 'says why it matters');
   }
+});
+
+test('a hand-edited config with a typo says which line, not a stack trace', () => {
+  // The booth's config.json is edited by hand — a printer IP, a colour, a debug
+  // flag — and one missing comma took the whole thing down behind twelve lines
+  // of Node stack trace ending in `asyncRunEntryPointWithESMLoader`.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), '3dipad-cfg-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, [
+    '{',
+    '  "integrations": {',
+    '    "lan": {',
+    '      "enabled": true',        // <- the missing comma
+    '      "debug": true',
+    '    }',
+    '  }',
+    '}',
+  ].join('\n'));
+
+  let e = null;
+  try { readJson(file); } catch (err) { e = err; }
+  assert.ok(e, 'a broken config must not parse silently');
+  assert.match(e.message, /not valid JSON/);
+  assert.ok(e.friendly, 'marked as an operator problem so the server does not dump a stack');
+  assert.match(e.message, /"debug": true/, 'shows the offending line');
+  assert.match(e.message, /\^/, 'and points at the column');
+  assert.match(e.message, /missing a comma/, 'and names the likely cause');
+  assert.match(e.message, /5 \|/, 'with line numbers to find it by');
+
+  // a good file still just parses
+  fs.writeFileSync(file, '{"a":{"b":1}}');
+  assert.deepEqual(readJson(file), { a: { b: 1 } });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
