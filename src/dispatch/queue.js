@@ -69,6 +69,32 @@ export class Queue {
     return this.jobs.slice().reverse().slice(0, Math.max(1, limit));
   }
 
+  /**
+   * Run an old job again. The g-code is still on disk, so a reprint is a new
+   * job pointing at the same file — a fresh card, its own place in the queue,
+   * and the original record left exactly as it was. Putting the old job back to
+   * 'queued' instead would rewrite history that says a keychain was collected.
+   *
+   * Returns the new job, or null if there is no such job.
+   */
+  reprint(id) {
+    const from = this.get(id);
+    if (!from) return null;
+    const seq = this.nextSeq();
+    const copy = {
+      ...from,
+      id: 'j' + seq,
+      seq,
+      createdAt: new Date().toISOString(),
+      reprintOf: from.reprintOf || from.id,
+      printerId: null,
+      // everything that describes the first run rather than the keychain
+      notify: null, leadPush: null, dispatch: null, dispatchAttempts: 0,
+    };
+    delete copy.history;
+    return this.add(copy);
+  }
+
   /** First printer with no active job, or null. */
   freePrinter(printers) {
     const busy = new Set(this.jobs.filter((j) => ['assigned', 'printing', 'colour_change'].includes(j.status)).map((j) => j.printerId));
