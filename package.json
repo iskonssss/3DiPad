@@ -9,7 +9,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "gen": "node src/gcode/cli.js",
     "build": "node tools/build-kiosk.mjs",
-    "test-printer": "node tools/test-printer.mjs"
+    "test-printer": "node tools/test-printer.mjs",
+    "send-file": "node tools/send-file.mjs"
   },
   "engines": {
     "node": ">=20"

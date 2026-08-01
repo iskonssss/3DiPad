@@ -228,8 +228,18 @@ test('the printer answering a command is not mistaken for status', () => {
   assert.equal(r.reason, 'file not found');
   assert.equal(r.sequenceId, '12');
 
-  // an errno with no reason is still a reason
-  assert.equal(readCommandReply({ print: { command: 'project_file', errno: 5 } }).reason, 'errno 5');
+  // an error number with no reason is still a reason, and is shown in hex —
+  // the booth saw "err_code":84033543, which is only searchable as 0x05024007
+  assert.equal(readCommandReply({ print: { command: 'project_file', errno: 5 } }).reason, 'err_code 5 (0x00000005)');
+
+  // how the A1 mini actually refuses a print: our whole command echoed back
+  // with one field added. Looking only for result/reason filed this away as an
+  // ordinary message and the refusal went unnoticed for days.
+  const refused = readCommandReply({ print: { command: 'project_file', sequence_id: '17',
+    param: 'Metadata/plate_1.gcode', err_code: 84033543 } });
+  assert.equal(refused.result, 'error');
+  assert.equal(refused.errCode, 84033543);
+  assert.match(refused.reason, /0x05024007/, 'shown in the base the code is documented in');
 });
 
 test('a printer we cannot see is never sent a second start command', async () => {
