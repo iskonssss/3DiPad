@@ -317,16 +317,23 @@ test('the automatic path is still there when it is asked for', async () => {
 // gets knocked, a parent loses the keychain on the way home. The g-code is still
 // on disk, so the operator needs to find the old job and run it again.
 
-test('history keeps collected and failed jobs that the active view drops', () => {
+test('a failed print stays in front of the operator; a collected one does not', () => {
   const { queue } = scratchQueue();
   const a = addJob(queue, 'Ada');
   const b = addJob(queue, 'Bo');
-  const c = addJob(queue, 'Cy');
+  addJob(queue, 'Cy');
   queue.setStatus(a.id, 'collected');
   queue.setStatus(b.id, 'failed');
 
-  assert.deepEqual(queue.active().map((j) => j.contact.name), ['Cy'], 'the operator view shows only live work');
-  assert.deepEqual(queue.history().map((j) => j.contact.name), ['Cy', 'Bo', 'Ada'], 'history keeps everything, newest first');
+  // Ada went home with a keychain. Bo did not — and Bo's card vanishing off the
+  // board was how a failed print became nobody's problem.
+  assert.deepEqual(queue.active().map((j) => j.contact.name), ['Cy', 'Bo'],
+    'the failed job is still work the operator has to deal with');
+  assert.deepEqual(queue.history().map((j) => j.contact.name), ['Cy', 'Bo', 'Ada'],
+    'history keeps everything, newest first');
+
+  // and it still does not tie up the printer it died on
+  assert.equal(queue.freePrinter([{ id: 'A1-1', ip: '1.1.1.1' }])?.id, 'A1-1');
 });
 
 test('history is capped so a long day does not ship the lot', () => {
@@ -375,4 +382,16 @@ test('an old job can be run again without rewriting what happened to it', () => 
   // a reprint of a reprint still points back at the original
   assert.equal(q.reprint(again.id).reprintOf, first.id);
   assert.equal(q.reprint('nope'), null);
+});
+
+test('a reprint does not inherit the first run failure', () => {
+  const { queue } = scratchQueue();
+  const job = addJob(queue, 'Ada');
+  queue.setStatus(job.id, 'failed', { failure: 'error code 7 (look it up on the printer screen); stopped at 46%' });
+
+  const again = queue.reprint(job.id);
+  assert.equal(again.status, 'queued');
+  assert.equal(again.failure, null, 'a fresh copy has not failed at anything yet');
+  assert.equal(queue.get(job.id).failure, 'error code 7 (look it up on the printer screen); stopped at 46%',
+    'the original still records why it died');
 });

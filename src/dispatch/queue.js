@@ -55,9 +55,17 @@ export class Queue {
     return job;
   }
 
-  /** Active jobs (not collected/failed), newest first for the operator view. */
+  /**
+   * What the operator still has to deal with, newest first.
+   *
+   * Failed jobs stay here. They used to be filtered out alongside collected
+   * ones, but the two are nothing alike: a collected job ended with a kid
+   * holding a keychain, and a failed one ends with a kid holding nothing while
+   * their card silently disappears off the board. The operator has to see it to
+   * act on it.
+   */
   active() {
-    return this.jobs.filter((j) => !['collected', 'failed'].includes(j.status)).slice().reverse();
+    return this.jobs.filter((j) => j.status !== 'collected').slice().reverse();
   }
 
   /**
@@ -89,7 +97,7 @@ export class Queue {
       reprintOf: from.reprintOf || from.id,
       printerId: null,
       // everything that describes the first run rather than the keychain
-      notify: null, leadPush: null, dispatch: null, dispatchAttempts: 0,
+      notify: null, leadPush: null, dispatch: null, dispatchAttempts: 0, failure: null,
     };
     delete copy.history;
     return this.add(copy);

@@ -24,10 +24,28 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
     const h = watchPrinter(printer, cfg, (status) => {
       const prev = states[printer.id] || {};
       states[printer.id] = { ...prev, ...status, at: new Date().toISOString() };
-      if (status.state && status.state !== prev.state) applyTransition(printer, status.state);
+      if (status.state && status.state !== prev.state) applyTransition(printer, status.state, h);
     });
     handles.push(h);
     watchers.set(printer.id, h);
+  }
+
+  /**
+   * Why a print failed, in whatever terms the printer gave us. "print FAILED"
+   * on its own is a dead end for an operator standing at the booth: the error
+   * code and the printer's own answer to the last command are the only clues
+   * that exist, and both were being collected and then dropped.
+   */
+  function failureReason(printer, handle) {
+    const bits = [];
+    const s = states[printer.id] || {};
+    if (s.errorCode) bits.push(`error code ${s.errorCode} (look it up on the printer screen)`);
+    const c = handle?.health?.().lastCommand;
+    if (c && String(c.result || '').toUpperCase() !== 'SUCCESS') {
+      bits.push(`it answered "${c.command}" with ${c.result || '?'}${c.reason ? ` — ${c.reason}` : ''}`);
+    }
+    if (s.percent != null) bits.push(`stopped at ${s.percent}%`);
+    return bits.join('; ');
   }
 
   // The printer just let go of its job, so the next kid in the queue can have
@@ -35,7 +53,7 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   // queued for ever — its g-code written, its lead captured, never printed.
   const freed = () => { try { onPrinterFree(); } catch (e) { console.error('dispatch pump failed', e); } };
 
-  function applyTransition(printer, state) {
+  function applyTransition(printer, state, handle) {
     // the job currently on this printer
     const job = queue
       .active()
@@ -53,8 +71,10 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
       Promise.resolve(onReady(job)).catch((e) => console.error('ready notify failed', e));
       freed();
     } else if (state === 'FAILED') {
-      queue.setStatus(job.id, 'failed');
-      console.error(`[${printer.id}] print FAILED for ${job.filename}`);
+      const why = failureReason(printer, handle);
+      queue.setStatus(job.id, 'failed', { failure: why || null });
+      console.error(`[${printer.id}] print FAILED for ${job.filename}${why ? ` — ${why}` : ''}`);
+      console.error(`           The g-code is still on the SD card. "Print again" in History re-queues it.`);
       freed();
     }
   }

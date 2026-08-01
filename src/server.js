@@ -264,7 +264,7 @@ function publicJob(j) {
   return {
     id: j.id, seq: j.seq, name: j.contact.name, phone: j.contact.phone,
     colours: j.colours, shape: j.shape, hole: j.hole, filename: j.filename, status: j.status,
-    reprintOf: j.reprintOf || null,
+    reprintOf: j.reprintOf || null, failure: j.failure || null,
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
     driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',
@@ -368,12 +368,21 @@ function confirmStart(printer) {
  * this does not need the full start timeout.
  */
 function probeStart(printer) {
-  const waitMs = cfg.integrations?.lan?.startProbeMs ?? 8000;
+  // No status from this printer means we cannot tell whether the command
+  // landed. Say so rather than guessing — startPrint stops instead of firing
+  // another start at a machine that might already be printing.
+  const seen = () => monitor.states()[printer.id];
+  if (!seen()?.state) return Promise.resolve(null);
+
+  const waitMs = cfg.integrations?.lan?.startProbeMs ?? 12000;
   const deadline = Date.now() + waitMs;
   const moved = (s) => s && (['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(s.state) || (s.percent ?? 0) > 0);
   return new Promise((resolve) => {
     const poll = () => {
-      if (moved(monitor.states()[printer.id])) return resolve(true);
+      const s = seen();
+      if (moved(s)) return resolve(true);
+      // it went quiet mid-probe: back to "cannot tell"
+      if (!s?.state) return resolve(null);
       if (Date.now() >= deadline) return resolve(false);
       setTimeout(poll, 500).unref?.();
     };

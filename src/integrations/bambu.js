@@ -284,7 +284,17 @@ export async function startPrint(printer, remotePath, cfg, opts = {}) {
     if (!pub.ok) return { ok: false, stage: 'start', error: pub.error, variant };
     last = variant;
     if (!probe || i === variants.length - 1) break;
-    if (await probe(printer, variant)) break;
+
+    // Only send another start command if we can see that this one did nothing.
+    // A second "start" arriving at a printer that is already printing is not a
+    // no-op — it can abort the job. So the probe answers three ways, and only a
+    // definite "still idle" earns another try:
+    //   true  -> it started. Stop, and report which shape worked.
+    //   false -> definitely still idle. Try the next shape.
+    //   null  -> we cannot see this printer's state at all. Stop: firing more
+    //            commands blind is how you cancel someone's keychain.
+    const moved = await probe(printer, variant);
+    if (moved !== false) return { ok: true, variant, unverified: moved == null };
   }
   return { ok: true, variant: last };
 }
