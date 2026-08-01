@@ -75,9 +75,18 @@ echo Building the tablet app...
 call npm run build
 if errorlevel 1 goto failed
 
+rem The browser used to be opened on the line before "npm start" — so it always
+rem raced the server, and usually won, and the operator got
+rem "localhost refused to connect" on a booth that was in fact starting
+rem normally. It looked fine for a while only because the kiosk's service
+rem worker was answering for /dashboard/ out of its cache; once that stopped
+rem (correctly) the race became visible every time.
+rem
+rem So: wait for the port to actually answer, in the background, and open the
+rem browser then. Gives up after 60 seconds rather than hanging around.
 echo.
-echo Opening the dashboard in your browser...
-start "" http://localhost:3000/dashboard/
+echo Starting the booth. The dashboard will open once it is ready...
+start "" /min node tools\open-when-ready.mjs 3000 /dashboard/
 echo.
 echo ===================================================================
 echo  Leave this window open. Close it to stop the booth.
