@@ -374,14 +374,31 @@ export function readCommandReply(msg) {
   if (!p || !p.command) return null;
   // push_status is the printer talking to itself on a timer, not to us
   if (p.command === 'push_status' || p.command === 'pushall') return null;
-  if (p.result == null && p.reason == null && p.errno == null) return null;
+  // err_code is how the A1 mini refuses a print command: it echoes the whole
+  // request back with this one field added. We were only looking for `result`
+  // and `reason`, so the refusal read as an unremarkable message and got
+  // filed away with the rest.
+  const err = p.err_code ?? p.errno;
+  if (p.result == null && p.reason == null && err == null) return null;
   return {
     command: String(p.command),
-    result: p.result != null ? String(p.result) : null,
-    reason: p.reason != null ? String(p.reason) : (p.errno ? `errno ${p.errno}` : null),
+    result: p.result != null ? String(p.result) : (err ? 'error' : null),
+    reason: p.reason != null ? String(p.reason) : (err ? errorCodeText(err) : null),
+    errCode: err ?? null,
     sequenceId: p.sequence_id != null ? String(p.sequence_id) : null,
     at: new Date().toISOString(),
   };
+}
+
+/**
+ * Bambu reports errors as a 32-bit number that is only legible in hex — the
+ * booth saw "err_code":84033543, which is 0x05024007 and searchable, while the
+ * decimal is not.
+ */
+export function errorCodeText(code) {
+  const n = Number(code);
+  if (!Number.isFinite(n)) return String(code);
+  return `err_code ${n} (0x${(n >>> 0).toString(16).toUpperCase().padStart(8, '0')})`;
 }
 
 /**
