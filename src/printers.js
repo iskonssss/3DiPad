@@ -117,12 +117,48 @@ export async function ftpsCheck(printer, timeout = 15000) {
       secure: 'implicit', secureOptions: { rejectUnauthorized: false },
     });
     const list = await client.list();
-    return { ok: true, files: list.length };
+    // Listing proves the login. It does not prove we can put anything there,
+    // and those are different failures with different fixes: a wrong access
+    // code refuses the login, while a missing, full or write-protected SD card
+    // accepts it and then answers 550 to every upload. The booth saw seven
+    // uploads fail with a bare "550" and no way to tell which.
+    const write = await writeProbe(client);
+    return { ok: true, files: list.length, writable: write.ok, writeError: write.error };
   } catch (e) {
-    return { ok: false, error: String(e.message || e) };
+    return { ok: false, error: ftpErrorText(e) };
   } finally {
     try { client.close(); } catch {}
   }
+}
+
+/** Put a few bytes on the card and take them away again. */
+async function writeProbe(client) {
+  const name = '3dipad-write-test.txt';
+  try {
+    const { Readable } = await import('node:stream');
+    await client.uploadFrom(Readable.from(['3DiPad write test\n']), name);
+    try { await client.remove(name); } catch { /* leaving it behind is harmless */ }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: ftpErrorText(e) };
+  }
+}
+
+/**
+ * FTP errors arrive as a bare code — "550" on its own tells an operator
+ * nothing. Say what that code means for this printer.
+ */
+export function ftpErrorText(e) {
+  const msg = String(e?.message || e || '').trim();
+  const code = /(^|\s)(\d{3})(\s|$)/.exec(msg)?.[2] || (e && e.code ? String(e.code) : '');
+  const known = {
+    550: 'the printer refused to write there — usually no SD card in the slot, a full card, or one that needs formatting on the printer',
+    553: 'the printer would not accept that file name',
+    552: 'the SD card is out of space',
+    530: 'the access code was rejected',
+    421: 'the printer closed the connection — it may be busy or LAN Mode was turned off',
+  }[code];
+  return known ? `${msg} — ${known}` : msg;
 }
 
 /**
@@ -155,8 +191,15 @@ export async function checkPrinter(printer, liveState = null, health = null) {
 
   if (ftpPort) {
     const f = await ftpsCheck(printer);
-    if (f.ok) pass(`Access code accepted (${f.files} items on the SD card)`);
-    else fail('The printer refused the access code', 'Re-read it from the printer screen — it changes when LAN Mode is toggled');
+    if (f.ok) {
+      pass(`Access code accepted (${f.files} items on the SD card)`);
+      if (f.writable) pass('The SD card accepts new files');
+      else fail(`The SD card will not accept new files: ${f.writeError}`,
+        'Check there is an SD card in the printer, that it is not full, and format it from the printer screen if in doubt. Nothing can be sent until this passes.');
+    } else {
+      fail(`The printer refused the file connection: ${f.error}`,
+        'Re-read the access code from the printer screen — it changes when LAN Mode is toggled');
+    }
   }
 
   // "No status" has two causes that look identical and need opposite fixes.

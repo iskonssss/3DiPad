@@ -29,6 +29,7 @@ import { build3mf, zipMember, isBambuStudio3mf, plateGcodeName } from '../src/in
 import {
   uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured, readCommandReply,
 } from '../src/integrations/bambu.js';
+import { ftpsCheck, ftpErrorText } from '../src/printers.js';
 
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d; };
@@ -200,6 +201,30 @@ if (busy()) {
   process.exit(1);
 }
 
+// Nothing below this can mean anything if the card will not take a file.
+// Seven experiments all failing at upload says nothing about start commands;
+// it says the storage is unavailable, and that is worth one check up front
+// rather than seven identical failures.
+const card = await ftpsCheck(printer);
+if (!card.ok || !card.writable) {
+  console.log('  The SD card is not usable, so there is nothing to test yet.');
+  console.log('');
+  console.log(card.ok
+    ? `    Logged in fine, ${card.files} items listed, but writing failed:\n      ${card.writeError}`
+    : `    Could not log in: ${card.error}`);
+  console.log('');
+  console.log('    Check, in this order:');
+  console.log('      1. there is an SD card in the slot on the side of the printer');
+  console.log('      2. it is not full — delete old prints from the printer screen');
+  console.log('      3. format it from the printer screen (Settings > Storage) if unsure');
+  console.log('      4. LAN Mode is still on, and the access code has not changed');
+  console.log('');
+  watch.stop();
+  process.exit(1);
+}
+console.log(`  SD card:    ${card.files} items, and it accepts new files`);
+console.log('');
+
 const results = [];
 for (const [i, ex] of EXPERIMENTS.entries()) {
   const label = `${i + 1}/${EXPERIMENTS.length}  ${ex.name}`;
@@ -213,8 +238,8 @@ for (const [i, ex] of EXPERIMENTS.entries()) {
   try {
     up = await uploadFile(printer, ex.file, sendCfg);
   } catch (e) {
-    console.log(`        upload FAILED: ${e.message || e}`);
-    results.push({ ...ex, outcome: 'upload failed', detail: String(e.message || e) });
+    console.log(`        upload FAILED: ${ftpErrorText(e)}`);
+    results.push({ ...ex, outcome: 'upload failed', detail: ftpErrorText(e) });
     continue;
   }
 
