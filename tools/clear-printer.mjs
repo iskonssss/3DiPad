@@ -12,6 +12,7 @@
 
 import { loadConfig } from '../src/config.js';
 import { watchPrinter, isConfigured, clearIfStuck, needsClearing, readCommandReply } from '../src/integrations/bambu.js';
+import { refuseIfBoothRunning } from './booth-running.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (n) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : null; };
@@ -24,6 +25,8 @@ if (!chosen.length) {
   console.error(wanted ? `No printer with id ${wanted}.` : 'No printer configured — use the setup page first.');
   process.exit(2);
 }
+
+await refuseIfBoothRunning(process.argv, 'clear-printer');
 
 console.log('');
 for (const printer of chosen) {
