@@ -97,6 +97,9 @@
       .stopbtn { margin-top:8px; width:100%; background:#00000033; color:#0b1220;
                  border:2px solid #0b122055; font-size:13px; padding:6px; font-weight:800; }
       .stopbtn:hover { background:#0b1220; color:#fff; }
+      .resetbtn { margin-top:8px; width:100%; background:#0b1220; color:#fff;
+                  border:2px solid #0b122055; font-size:13px; padding:6px; font-weight:800; }
+      .resetbtn:hover { background:#000; }
 
       /* Says what a button did. Nothing on this page should be able to do
          nothing and say nothing. */
@@ -223,8 +226,17 @@
         // left it that way for good, because a printer stays FAILED until it is
         // given something else to do: one bad print took a machine out of the
         // booth for the rest of the day. It wants attention, not exclusion.
+        // The operator has been over and cleared it. A Bambu never leaves
+        // FAILED on its own — it takes the stop, says success, and goes on
+        // naming the dead job — so without this the tile stays red all day for
+        // a machine that is empty and willing. The acknowledgement is dropped
+        // by the monitor the moment the printer reports anything new, so this
+        // can only ever hide the failure someone has actually dealt with.
+        if (live.acknowledged) {
+          return { cls: 'free', st: 'READY', sub: 'Cleared by you — free for the next job', send: 'ok' };
+        }
         if (state === 'FAILED') {
-          return { cls: 'soon', st: 'FAILED', sub: [who, 'clear the bed, then send again'].filter(Boolean).join(' · '), pct: null, cols, send: 'warn' };
+          return { canReset: true, cls: 'soon', st: 'FAILED', sub: [who, 'clear the bed, then send again'].filter(Boolean).join(' · '), pct: null, cols, send: 'warn' };
         }
         // Heating is not printing. The printer reports PREPARE while it brings
         // the bed and nozzle up, and during that its remaining-time estimate is
@@ -264,6 +276,7 @@
             ${filaments(s.cols, s.next)}
             ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
             ${s.canStop ? `<button class="stopbtn" onclick="stopPrinter('${p.id}','${esc(p.name)}')">■ Stop this print</button>` : ''}
+            ${s.canReset ? `<button class="resetbtn" onclick="resetPrinter('${p.id}','${esc(p.name)}')">✓ Bed cleared — ready</button>` : ''}
           </div>`;
         }).join('');
       }
@@ -448,6 +461,15 @@
         if (!confirm(`Stop the print on ${name}?\n\nThe part will be ruined and the job marked failed. You can send it again afterwards.`)) return;
         const r = await api(`/api/printers/${id}/stop`, { method: 'POST' });
         if (r) toast(r.stopped ? `Stopped ${r.stopped} on ${name}.` : `${name} stopped.`);
+        tick();
+      }
+
+      // No confirm: there is nothing to lose. The printer is not printing (the
+      // server refuses this while it is), and the worst case is a tile that
+      // goes green a few seconds before the operator finishes scraping.
+      async function resetPrinter(id, name) {
+        const r = await api(`/api/printers/${id}/reset`, { method: 'POST' });
+        if (r) toast(r.released ? `${name} is ready — released ${r.released}.` : `${name} is ready.`);
         tick();
       }
 
