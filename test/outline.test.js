@@ -196,17 +196,7 @@ test('the jersey survives every inset the engine takes from it', async () => {
 
   // A shape that crosses itself is not a shape. Sleeves and collar are exactly
   // where a hand-placed outline goes wrong.
-  const crosses = (a, b, c, d) => {
-    const s = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
-    return s(a, b, c) !== s(a, b, d) && s(c, d, a) !== s(c, d, b);
-  };
-  for (let i = 0; i < poly.length; i++) {
-    for (let j = i + 2; j < poly.length; j++) {
-      if (i === 0 && j === poly.length - 1) continue;
-      assert.ok(!crosses(poly[i], poly[(i + 1) % poly.length], poly[j], poly[(j + 1) % poly.length]),
-        `the outline crosses itself at ${i}/${j}`);
-    }
-  }
+  assert.equal(crossings(poly), 0, 'the outline crosses itself');
 
   let area2 = 0;
   for (let i = 0; i < poly.length; i++) {
@@ -215,15 +205,15 @@ test('the jersey survives every inset the engine takes from it', async () => {
   }
   assert.ok(area2 > 0, 'the outline must wind counter-clockwise like every other shape');
 
-  let last = Infinity;
+  // A fold at a concave corner does not shorten the ring, shrink its bounding
+  // box, or push a point outside the outline — all three of those passed while
+  // the armpit was visibly barbed. What it does is make the inset ring cross
+  // itself, so that is what to measure. A sharp armpit scores 1 at 0.8mm and 2
+  // at 2mm; the rounded one scores 0 at every depth.
   for (const d of [0.45, 0.8, 1.35, 2.0, 2.8]) {
     const inset = insetPolygon(poly, d, { cell: 0.25 });
     assert.ok(inset.length >= 3, `the shape collapses at a ${d}mm inset`);
-    // each inset must be strictly inside the last, or the collar has folded
-    const xs = inset.map((p) => p.x), ys = inset.map((p) => p.y);
-    const span = (Math.max(...xs) - Math.min(...xs)) + (Math.max(...ys) - Math.min(...ys));
-    assert.ok(span < last, `the ${d}mm inset is not inside the one before it`);
-    last = span;
+    assert.equal(crossings(inset), 0, `the ${d}mm inset folds over itself — look at the armpits`);
   }
 });
 
@@ -262,3 +252,18 @@ test('every shape the booth offers is one the generator knows', async () => {
   const icons = kiosk.slice(kiosk.indexOf('const SHAPE_ICONS'), kiosk.indexOf('const SHAPES='));
   for (const shape of offered) assert.ok(icons.includes(`${shape}:`), `"${shape}" has no chip icon`);
 });
+
+
+/** How many times does a closed ring cross itself? Zero, for anything printable. */
+function crossings(ring) {
+  const side = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  const crosses = (a, b, c, d) => side(a, b, c) !== side(a, b, d) && side(c, d, a) !== side(c, d, b);
+  let n = 0;
+  for (let i = 0; i < ring.length; i++) {
+    for (let j = i + 2; j < ring.length; j++) {
+      if (i === 0 && j === ring.length - 1) continue;
+      if (crosses(ring[i], ring[(i + 1) % ring.length], ring[j], ring[(j + 1) % ring.length])) n++;
+    }
+  }
+  return n;
+}
