@@ -507,7 +507,7 @@ const CFG = {
     "warnPrintMinutes": 16
   },
   "colourChange": {
-    "mode": "bambu",
+    "mode": "purge",
     "cutX": 180,
     "cutRetractMm": 18,
     "pauseGcode": [
@@ -1579,7 +1579,25 @@ function generate(design, cfg) {
 
   // ---- colour change ----
   em.comment(`===== COLOUR CHANGE: load ${design.colours?.layer2 ?? 'colour 2'}, then Resume =====`);
-  for (const line of colourChangeBlock(cfg, backingZs[nBack - 1])) em.raw(line);
+  const swap = colourChangeBlock(cfg, backingZs[nBack - 1]);
+  // A two-colour keychain whose file never stops is not a keychain — it is a
+  // one-colour part that took fifteen minutes and looks like a success until
+  // someone picks it up. It happened: a change block built from AMS commands
+  // was discarded whole by a printer with no AMS, silently, and the print ran
+  // straight through. Nothing downstream could tell, because every other
+  // property of the file was correct.
+  //
+  // So the file is checked rather than trusted. M400 U1 is the only pause this
+  // machine has been seen to honour, and refusing to write the file at all is
+  // far better than handing a child the wrong keychain.
+  if (!swap.some((l) => /^\s*M400\s+U1\b/.test(l))) {
+    throw new Error(
+      'The colour-change block contains no M400 U1, so the print would never stop ' +
+      'to swap filament and the whole keychain would come out in colour 1. ' +
+      'Check colourChange in config.json: a "gcode" override replaces the block entirely.',
+    );
+  }
+  for (const line of swap) em.raw(line);
 
   // ---- design (colour 2), raised beads ----
   const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
@@ -2024,10 +2042,18 @@ const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
  * moves are emitted here instead. Set colourChange.mode to "pause" for the old
  * behaviour, or colourChange.gcode to replace the block outright.
  */
+/**
+ * The stop itself. M400 U1 is the only pause this printer has been observed to
+ * honour, so every mode goes through here rather than spelling it out — a mode
+ * that forgets it produces a two-colour file that prints in one colour.
+ */
+function pauseLines(c) {
+  return asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
+}
 function colourChangeBlock(cfg, atZ = 0) {
   const c = cfg.colourChange || {};
   if (c.gcode) return asLines(c.gcode);           // explicit override wins
-  const pause = asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
+  const pause = pauseLines(c);
   if (c.mode === 'pause') return pause;
   if (c.mode === 'bambu') return bambuChangeBlock(cfg, atZ);
 
@@ -2091,16 +2117,26 @@ function colourChangeBlock(cfg, atZ = 0) {
  * change_filament_gcode"), with the slicer's template expressions resolved for
  * a single-extruder external-spool change:
  *
- *   next_extruder = 255      the external spool rather than an AMS slot
+ *   next_extruder = 255      WRONG, and it cost a print — see below
  *   G1 X180                  the cutter, at the right-hand edge of a 180 bed
  *   M620.11 S1 I254 E-18     the long retraction that performs the cut
  *   T255                     unload, then ask for the new filament
  *   feedrate                 flush_volumetric_speed / 2.4053 * 60, i.e. mm/min
  *                            of 1.75 mm filament for a given mm^3/s
  *
- * Off by default. Every command here is one the firmware may or may not accept
- * on any given version, and the failure mode is a print that stalls half way —
- * so it is opt-in until it has been watched on a real keychain.
+ * WHAT WENT WRONG THE FIRST TIME, so nobody repeats it. 255 was read as "the
+ * external spool". It is not — it means NO NEXT TOOL, the end-of-print unload.
+ * The slicer template wraps its whole body in `{if next_extruder < 255}` and
+ * the `{else}` branch is a single travel move, so asking for 255 selects the
+ * branch that does nothing. The printer did not refuse it and nothing appeared
+ * in any log; the keychain simply came out in one colour. The right index is a
+ * real filament slot, and what the slicer resolves it to for a manual
+ * external-spool change is a question only an exported two-colour file from
+ * Bambu Studio can answer. Nobody should guess at it a third time.
+ *
+ * Because of that, the pause below is unconditional: if every AMS command here
+ * is discarded, this still behaves exactly like the "purge" mode and the print
+ * still stops. The cut is a bonus, never the thing being relied on.
  */
 function bambuChangeBlock(cfg, atZ = 0) {
   const c = cfg.colourChange || {};
@@ -2134,6 +2170,20 @@ function bambuChangeBlock(cfg, atZ = 0) {
     'M400',
     'G92 E0',
     'M628 S0',
+    // The pause goes in whatever the commands above did.
+    //
+    // Everything before this line is an AMS instruction, and a printer with no
+    // AMS attached does not refuse them — it discards them and carries straight
+    // on. A file relying on T255 alone therefore printed a two-colour keychain
+    // in one colour, with no pause, no error and nothing in the log: the worst
+    // possible failure, because it looks like a success until you pick the part
+    // up. M400 U1 is the one stop this machine is known to honour, so it is not
+    // optional and not conditional.
+    //
+    // If the cut did work, the old colour is already out and the operator just
+    // loads the new one. If it did not, this is the swap they were doing
+    // before. Either way the print stops.
+    ...pauseLines(c),
   ];
 
   if (purge > 0) {
