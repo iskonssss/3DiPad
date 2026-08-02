@@ -4,7 +4,7 @@ import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
   readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent, readPattern,
-  buildStopCommand, needsClearing, clearIfStuck,
+  buildStopCommand, needsClearing, clearIfStuck, errorCodeHint,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -401,4 +401,24 @@ test('a printer holding a failed job is cleared before it is sent another', asyn
   assert.equal(stuck.needed, true);
   assert.equal(stuck.cleared, false);
   assert.equal(stuck.state, 'FAILED');
+});
+
+test('a whole namespace refused is read as authorisation, not as a bad request', () => {
+  // Measured on the booth's A1 mini, one command per line, seconds apart on one
+  // connection:
+  //     system  ledctrl      -> result: success   (and the light moved)
+  //     pushing pushall      -> full status came back
+  //     print   project_file -> err_code 0x05024007
+  //     print   gcode_file   -> err_code 0x05024007
+  //     print   stop         -> err_code 0x05024007
+  // `stop` is valid in every state a printer can be in, including the FAILED
+  // one it was sent in, so the refusal cannot be about state — and it cannot be
+  // about the request either, since seven different requests drew it equally.
+  const hint = errorCodeHint(84033543);
+  assert.ok(hint, '0x05024007 is a code we have now measured, not one to shrug at');
+  assert.match(hint, /print namespace/, 'names what is actually being refused');
+  assert.match(hint, /Developer Mode/, 'and the switch to go and look for');
+  assert.ok(!/cloud|account/i.test(hint), 'the account theory was tested and disproved — LAN Only was already on');
+
+  assert.equal(errorCodeHint(1), null, 'codes we have not measured get no invented explanation');
 });

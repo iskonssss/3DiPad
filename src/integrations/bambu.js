@@ -460,10 +460,17 @@ export function errorCodeText(code) {
 export function errorCodeHint(code) {
   const hex = `0x${(Number(code) >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
   return {
-    '0x05024007': 'the printer would not accept a print command from the local network at all — ' +
-      'the usual cause is that it is still bound to a Bambu account and expecting print jobs ' +
-      'to arrive from the cloud. Turn LAN Only Mode ON from the printer screen ' +
-      '(Settings > Network), then re-read the access code, which changes when you do.',
+    // Measured, not guessed: on this printer every command in the `print`
+    // namespace comes back with this code — project_file, gcode_file, and
+    // stop alike — while `system` commands (ledctrl) answer "success" and the
+    // light physically obeys, and `pushing` (pushall) returns full status.
+    // A whole namespace refused while its neighbours work is an authorisation
+    // boundary, not a bad request and not a printer state: `stop` is valid in
+    // every state there is, including the FAILED one it was sent in.
+    '0x05024007': 'every command in the print namespace is being refused, while system and status ' +
+      'commands from the same connection succeed. That is third-party print control being switched ' +
+      'off rather than anything wrong with the request. Look for Developer Mode / "LAN Mode developer" ' +
+      'in the printer\'s network settings or in Bambu Handy, and turn it on.',
   }[hex] || null;
 }
 

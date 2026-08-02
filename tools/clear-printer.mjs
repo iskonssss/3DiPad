@@ -38,9 +38,20 @@ for (const printer of chosen) {
   } else {
     console.log(`  ${printer.name}: ${state.state}, still holding "${state.file || 'a finished job'}"`);
     const r = await clearIfStuck(printer, cfg, () => state);
-    console.log(r.cleared
-      ? `  ${printer.name}: cleared — now ${r.state}. It will accept prints again.`
-      : `  ${printer.name}: would not clear (still ${r.state}). Dismiss the last print on the printer's own screen.`);
+    if (r.cleared) {
+      console.log(`  ${printer.name}: cleared — now ${r.state}. It will accept prints again.`);
+    } else {
+      console.log(`  ${printer.name}: would not clear (still ${r.state}).`);
+      console.log('');
+      console.log('    The printer refused `stop` as well, with the same code it refuses');
+      console.log('    project_file with — and `stop` is valid in every state there is. So this');
+      console.log('    is not the failed job blocking things: every print command is being');
+      console.log('    refused, while the light and the status feed work fine.');
+      console.log('');
+      console.log('    Dismiss the failed print on the printer\'s own screen, and look for');
+      console.log('    DEVELOPER MODE in its network settings — third-party print control is off.');
+      console.log('    Run  npm run probe-commands  to see the whole picture.');
+    }
   }
   watch.stop();
 }
