@@ -91,6 +91,13 @@
       .pbtn.on { border-color:var(--accent); }
       .pbtn[disabled] { background:#1b2440; color:#5d6a8c; cursor:not-allowed; }
 
+      /* On the tile, because that is where you look when a printer is doing
+         something you want it to stop doing. Deliberately not styled to invite
+         a passing tap. */
+      .stopbtn { margin-top:8px; width:100%; background:#00000033; color:#0b1220;
+                 border:2px solid #0b122055; font-size:13px; padding:6px; font-weight:800; }
+      .stopbtn:hover { background:#0b1220; color:#fff; }
+
       /* Says what a button did. Nothing on this page should be able to do
          nothing and say nothing. */
       .toast { position:fixed; left:50%; bottom:26px; transform:translate(-50%, 20px);
@@ -209,7 +216,7 @@
         const cols = holding ? holding.colours : null;
 
         if (state === 'PAUSE') {
-          return { cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct, cols, next: 2 };
+          return { canStop: true, cls: 'soon swap', st: 'SWAP NOW', sub: holding ? `Load ${holding.colours.layer2} for ${who}` : 'Waiting for a filament change', pct, cols, next: 2 };
         }
         // A printer that failed a print is not busy — it is standing idle with a
         // ruined keychain on the bed. Calling it busy greyed its button out and
@@ -225,13 +232,14 @@
         // that had not laid a single line. Give the wait its own state and only
         // trust the estimate once the print is genuinely under way.
         if (state === 'PREPARE' || state === 'SLICING') {
-          return { cls: 'busy', st: 'HEATING UP', sub: [who, 'bed and nozzle'].filter(Boolean).join(' · '), pct: 0, cols, next: 1 };
+          return { canStop: true, cls: 'busy', st: 'HEATING UP', sub: [who, 'bed and nozzle'].filter(Boolean).join(' · '), pct: 0, cols, next: 1 };
         }
         if (state === 'RUNNING') {
           const started = (pct ?? 0) > 0;
-          if (!started) return { cls: 'busy', st: 'STARTING', sub: [who, 'first layer'].filter(Boolean).join(' · '), pct: 0, cols };
+          if (!started) return { canStop: true, cls: 'busy', st: 'STARTING', sub: [who, 'first layer'].filter(Boolean).join(' · '), pct: 0, cols };
           const soon = mins != null && mins <= 1;
           return {
+            canStop: true,
             cls: soon ? 'soon' : 'busy',
             st: soon ? 'ALMOST DONE' : 'PRINTING',
             sub: [who, mins != null ? `${mins} min left` : null].filter(Boolean).join(' · '),
@@ -240,7 +248,7 @@
         }
         // idle by its own account, but a job was just handed to it. The
         // operator has to load colour 1 before it starts, so show it early.
-        if (holding) return { cls: 'busy', st: 'STARTING', sub: who, pct, cols, next: 1 };
+        if (holding) return { canStop: true, cls: 'busy', st: 'STARTING', sub: who, pct, cols, next: 1 };
         return { cls: 'free', st: 'READY', sub: 'Free for the next job', send: 'ok' };
       }
 
@@ -255,6 +263,7 @@
             <span class="sub">${esc(s.sub || '')}</span>
             ${filaments(s.cols, s.next)}
             ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
+            ${s.canStop ? `<button class="stopbtn" onclick="stopPrinter('${p.id}','${esc(p.name)}')">■ Stop this print</button>` : ''}
           </div>`;
         }).join('');
       }
@@ -422,6 +431,16 @@
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(printerId ? { printerId } : {}),
         })) toast('Sent to the printer.');
+        tick();
+      }
+
+      async function stopPrinter(id, name) {
+        // A misfire here ruins somebody's keychain, so it asks — and names the
+        // machine, because three tiles side by side is exactly how the wrong
+        // one gets pressed.
+        if (!confirm(`Stop the print on ${name}?\n\nThe part will be ruined and the job marked failed. You can send it again afterwards.`)) return;
+        const r = await api(`/api/printers/${id}/stop`, { method: 'POST' });
+        if (r) toast(r.stopped ? `Stopped ${r.stopped} on ${name}.` : `${name} stopped.`);
         tick();
       }
 
