@@ -591,6 +591,7 @@ export function colourChangeBlock(cfg, atZ = 0) {
   if (c.gcode) return asLines(c.gcode);           // explicit override wins
   const pause = asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
   if (c.mode === 'pause') return pause;
+  if (c.mode === 'bambu') return bambuChangeBlock(cfg, atZ);
 
   const t = cfg.temp?.nozzle ?? 220;
   const lift = +(atZ + (c.liftMm ?? 4)).toFixed(2);
@@ -632,6 +633,95 @@ export function colourChangeBlock(cfg, atZ = 0) {
   }
 
   out.push('G92 E0', `G1 Z${lift} F3000`);
+  return out;
+}
+
+/**
+ * The A1 mini's own filament change — cut, unload, prompt, reload — rather than
+ * our approximation of it.
+ *
+ * The hand-rolled block above parks and retracts 8 mm and pauses, which clears
+ * the melt zone but leaves the operator to work the printer's filament menu at
+ * every single swap. What everyone actually wants is what Bambu Studio does:
+ * the head goes to the cutter, snips, the printer pulls the old colour out and
+ * asks for the new one, and feeds it in until the extruder gear catches.
+ *
+ * None of that can be arrived at by reasoning — the commands are undocumented
+ * Bambu internals and the cutter is at a machine-specific coordinate. These
+ * lines are transcribed from Bambu Studio's own A1 mini profile
+ * (resources/profiles/BBL/machine, "A1 mini 0.4 nozzle template
+ * change_filament_gcode"), with the slicer's template expressions resolved for
+ * a single-extruder external-spool change:
+ *
+ *   next_extruder = 255      the external spool rather than an AMS slot
+ *   G1 X180                  the cutter, at the right-hand edge of a 180 bed
+ *   M620.11 S1 I254 E-18     the long retraction that performs the cut
+ *   T255                     unload, then ask for the new filament
+ *   feedrate                 flush_volumetric_speed / 2.4053 * 60, i.e. mm/min
+ *                            of 1.75 mm filament for a given mm^3/s
+ *
+ * Off by default. Every command here is one the firmware may or may not accept
+ * on any given version, and the failure mode is a print that stalls half way —
+ * so it is opt-in until it has been watched on a real keychain.
+ */
+export function bambuChangeBlock(cfg, atZ = 0) {
+  const c = cfg.colourChange || {};
+  const t = cfg.temp?.nozzle ?? 220;
+  const up = +(atZ + (c.liftMm ?? 3)).toFixed(2);
+  const cutX = c.cutX ?? 180;                       // A1 mini: the 180 mm edge
+  const cutRetract = c.cutRetractMm ?? 18;          // retraction_distances_when_cut
+  // mm/min of 1.75 mm filament for a given volumetric rate — the slicer's own
+  // conversion, and the reason its purge feedrates look like arbitrary numbers.
+  const feed = Math.round(((c.flushMmps ?? cfg.speed?.maxVolumetricMmps ?? 12) / 2.4053) * 60);
+  const purge = Math.max(0, c.purgeMm ?? 60);
+
+  const out = [
+    '; ===== A1 mini filament change: cut, unload, reload =====',
+    'G392 S0',
+    'M1007 S0',
+    'M620 S255A ; 255 = the external spool',
+    'M204 S9000',
+    `G1 Z${up} F1200`,
+    'M400',
+    'M106 P1 S0',
+    'M106 P2 S0',
+    `M104 S${t} ; keep the old colour molten for the cut`,
+    `G1 X${cutX} F18000 ; to the cutter`,
+    `M620.11 S1 I254 E-${cutRetract} F1200 ; the long retraction that cuts it`,
+    'M400',
+    `M620.1 E F${feed} T${t}`,
+    'T255 ; unload the old colour, then ask for the new one',
+    `M620.1 E F${feed} T${t}`,
+    'G1 Y90 F9000',
+    'M400',
+    'G92 E0',
+    'M628 S0',
+  ];
+
+  if (purge > 0) {
+    // The slicer's shape: one long push to pack the melt zone, then short slow
+    // ones that break the strand so it drops instead of trailing across the part.
+    out.push('; --- purge the new colour ---', 'M400', `M109 S${t}`, 'M106 P1 S60');
+    const head = Math.min(23.7, purge);
+    out.push(`G1 E${head.toFixed(2)} F${feed}`);
+    const rest = purge - head;
+    if (rest > 0) {
+      for (let i = 0; i < 4; i++) {
+        out.push(`G1 E${(rest * 0.02).toFixed(2)} F50`);
+        out.push(`G1 E${(rest * 0.23).toFixed(2)} F${feed}`);
+      }
+    }
+    out.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
+  }
+
+  const wipes = Math.max(0, Math.round(c.wipes ?? 4));
+  if (wipes > 0) {
+    out.push('; --- wipe on the brush ---', 'M400', 'M106 P1 S178', 'M400 S3');
+    for (let i = 0; i < wipes; i++) out.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');
+    out.push('M400', 'M106 P1 S0');
+  }
+
+  out.push('M629', 'M621 S255A', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
 
