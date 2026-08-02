@@ -262,7 +262,7 @@ app.post('/api/printers/:slot/test', async (req, res) => {
   const list = cfg.integrations?.printers || [];
   const printer = list[Number(req.params.slot) - 1];
   if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
-  const result = await checkPrinter(printer, monitor.states()[printer.id], monitor.health()[printer.id]);
+  const result = await checkPrinter(printer, monitor.states()[printer.id], monitor.health()[printer.id], cfg);
   res.json({ ok: result.ok, findings: result.findings });
 });
 

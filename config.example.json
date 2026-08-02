@@ -153,7 +153,7 @@
       "languageCode": "en"
     },
     "lan": {
-      "_comment": "Bambu LAN-mode auto-send + status monitoring. Turn LAN Mode ON on each printer (Settings > Network) and copy its Access Code + Serial below. Verify with: npm run test-printer",
+      "_comment": "Bambu LAN-mode auto-send + status monitoring. On each printer turn ON both LAN Mode AND DEVELOPER MODE (Settings > Network), then restart it and copy the Access Code + Serial below. Developer Mode is the one that is easy to miss: without it the printer reports status, obeys the light and accepts uploads, but refuses every print command with err_code 0x05024007 — files reach the SD card and nothing ever starts. The setup page tests for this.",
       "enabled": false,
       "uploadDir": "",
       "sdPrefix": "/sdcard",
