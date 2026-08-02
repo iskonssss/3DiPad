@@ -52,6 +52,11 @@ const CASES = [
   // standing idle with a ruined keychain on the bed, and it stays FAILED until
   // it is given something else to do. Greying it out is a trap it never escapes.
   ['failed, bed not cleared', { ...P, live: { state: 'FAILED' } }, [], 'careful'],
+  // A Bambu never leaves FAILED on its own, so "the operator says it is clear"
+  // is the only thing that can free the tile. Both views must honour it, or the
+  // laptop shows a green printer the tablet still calls broken.
+  ['failed but cleared by the operator',
+    { ...P, live: { state: 'FAILED', acknowledged: { state: 'FAILED', at: '2026-08-02T10:00:00Z' } } }, [], 'sure'],
   ['idle but already holding a job', { ...P, live: { state: 'IDLE' } },
     [job({ status: 'assigned', printerId: 'A1-1' })], 'no'],
 ];

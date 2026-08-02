@@ -24,7 +24,12 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
     const h = watchPrinter(printer, cfg, (status) => {
       const prev = states[printer.id] || {};
       states[printer.id] = { ...prev, ...status, at: new Date().toISOString() };
-      if (status.state && status.state !== prev.state) applyTransition(printer, status.state, h);
+      if (status.state && status.state !== prev.state) {
+        // Any genuine change makes an operator's "I've dealt with it" stale. A
+        // dismissal must never be able to hide the *next* failure.
+        delete states[printer.id].acknowledged;
+        applyTransition(printer, status.state, h);
+      }
     });
     handles.push(h);
     watchers.set(printer.id, h);
@@ -82,6 +87,27 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   return {
     stop() { for (const h of handles) h.stop(); },
     states: () => states,
+    /**
+     * The operator has cleared the bed and this printer is ready, whatever it
+     * still says about itself.
+     *
+     * A Bambu does not leave FAILED on its own. It accepts `stop`, answers
+     * "success", and goes on reporting FAILED and naming the job that died —
+     * so a booth that only ever repeats what the printer says shows a red tile
+     * for a machine that is standing there empty and willing. We cannot make
+     * the printer forget, but we can record that a person looked at it, which
+     * is the fact the board is actually trying to convey.
+     *
+     * Deliberately not a lie about the printer: the acknowledgement is dropped
+     * the instant the printer reports any new state, so the next real failure
+     * shows up at once.
+     */
+    acknowledge(printerId) {
+      const s = states[printerId];
+      if (!s) return null;
+      s.acknowledged = { state: s.state || null, file: s.file || null, at: new Date().toISOString() };
+      return s.acknowledged;
+    },
     /** Per-printer MQTT health, for telling apart the ways "no status" happens. */
     health: () => Object.fromEntries([...watchers].map(([id, h]) => [id, h.health()])),
   };

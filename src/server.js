@@ -265,6 +265,43 @@ app.post('/api/printers/:id/stop', async (req, res) => {
   res.json({ ok: true, stopped: job ? job.filename : null });
 });
 
+/**
+ * "I have cleared the bed — this printer is ready."
+ *
+ * The printer will not say so itself. FAILED is where a Bambu stays after a
+ * print dies: it takes `stop`, answers success, and goes on reporting FAILED
+ * and naming the dead job until something else is printed. The board repeated
+ * that faithfully, so a machine standing empty and willing showed up red, and
+ * an operator who had already scraped the plate had no way to say so.
+ *
+ * We still send the stop — sometimes it does take — but the operator's word is
+ * what the tile goes by afterwards.
+ */
+app.post('/api/printers/:id/reset', async (req, res) => {
+  const printer = (cfg.integrations?.printers || []).find((p) => p.id === req.params.id);
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer' });
+
+  const live = monitor.states()[printer.id];
+  if (!live) return res.status(409).json({ ok: false, error: `no status from ${printer.name} — check it on the setup page` });
+
+  // Never let a reset quietly kill a print that is genuinely under way.
+  if (['RUNNING', 'PREPARE', 'SLICING'].includes(String(live.state || '').toUpperCase())) {
+    return res.status(409).json({ ok: false, error: `${printer.name} is printing — use Stop first` });
+  }
+
+  const r = await publishCommand(printer, buildStopCommand(), cfg);
+  const ack = monitor.acknowledge(printer.id);
+
+  // A job still pinned to this printer is not coming back; release it so the
+  // printer counts as free and the job can be sent again from History.
+  const job = queue.active().find((j) => j.printerId === printer.id && ['assigned', 'printing', 'colour_change'].includes(j.status));
+  if (job) queue.setStatus(job.id, 'failed', { failure: 'cleared by the operator' });
+
+  console.log(`[${printer.id}] reset by the operator — was ${live.state}${job ? `, released ${job.filename}` : ''}${r.ok ? '' : ` (stop did not go out: ${r.error})`}`);
+  dispatcher.pump();
+  res.json({ ok: true, was: live.state, acknowledged: ack, released: job ? job.filename : null });
+});
+
 app.post('/api/jobs/:id/status', async (req, res) => {
   const { status, printerId } = req.body || {};
   const job = queue.setStatus(req.params.id, status, printerId ? { printerId } : {});

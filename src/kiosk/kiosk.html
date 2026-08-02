@@ -1005,6 +1005,10 @@ function admPrinterState(p, jobs){
   if(!st) return {cls:'dead', label:'no signal', send:'warn'};
   const holding = jobs.find(j => j.printerId===p.id && ['assigned','printing','colour_change'].includes(j.status));
   if(st==='PAUSE') return {cls:'soon', label:'swap now', send:null};
+  // Cleared by the operator on the laptop. A Bambu never leaves FAILED by
+  // itself, so without this the tablet goes on calling a free machine failed
+  // long after someone scraped the plate.
+  if(p.live?.acknowledged) return {cls:'free', label:'ready', send:'can'};
   if(st==='FAILED') return {cls:'soon', label:'failed — clear bed', send:'warn'};
   if(['RUNNING','PREPARE','SLICING'].includes(st)) return {cls:'busy', label:'printing', send:null};
   if(holding) return {cls:'busy', label:'starting', send:null};
