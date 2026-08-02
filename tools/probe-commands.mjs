@@ -62,41 +62,67 @@ await publishCommand(printer, { pushing: { sequence_id: '1', command: 'pushall' 
 await sleep(3500);
 reportState();
 
-/* ---- 2. will it obey anything at all? --------------------------------- */
+/* ---- 2. which namespaces does it accept? ------------------------------ */
 
+// The refusal is not about any one command. `stop` — which is valid in every
+// state a printer can be in, including the FAILED one it was sent in — comes
+// back with the same code as project_file. So ask each namespace in turn and
+// let the boundary show itself.
 console.log('');
-console.log('  ---- can it be commanded at all?');
-console.log('        WATCH THE PRINTER: its light should go off, then on again.');
+console.log('  ---- which kinds of command does it accept?');
+console.log('        The light will blink. Nothing here starts or stops a print.');
 console.log('');
 
-const light = (mode, node) => ({
-  system: {
-    sequence_id: String(Math.floor(Math.random() * 1000) + 100),
-    command: 'ledctrl', led_node: node, led_mode: mode,
-    led_on_time: 500, led_off_time: 500, loop_times: 0, interval_time: 0,
-  },
-});
+const seq = () => String(Math.floor(Math.random() * 90000) + 10000);
+const PROBES = [
+  { ns: 'system', label: 'ledctrl (light off)', body: {
+    system: { sequence_id: seq(), command: 'ledctrl', led_node: 'chamber_light', led_mode: 'off',
+      led_on_time: 500, led_off_time: 500, loop_times: 0, interval_time: 0 } } },
+  { ns: 'system', label: 'ledctrl (light on)', body: {
+    system: { sequence_id: seq(), command: 'ledctrl', led_node: 'chamber_light', led_mode: 'on',
+      led_on_time: 500, led_off_time: 500, loop_times: 0, interval_time: 0 } } },
+  { ns: 'system', label: 'get_accessories', body: {
+    system: { sequence_id: seq(), command: 'get_accessories', accessory_type: 'none' } } },
+  { ns: 'pushing', label: 'pushall (status)', body: {
+    pushing: { sequence_id: seq(), command: 'pushall' } } },
+  { ns: 'print', label: 'stop (harmless when idle)', body: {
+    print: { sequence_id: seq(), command: 'stop', param: '' } } },
+  { ns: 'print', label: 'pause (harmless when idle)', body: {
+    print: { sequence_id: seq(), command: 'pause', param: '' } } },
+];
 
-// A1 mini calls it a chamber light in the protocol even though it has no
-// chamber; older firmware used work_light. Try both, off then on.
-for (const node of ['chamber_light', 'work_light']) {
-  for (const mode of ['off', 'on']) {
-    const r = await publishCommand(printer, light(mode, node), cfg);
-    console.log(`        ${node} ${mode}: ${r.ok ? 'sent' : 'FAILED ' + r.error}`);
-    await sleep(2500);
-  }
+const outcomes = [];
+for (const probe of PROBES) {
+  const before = watch.health().recent.length;
+  const r = await publishCommand(printer, probe.body, cfg);
+  if (!r.ok) { outcomes.push({ ...probe, verdict: 'could not send', detail: r.error }); continue; }
+  await sleep(2500);
+  const fresh = watch.health().recent.slice(before).map((m) => readCommandReply(m.msg)).filter(Boolean);
+  const mine = fresh.find((x) => x.command === Object.values(probe.body)[0].command);
+  outcomes.push({
+    ...probe,
+    verdict: !mine ? 'no answer' : mine.result === 'success' ? 'ACCEPTED' : 'REFUSED',
+    detail: mine?.reason && mine.result !== 'success' ? mine.reason : '',
+  });
+  console.log(`        ${probe.ns.padEnd(8)} ${probe.label.padEnd(28)} ${outcomes[outcomes.length - 1].verdict}${outcomes[outcomes.length - 1].detail ? '  ' + outcomes[outcomes.length - 1].detail : ''}`);
 }
 
-await sleep(2000);
-const after = watch.health();
-const replies = after.recent.map((m) => readCommandReply(m.msg)).filter(Boolean);
-const ledReplies = replies.filter((r) => r.command === 'ledctrl');
-
 console.log('');
-if (ledReplies.length) {
-  for (const r of ledReplies) console.log(`        answered ledctrl: ${r.result}${r.reason ? ' — ' + r.reason : ''}`);
-} else {
-  console.log('        it did not answer the light commands either way.');
+const byNs = {};
+for (const o of outcomes) (byNs[o.ns] ||= []).push(o.verdict);
+const allRefused = (ns) => byNs[ns]?.length && byNs[ns].every((v) => v === 'REFUSED');
+const anyAccepted = (ns) => byNs[ns]?.some((v) => v === 'ACCEPTED');
+
+if (allRefused('print') && (anyAccepted('system') || anyAccepted('pushing'))) {
+  console.log('        Every print command is refused. Every other kind is accepted, on the');
+  console.log('        same connection, a second apart. That is not a bad request and not the');
+  console.log('        printer\'s state — `stop` is valid in every state there is. Third-party');
+  console.log('        print control is switched off on this printer.');
+  console.log('');
+  console.log('        Look for DEVELOPER MODE in the printer\'s network settings, or in');
+  console.log('        Bambu Handy under the printer\'s LAN settings, and turn it on.');
+} else if (anyAccepted('print')) {
+  console.log('        Print commands are being accepted — whatever was blocking them is gone.');
 }
 
 /* ---- what that tells us ----------------------------------------------- */
