@@ -7,7 +7,7 @@ import { shapePolygon, pointInPolygon, distToBoundary, holeIsValid, presetHole }
 import { insetPolygon } from '../src/gcode/outline.js';
 
 const cfg = loadConfig();
-const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
+const SHAPES = ['square', 'circle', 'heart', 'custom'];
 
 const customOutline = [
   { x: 5, y: 20 }, { x: 20, y: 55 }, { x: 45, y: 60 }, { x: 70, y: 45 }, { x: 60, y: 10 }, { x: 25, y: 5 },
@@ -551,14 +551,17 @@ test('the bambu colour change cuts, unloads and reloads, in that order', async (
 
   // 255 is the external spool. An AMS slot number here would send the printer
   // looking for a unit that is not attached.
-  assert.ok(at(/^M620 S1A/) >= 0, 'the change must be opened against a real filament slot');
-  assert.ok(at(/^M621 S1A/) > at(/^M620 S1A/), 'and closed again');
+  // 254 = the external spool, with no AMS suffix. Slot 1 with an "A" is AMS
+  // addressing and produced "AMS Lite communication is abnormal" on a printer
+  // that has no AMS attached.
+  assert.ok(at(/^M620 S254$/) >= 0, 'the change must be opened against the external spool');
+  assert.ok(at(/^M621 S254$/) > at(/^M620 S254$/), 'and closed again');
 
   // The cut is a move into the cutter followed by the long retraction. Either
   // one alone does nothing useful, and the order is not interchangeable.
   const cut = at(/^G1 X180 F18000/);
   const snip = at(/^M620\.11 S1 I254 E-18/);
-  const unload = at(/^T1\b/);
+  const unload = at(/^T254\b/);
   assert.ok(cut >= 0, 'no move to the cutter');
   assert.ok(snip > cut, 'the retraction that cuts must follow the move to the cutter');
   assert.ok(unload > snip, 'the unload must come after the cut, or it pulls uncut filament back');
@@ -622,7 +625,7 @@ test('an explicit gcode override beats every mode, and is not silently ignored',
   // …and with the override gone, the mode is honoured again.
   const { gcode, ...noOverride } = { ...base.colourChange, mode: 'bambu' };
   const back = colourChangeBlock({ ...base, colourChange: noOverride }, 2.24).join('\n');
-  assert.match(back, /^T1\b/m, 'removing the override should give the printer its own change back');
+  assert.match(back, /^T254\b/m, 'removing the override should give the printer its own change back');
 });
 
 test('the booth says which swap is really in effect, including the override', () => {
@@ -747,10 +750,10 @@ test('the change asks for a real filament slot, never 255', async () => {
   // 255 means "no next tool" and appears only in an end-of-print unload. Asking
   // for it takes the branch of Bambu's own template that does nothing, which is
   // how a two-colour keychain came out in one colour.
-  assert.ok(!/\bT255\b|\bS255A\b/.test(block), 'T255 is the do-nothing branch');
-  assert.match(block, /^T1\b/m, 'the slot Bambu Studio itself emits for this change');
-  assert.match(block, /^M620 S1A$/m);
-  assert.match(block, /^M621 S1A$/m, 'the change must be closed as well as opened');
+  assert.ok(!/\bT255\b/.test(block), '255 means no tool at all, and does nothing');
+  assert.ok(!/\bT1\b|S1A\b/.test(block), 'AMS slot 1 on a printer with no AMS is a communication error');
+  assert.match(block, /^T254\b/m, 'the external spool');
+  assert.match(block, /^M620 S254$/m, 'and no "A" — that suffix is AMS addressing');
 });
 
 /**
@@ -777,5 +780,5 @@ test('the "cut" mode cuts and unloads but leaves the loading to a person', async
   }
   // The one difference, and the whole point of the mode.
   assert.ok(!has(cut, /^T\d/), '"cut" must not ask for a toolchange');
-  assert.ok(has(full, /^T1\b/), '"bambu" still does');
+  assert.ok(has(full, /^T254\b/), '"bambu" still does');
 });

@@ -240,6 +240,12 @@
   .adm-keys button:active { background: #2f4076; }
   .adm-pin .why { color: var(--muted); font-size: 13px; min-height: 18px; margin-top: 12px; }
   .adm-pin .why.bad { color: var(--danger); }
+  .canvas-undo { position: absolute; top: 10px; left: 10px; display: flex; gap: 8px; z-index: 6; }
+  .canvas-undo button { width: 46px; height: 46px; border-radius: 12px; border: 1px solid #ffffff26;
+                        background: #16203acc; color: var(--ink); font-size: 21px; line-height: 1;
+                        -webkit-tap-highlight-color: transparent; }
+  .canvas-undo button:disabled { opacity: .3; }
+  .canvas-undo button:active:not(:disabled) { background: #2b3a63; }
 </style>
 
 <button class="adm-dot adm-hold" id="adm-dot" aria-label="Operator panel — hold to open">⚙ Hold</button>
@@ -297,8 +303,19 @@
     <div class="studio-grid">
       <aside class="side">
         <div class="ctl">
-          <h4>Shape</h4>
+          <h4>Base shape</h4>
           <div class="chips" id="shape-chips"></div>
+        </div>
+
+        <div class="ctl">
+          <h4>Keyring hole <span id="hole-state" class="mini">not placed</span></h4>
+          <div class="holebtns" id="holebtns">
+            <button data-hole="left">Left</button>
+            <button data-hole="top">Top</button>
+            <button data-hole="right">Right</button>
+            <button data-hole="none">None</button>
+            <button data-hole="tap" id="tap-btn">📍 Tap</button>
+          </div>
         </div>
 
         <div class="ctl">
@@ -316,15 +333,6 @@
         </div>
 
         <div class="ctl">
-          <h4>Colours</h4>
-          <div class="layerpick" id="layerpick">
-            <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
-            <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
-          </div>
-          <div class="swatches" id="swatches"></div>
-        </div>
-
-        <div class="ctl">
           <h4>Pen tip <span id="pen-mm" class="mini">1.6 mm</span></h4>
           <div class="seg" id="pen-seg">
             <button data-pen="1.0">Fine</button>
@@ -338,17 +346,15 @@
         </div>
 
         <div class="ctl">
-          <h4>Keyring hole <span id="hole-state" class="mini">not placed</span></h4>
-          <div class="holebtns" id="holebtns">
-            <button data-hole="left">Left</button>
-            <button data-hole="top">Top</button>
-            <button data-hole="right">Right</button>
-            <button data-hole="tap" id="tap-btn">📍 Tap</button>
+          <h4>Colours</h4>
+          <div class="layerpick" id="layerpick">
+            <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
+            <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
           </div>
+          <div class="swatches" id="swatches"></div>
         </div>
 
         <div class="side-actions">
-          <button class="btn ghost sm" id="undo">↶ Undo</button>
           <button class="btn ghost sm" id="clear-drawing">Clear drawing</button>
           <button class="btn ghost sm" id="clear-base">Clear base</button>
           <button class="btn ghost sm" data-go="contact">Back</button>
@@ -359,6 +365,12 @@
       <div class="canvas-col">
         <div class="canvas-wrap">
           <canvas id="pad" width="1000" height="1000"></canvas>
+          <!-- On the canvas, not in the sidebar: undoing is a drawing action and
+               a child looks where they drew, not down a list of settings. -->
+          <div class="canvas-undo">
+            <button id="undo" title="Undo">↶</button>
+            <button id="redo" title="Redo">↷</button>
+          </div>
           <div class="canvas-banner" id="banner"></div>
         </div>
       </div>
@@ -417,16 +429,14 @@ const COLOUR_HEX = { BLACK:'#1c1c1e', WHITE:'#f5f5f7', RED:'#e23b3b', BLUE:'#2f6
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const isLight=hex=>{const n=parseInt(hex.slice(1),16);return 0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255)>150;};
 const SHAPE_ICONS={
-  rectangle:'<rect x="2" y="6" width="20" height="12" rx="2"/>',
-  square:'<rect x="4" y="4" width="16" height="16" rx="2"/>',
+  square:'<rect x="4" y="4" width="16" height="16" rx="4"/>',
   circle:'<circle cx="12" cy="12" r="9"/>',
   heart:'<path d="M12 21C5 15 3 11 3 8a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 3-2 7-9 13z"/>',
-  jersey:'<path d="M9 3 5 5 2 7l1 4 2-1v9h10v-9l2 1 1-4-3-2-4-2a3 3 0 0 1-6 0z"/>',
   custom:'<path d="M4 14c1-6 6-9 9-8s6 5 5 9-6 6-10 4-5-3-4-5z"/>',
 };
 // Custom first, and the default — draw-your-own is the point of the booth, and
 // the preset shapes are the fallback for kids who'd rather not.
-const SHAPES=[['custom','Custom'],['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart'],['jersey','Jersey']];
+const SHAPES=[['custom','Custom'],['square','Square'],['circle','Circle'],['heart','Heart']];
 const DEFAULT_SHAPE='custom';
 
 /* Country codes for the mobile field. Singapore first (booth default); `len`
@@ -515,6 +525,7 @@ function selectShape(shape){
   else state.mode='design';
   // hole may become invalid on shape change
   if(state.hole&&!holeIsValid(state.hole,polyFor(),CFG))state.hole=null;
+  if(!state.hole)defaultHole();
   resizeCanvas();updateHoleState();updateBanner();syncClearBase();redraw();
 }
 
@@ -648,6 +659,7 @@ function bucketFill(p){
   }
   if(!added.length){toast('That area is too small to fill',true);return;}
   state.strokes.push(...added);
+  pushUndoable();
   outsideWarned=false;
   redraw();
 }
@@ -658,9 +670,36 @@ function setPen(w,fromRange){state.pen=clampWidth(w,CFG);$('#pen-range').value=s
   else $$('#pen-seg button').forEach(b=>b.classList.remove('sel'));}
 
 /* ---- hole ---- */
+/* Undo has to be undoable. Children draw a line, undo it, and want it back —
+   without a redo the only way back is to draw it again, which on a keychain
+   they have watched being measured is not the same line. */
+let redoStack = [];
+function pushUndoable(){ redoStack = []; updateUndo(); }
+function updateUndo(){
+  const u = $('#undo'), r = $('#redo');
+  if(!u) return;
+  u.disabled = state.mode === 'outline' || !state.strokes.length;
+  r.disabled = state.mode === 'outline' || !redoStack.length;
+}
+function undo(){
+  if(state.mode === 'outline' || !state.strokes.length) return;
+  redoStack.push(state.strokes.pop());
+  lastGen = null; updateUndo(); redraw();
+}
+function redo(){
+  if(state.mode === 'outline' || !redoStack.length) return;
+  state.strokes.push(redoStack.pop());
+  lastGen = null; updateUndo(); redraw();
+}
+
 function wireHole(){$$('#holebtns button').forEach(b=>b.addEventListener('click',()=>{
   const h=b.dataset.hole;
   if(h==='tap'){state.mode=state.mode==='hole'?'design':'hole';updateHoleButtons();updateBanner();return;}
+  // "None" is a real answer, not the absence of one — some children want the
+  // tag whole. Without it the only way to have no hole was to never press
+  // anything, which looks identical to not having noticed the control.
+  if(h==='none'){state.hole=null;state.holePos='none';state.mode='design';
+    updateHoleButtons();updateHoleState();updateBanner();redraw();return;}
   const snapped=snapValidHole(presetHole(h,bboxFor(state.shape),CFG));
   if(!snapped){toast('This shape is too small for a keyring hole — try a bigger one',true);return;}
   state.hole=snapped;state.holePos=h;state.mode='design';updateHoleButtons();updateHoleState();updateBanner();redraw();
@@ -680,16 +719,35 @@ function snapValidHole(p){
   const c=centroidOf(poly);
   return holeIsValid(c,poly,CFG)?c:null;
 }
-function updateHoleButtons(){$$('#holebtns button').forEach(b=>{const on=(b.dataset.hole==='tap'&&state.mode==='hole');b.classList.toggle('sel',on);});
+function updateHoleButtons(){$$('#holebtns button').forEach(b=>{
+    const h=b.dataset.hole;
+    const on = h==='tap' ? state.mode==='hole' : h===state.holePos;
+    b.classList.toggle('sel',on);});
   $('#tap-btn').textContent=state.mode==='hole'?'📍 Tap the plate…':'📍 Tap to place';}
-function updateHoleState(){const el=$('#hole-state');if(state.hole){el.textContent='placed ✓';el.style.color='var(--accent2)';}else{el.textContent='not placed';el.style.color='var(--danger)';}}
+function updateHoleState(){const el=$('#hole-state');
+  if(state.holePos==='none'){el.textContent='no hole';el.style.color='var(--muted)';return;}
+  if(state.hole){el.textContent='placed ✓';el.style.color='var(--accent2)';}
+  else{el.textContent='not placed';el.style.color='var(--danger)';}}
+
+/* Most keychains want a hole at the top, so put one there rather than making
+   every child find the control. Silently skipped when the shape is too small
+   for one, and re-run on every shape change because a hole that fitted a square
+   may not fit a heart. */
+function defaultHole(){
+  if(state.mode==='outline'||state.holePos==='none') return;
+  const snapped=snapValidHole(presetHole('top',bboxFor(state.shape),CFG));
+  if(snapped){state.hole=snapped;state.holePos='top';}
+  else{state.hole=null;state.holePos=null;}
+  updateHoleButtons();updateHoleState();
+}
 
 /* ---- canvas ---- */
 let pad,ctx,drawing=false,activeId=null,penSeen=false,outlinePts=null;
 function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:false};
   pad.addEventListener('pointerdown',onDown,o);pad.addEventListener('pointermove',onMove,o);
   pad.addEventListener('pointerup',onUp,o);pad.addEventListener('pointercancel',onUp,o);pad.addEventListener('pointerleave',onUp,o);
-  $('#undo').addEventListener('click',()=>{if(state.mode==='outline')return;state.strokes.pop();redraw();});
+  $('#undo').addEventListener('click',undo);
+$('#redo').addEventListener('click',redo);
   // Clear drawing: wipe the pen strokes, keep the base shape and hole.
   $('#clear-drawing').addEventListener('click',()=>{
     if(!state.strokes.length)return toast('Nothing drawn yet');
@@ -749,7 +807,7 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
-  else state.strokes.push({w:state.pen,pts:[p]});
+  else { state.strokes.push({w:state.pen,pts:[p]}); pushUndoable(); }
   redraw();}
 function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefault();
   const evs=ev.getCoalescedEvents?ev.getCoalescedEvents():[ev];
@@ -1110,7 +1168,7 @@ const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 /* ---- boot (after all declarations) ---- */
 setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();admInit();
 $('#submit').addEventListener('click',submit);
-updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);
+updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);updateUndo();
 
 addEventListener('resize',()=>{fitCanvas();redraw();});
 addEventListener('orientationchange',()=>setTimeout(()=>{fitCanvas();redraw();},250));

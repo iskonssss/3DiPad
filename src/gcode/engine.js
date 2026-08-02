@@ -228,7 +228,7 @@ export function generate(design, cfg) {
       diameter: b.filamentDiameter,
     }),
     meta: {
-      shape, bbox, hole: { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
+      shape, bbox, hole: hole.none ? null : { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
       backingLayers: nBack, designLayers: designZs.length, strokeCount: strokes.length,
       drawnLengthMm: Math.round(totalLength(strokes)),
       estMinutes: +estMinutes.toFixed(1), estGrams: +grams.toFixed(1),
@@ -245,6 +245,13 @@ export function generate(design, cfg) {
 // preset, else nudge toward the centroid until a wall fits.
 function resolveHole(design, poly, bbox, cfg) {
   const r = cfg.build.holeDiameter / 2;
+  // No hole is a choice a child can make, and it has to survive the trip: a
+  // null hole used to mean "none given, put one at the top", so asking for a
+  // whole tag got you a hole anyway.
+  // Expressed as a hole of no size, well off the plate, rather than as null:
+  // every path below reads hole.cx/hole.r without asking, and a null would have
+  // to be checked in eight places that have nothing to do with the choice.
+  if (design.holePos === 'none' && !design.hole) return { cx: -1000, cy: -1000, r: 0, none: true };
   let pt = design.hole && Number.isFinite(+design.hole.x) ? { x: +design.hole.x, y: +design.hole.y }
     : presetHole(design.holePos || 'top', bbox, cfg);
   if (!holeIsValid(pt, poly, cfg)) pt = nudgeInside(pt, poly, cfg);
@@ -284,6 +291,7 @@ function perimeterLoop(em, cfg, bbox, poly, feed, layerH) {
 }
 
 function holePerimeter(em, cfg, bbox, hole, r, feed, layerH) {
+  if (hole.none) return;
   if (r <= 0.2) return;
   const seg = 32;
   const p0 = toBed({ x: hole.cx + r, y: hole.cy }, bbox, cfg);
@@ -667,7 +675,14 @@ export function colourChangeBlock(cfg, atZ = 0) {
   // next tool" and appears only in the end-of-print unload; asking for it takes
   // the branch of Bambu's own template that does nothing, which is how a
   // two-colour keychain came out in one colour.
-  const tool = c.tool ?? 1;
+  // 254 is the EXTERNAL SPOOL. Not 1, which is AMS slot 1 — asking for that on
+  // a printer with no AMS attached produced "AMS Lite communication is
+  // abnormal" and a deadlock, which is the printer being clear that it went
+  // looking for hardware that is not there. And not 255, which means no tool at
+  // all and does nothing. The `A` suffix is AMS addressing too: Bambu's own
+  // end-of-print unload, on a machine with no AMS, is "M620 S255" with no A.
+  const tool = c.tool ?? 254;
+  const ams = tool < 254 ? 'A' : '';
   if (purge > 0) {
     const bites = Math.max(1, Math.round(c.purgeBites ?? 4));
     const each = purge / bites;
@@ -744,13 +759,20 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   // next tool" and appears only in the end-of-print unload; asking for it takes
   // the branch of Bambu's own template that does nothing, which is how a
   // two-colour keychain came out in one colour.
-  const tool = c.tool ?? 1;
+  // 254 is the EXTERNAL SPOOL. Not 1, which is AMS slot 1 — asking for that on
+  // a printer with no AMS attached produced "AMS Lite communication is
+  // abnormal" and a deadlock, which is the printer being clear that it went
+  // looking for hardware that is not there. And not 255, which means no tool at
+  // all and does nothing. The `A` suffix is AMS addressing too: Bambu's own
+  // end-of-print unload, on a machine with no AMS, is "M620 S255" with no A.
+  const tool = c.tool ?? 254;
+  const ams = tool < 254 ? 'A' : '';
 
   const out = [
     '; ===== A1 mini filament change: cut, unload, reload =====',
     'G392 S0',
     'M1007 S0',
-    `M620 S${tool}A`,
+    `M620 S${tool}${ams}`,
     'M204 S9000',
     `G1 Z${up} F1200`,
     'M400',
@@ -758,7 +780,7 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
     'M106 P2 S0',
     `M104 S${t} ; keep the old colour molten for the cut`,
     `G1 X${cutX} F18000 ; to the cutter`,
-    `M620.11 S1 I254 E-${cutRetract} F1200 ; the long retraction that cuts it`,
+    `M620.11 S1 I${tool} E-${cutRetract} F1200 ; the long retraction that cuts it`,
     'M400',
     `M620.1 E F${feed} T${t}`,
     `M620.10 A0 F${feed}`,
@@ -821,7 +843,7 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
     out.push('M400', 'M106 P1 S0');
   }
 
-  out.push('M629', `M621 S${tool}A`, 'G392 S0', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
+  out.push('M629', `M621 S${tool}${ams}`, 'G392 S0', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
 
