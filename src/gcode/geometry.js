@@ -63,47 +63,59 @@ function heart(w, h, seg = 120) {
   return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
 }
 /**
- * A football jersey: straight torso, sleeves out at the shoulders, round collar.
+ * A t-shirt: wide body, sleeves dropping down and out, shallow round collar.
  *
- * Drawn in a 0..1 box and scaled to w x h, so the proportions hold whatever
- * size the booth is set to. Traced counter-clockwise from the bottom-left of
- * the hem — round the right side, over the shoulders, back down the left.
+ * Only the right half is written down; the left is that mirrored, so the shirt
+ * cannot come out lopsided the way a hand-placed outline does. Drawn in a 0..1
+ * box and scaled to w x h, so proportions hold whatever size the booth is set
+ * to, and traced up the right side, across the collar, and down the left.
  *
  * Two things are deliberate. The collar is an arc rather than a V notch,
  * because a sharp inward corner is where an inward offset (the 0.8 mm top
- * chamfer) folds over itself. And the cuffs stop short of a point for the same
- * reason a real one does: a tip narrower than the nozzle is not a shape, it is
- * a gap the slicer has to guess at.
+ * chamfer) folds over itself. And the cuffs are cut square with rounded corners
+ * rather than tapering to a point: a tip narrower than the nozzle is not a
+ * shape, it is a gap the slicer has to guess at.
  */
 function jersey(w, h) {
-  const neckHalf = 0.105;   // collar half-width, as a fraction of the width
-  const neckDrop = 0.125;   // how far the collar cuts down from the shoulder line
-  const pts = [
-    { x: 0.285, y: 0.000 },  // hem, left
-    { x: 0.715, y: 0.000 },  // hem, right
-    { x: 0.735, y: 0.545 },  // right side, up to the armpit
-    { x: 0.800, y: 0.590 },
-    { x: 0.940, y: 0.635 },
-    { x: 1.000, y: 0.690 },  // right cuff, bottom
-    { x: 0.980, y: 0.845 },  // right cuff, top
-    { x: 0.830, y: 0.910 },
-    { x: 0.680, y: 0.965 },  // right shoulder
+  // Bottom-up the right-hand side: hem, body, armpit, under the sleeve, round
+  // the cuff, then the long shoulder slope in to the collar.
+  const right = [
+    { x: 0.772, y: 0.000 },  // hem
+    { x: 0.775, y: 0.150 },
+    { x: 0.771, y: 0.340 },
+    // The armpit, rounded rather than cut to a corner. A sharp inward corner
+    // survives the outline and then folds the moment anything is inset from it —
+    // at 0.8 mm the chamfer grew a hook here, which prints as a nick in the
+    // side of every shirt. The radius has to clear the deepest inset the engine
+    // takes, so it is about 3 mm; a real armhole seam is curved for its own
+    // reasons and it reads correctly either way.
+    { x: 0.766, y: 0.452 },
+    { x: 0.772, y: 0.478 },
+    { x: 0.785, y: 0.493 },
+    { x: 0.804, y: 0.499 },
+    { x: 0.824, y: 0.494 },
+    { x: 0.846, y: 0.481 },  // under the sleeve, out towards the cuff
+    { x: 0.898, y: 0.462 },
+    { x: 0.940, y: 0.462 },  // cuff, bottom corner
+    { x: 0.969, y: 0.498 },
+    { x: 0.979, y: 0.552 },  // cuff, top corner
+    { x: 0.939, y: 0.628 },  // the shoulder slope, bowed out a little
+    { x: 0.869, y: 0.716 },
+    { x: 0.779, y: 0.804 },
+    { x: 0.689, y: 0.872 },
+    { x: 0.612, y: 0.908 },  // shoulder, at the collar
   ];
-  // The collar, swept right to left so it stays in step with the winding.
-  const seg = 16;
-  for (let i = 0; i <= seg; i++) {
+  const mirror = (p) => ({ x: 1 - p.x, y: p.y });
+
+  const pts = [...right];
+  // The collar, swept right to left so it stays in step with the winding. Ends
+  // are left off: the shoulder points either side of it already sit there.
+  const neckHalf = 0.118, neckDrop = 0.064, seg = 18;
+  for (let i = 1; i < seg; i++) {
     const a = (Math.PI * i) / seg;
-    pts.push({ x: 0.5 + neckHalf * Math.cos(a), y: 0.985 - neckDrop * Math.sin(a) });
+    pts.push({ x: 0.5 + neckHalf * Math.cos(a), y: 0.908 - neckDrop * Math.sin(a) });
   }
-  pts.push(
-    { x: 0.320, y: 0.965 },  // left shoulder
-    { x: 0.170, y: 0.910 },
-    { x: 0.020, y: 0.845 },  // left cuff, top
-    { x: 0.000, y: 0.690 },  // left cuff, bottom
-    { x: 0.060, y: 0.635 },
-    { x: 0.200, y: 0.590 },
-    { x: 0.265, y: 0.545 },  // left armpit
-  );
+  pts.push(...right.slice().reverse().map(mirror));
   // Fit the drawn extents to w x h exactly, so shapeSizes means what it says —
   // the collar arc stops just short of the top of the box, and left alone that
   // would quietly make every jersey a millimetre shorter than configured.
