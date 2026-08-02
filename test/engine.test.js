@@ -443,9 +443,14 @@ test('the colour change can be put back to a plain pause', () => {
   assert.match(block, /M400 U1/);
   assert.ok(!/F300/.test(block), 'no purge');
 
-  const custom = { ...cfg, colourChange: { gcode: ['M600 ; my own thing'] } };
+  // A hand-written block still replaces everything — but it has to stop the
+  // print. M600 alone used to be accepted here, and M600 is exactly the kind of
+  // plausible-looking command whose behaviour on a Bambu nobody has checked.
+  const custom = { ...cfg, colourChange: { gcode: ['M400 U1 ; my own thing', 'M600 ; and this'] } };
   const g2 = generate(design('rectangle'), custom).gcode;
-  assert.match(g2.slice(g2.indexOf('COLOUR CHANGE'), g2.indexOf('DESIGN (colour 2)')), /M600 ; my own thing/);
+  const swap = g2.slice(g2.indexOf('COLOUR CHANGE'), g2.indexOf('DESIGN (colour 2)'));
+  assert.match(swap, /M600 ; and this/, 'the rest of a custom block is passed through untouched');
+  assert.match(swap, /M400 U1 ; my own thing/);
 });
 
 test('no move asks the hotend for more plastic than it can melt', () => {
@@ -642,4 +647,47 @@ test('the booth says which swap is really in effect, including the override', ()
 
   assert.match(say({ mode: 'bambu' }), /cuts and reloads by itself/);
   assert.match(say({ mode: 'purge' }), /operator unloads and loads/);
+});
+
+/**
+ * The file must stop for the swap. Nothing else about it matters as much.
+ *
+ * A change block built from AMS commands was discarded whole by a printer with
+ * no AMS — no refusal, no log line, no stall. The print ran straight through
+ * and produced a two-colour keychain in one colour, which looks like a success
+ * until someone picks it up. Every other property of that file was correct, so
+ * only an explicit check could have caught it.
+ *
+ * M400 U1 is the one pause this machine has been observed to honour, so it is
+ * what gets asserted — not "some plausible stop command".
+ */
+test('every colour change mode stops the print, whatever else it tries', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+  for (const mode of ['purge', 'pause', 'bambu']) {
+    const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode } }, 2.24);
+    assert.ok(block.some((l) => /^\s*M400\s+U1\b/.test(l)), `mode "${mode}" produces a file that never stops`);
+  }
+});
+
+test('a file that would never stop is refused rather than written', async () => {
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+  const d = {
+    shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: null,
+    design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  };
+
+  // An override with no pause in it: the exact shape of the bug.
+  assert.throws(
+    () => generate(d, { ...base, colourChange: { gcode: ['G4 P1 ; not a pause'] } }),
+    /never stop/,
+    'a non-stopping override must not produce a file',
+  );
+
+  // A hand-written override that does pause is still perfectly fine.
+  const { gcode } = generate(d, { ...base, colourChange: { gcode: ['M400 U1 ; swap it'] } });
+  assert.match(gcode, /^M400 U1\b/m);
 });
