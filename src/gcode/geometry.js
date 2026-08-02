@@ -17,10 +17,9 @@ export function shapePolygon(shape, cfg, customOutline) {
   const s = cfg.build.shapeSizes;
   switch (shape) {
     case 'rectangle': return rect(s.rectangle[0], s.rectangle[1]);
-    case 'square': return rect(s.square[0], s.square[1]);
+    case 'square': return roundedRect(s.square[0], s.square[1], cfg.build.squareRadiusMm ?? 4);
     case 'circle': return ellipse(s.circle[0], s.circle[0]);
     case 'heart': return heart(s.heart[0], s.heart[1]);
-    case 'jersey': return jersey(s.jersey[0], s.jersey[1]);
     case 'custom': return customShape(customOutline, cfg);
     default: return rect(s.rectangle[0], s.rectangle[1]);
   }
@@ -39,6 +38,35 @@ function finalize(pts) {
 function rect(w, h) {
   return finalize([{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }]);
 }
+/**
+ * A square with the corners taken off.
+ *
+ * A sharp corner on a keychain is a sharp corner in a child's pocket, and it is
+ * also the first thing to lift off the bed — a right angle has the least
+ * material holding it down and the most leverage to curl. Both go away for the
+ * cost of a few millimetres nobody will miss.
+ */
+function roundedRect(w, h, r) {
+  const rad = Math.max(0, Math.min(r, Math.min(w, h) / 2 - 0.01));
+  if (rad <= 0) return rect(w, h);
+  const seg = 12;
+  const pts = [];
+  // centres of the four corner arcs, counter-clockwise from bottom-left
+  const corners = [
+    [rad, rad, Math.PI, 1.5 * Math.PI],
+    [w - rad, rad, 1.5 * Math.PI, 2 * Math.PI],
+    [w - rad, h - rad, 0, 0.5 * Math.PI],
+    [rad, h - rad, 0.5 * Math.PI, Math.PI],
+  ];
+  for (const [cx, cy, a0, a1] of corners) {
+    for (let i = 0; i <= seg; i++) {
+      const a = a0 + ((a1 - a0) * i) / seg;
+      pts.push({ x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) });
+    }
+  }
+  return finalize(pts);
+}
+
 function ellipse(w, h, seg = 96) {
   const pts = [];
   for (let i = 0; i < seg; i++) {
@@ -62,69 +90,6 @@ function heart(w, h, seg = 120) {
   const sx = w / (maxX - minX), sy = h / (maxY - minY);
   return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
 }
-/**
- * A t-shirt: wide body, sleeves dropping down and out, shallow round collar.
- *
- * Only the right half is written down; the left is that mirrored, so the shirt
- * cannot come out lopsided the way a hand-placed outline does. Drawn in a 0..1
- * box and scaled to w x h, so proportions hold whatever size the booth is set
- * to, and traced up the right side, across the collar, and down the left.
- *
- * Two things are deliberate. The collar is an arc rather than a V notch,
- * because a sharp inward corner is where an inward offset (the 0.8 mm top
- * chamfer) folds over itself. And the cuffs are cut square with rounded corners
- * rather than tapering to a point: a tip narrower than the nozzle is not a
- * shape, it is a gap the slicer has to guess at.
- */
-function jersey(w, h) {
-  // Bottom-up the right-hand side: hem, body, armpit, under the sleeve, round
-  // the cuff, then the long shoulder slope in to the collar.
-  const right = [
-    { x: 0.772, y: 0.000 },  // hem
-    { x: 0.775, y: 0.150 },
-    { x: 0.771, y: 0.340 },
-    // The armpit, rounded rather than cut to a corner. A sharp inward corner
-    // survives the outline and then folds the moment anything is inset from it —
-    // at 0.8 mm the chamfer grew a hook here, which prints as a nick in the
-    // side of every shirt. The radius has to clear the deepest inset the engine
-    // takes, so it is about 3 mm; a real armhole seam is curved for its own
-    // reasons and it reads correctly either way.
-    { x: 0.766, y: 0.452 },
-    { x: 0.772, y: 0.478 },
-    { x: 0.785, y: 0.493 },
-    { x: 0.804, y: 0.499 },
-    { x: 0.824, y: 0.494 },
-    { x: 0.846, y: 0.481 },  // under the sleeve, out towards the cuff
-    { x: 0.898, y: 0.462 },
-    { x: 0.940, y: 0.462 },  // cuff, bottom corner
-    { x: 0.969, y: 0.498 },
-    { x: 0.979, y: 0.552 },  // cuff, top corner
-    { x: 0.939, y: 0.628 },  // the shoulder slope, bowed out a little
-    { x: 0.869, y: 0.716 },
-    { x: 0.779, y: 0.804 },
-    { x: 0.689, y: 0.872 },
-    { x: 0.612, y: 0.908 },  // shoulder, at the collar
-  ];
-  const mirror = (p) => ({ x: 1 - p.x, y: p.y });
-
-  const pts = [...right];
-  // The collar, swept right to left so it stays in step with the winding. Ends
-  // are left off: the shoulder points either side of it already sit there.
-  const neckHalf = 0.118, neckDrop = 0.064, seg = 18;
-  for (let i = 1; i < seg; i++) {
-    const a = (Math.PI * i) / seg;
-    pts.push({ x: 0.5 + neckHalf * Math.cos(a), y: 0.908 - neckDrop * Math.sin(a) });
-  }
-  pts.push(...right.slice().reverse().map(mirror));
-  // Fit the drawn extents to w x h exactly, so shapeSizes means what it says —
-  // the collar arc stops just short of the top of the box, and left alone that
-  // would quietly make every jersey a millimetre shorter than configured.
-  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-  const minX = Math.min(...xs), minY = Math.min(...ys);
-  const sx = w / (Math.max(...xs) - minX), sy = h / (Math.max(...ys) - minY);
-  return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
-}
-
 function customShape(outline, cfg) {
   const [maxW, maxH] = cfg.build.customMax;
   if (!Array.isArray(outline) || outline.length < 3) return rect(60, 40);

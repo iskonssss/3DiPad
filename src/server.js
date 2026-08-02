@@ -413,7 +413,7 @@ function sanitizeContact(c) {
   return { name, phone, phoneE164, country };
 }
 
-const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'jersey', 'custom'];
+const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
 
 function sanitizeDesign(body) {
   const b = cfg.build;
@@ -426,7 +426,7 @@ function sanitizeDesign(body) {
   const lim = Math.max(b.customMax[0], b.customMax[1], ...Object.values(b.shapeSizes).flat());
   const design = cleanStrokes(body?.design, lim);
   const customOutline = shape === 'custom' ? cleanPoints(body?.customOutline, b.customMax[0], b.customMax[1]) : null;
-  const holePos = ['left', 'right', 'top'].includes(body?.holePos) ? body.holePos : null;
+  const holePos = ['left', 'right', 'top', 'none'].includes(body?.holePos) ? body.holePos : null;
   const hole = body?.hole && Number.isFinite(+body.hole.x) && Number.isFinite(+body.hole.y)
     ? { x: clamp(+body.hole.x, 0, lim), y: clamp(+body.hole.y, 0, lim) }
     : null;

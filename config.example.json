@@ -17,10 +17,6 @@
       "heart": [
         58,
         54
-      ],
-      "jersey": [
-        62,
-        56
       ]
     },
     "customMax": [
@@ -38,6 +34,8 @@
     ],
     "holeDiameter": 5,
     "holeWallMin": 2.5,
+    "_square_comment": "Corner radius of the square backing, in mm. A right angle is sharp in a pocket and is also the first corner to lift off the bed.",
+    "squareRadiusMm": 4,
     "chamferMm": 0.8,
     "designEdgeMargin": 1.5,
     "_outline_comment": "Freehand custom-shape healing. outlineCloseMm bridges the gap where the loop didn't quite close; outlineOpenMm deletes spikes/needles thinner than about twice this; outlineSmooth is Chaikin smoothing passes.",
@@ -102,6 +100,8 @@
     "_bambu_comment": "Only used when mode is \"bambu\". cutX is where the cutter lives — 180 is the right-hand edge of the A1 mini's 180mm bed and is taken from Bambu's own A1 mini profile. Do NOT copy an A1 (non-mini) value here; the bed is a different size and the head would be driven into the frame. cutRetractMm is Bambu's retraction_distances_when_cut. flushMmps defaults to speed.maxVolumetricMmps.",
     "cutX": 180,
     "cutRetractMm": 18,
+    "_tool_comment": "Which filament slot the change targets. 254 is the EXTERNAL SPOOL and is what a booth with no AMS wants. 0-3 are AMS slots and get an A suffix; asking for one with no AMS attached gives an AMS Lite communication error and deadlocks the printer. 255 means no tool at all and does nothing.",
+    "tool": 254,
     "pauseGcode": [
       "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="
     ],
