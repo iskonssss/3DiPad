@@ -395,3 +395,36 @@ test('a reprint does not inherit the first run failure', () => {
   assert.equal(queue.get(job.id).failure, 'error code 7 (look it up on the printer screen); stopped at 46%',
     'the original still records why it died');
 });
+
+test('a stuck printer is cleared before the job is sent, not after it fails', async () => {
+  const { queue, dispatcher: _d, cfg, root } = harness([PRINTERS[0]]);
+  const calls = [];
+  const sends = [];
+  const d = createDispatcher({
+    cfg, queue, outDir: path.join(root, 'output'),
+    transport: async (p) => { sends.push(p.id); return { ok: true, sent: true }; },
+    beforeSend: async (printer, job) => { calls.push([printer.id, job.id]); return { needed: true, cleared: true, state: 'IDLE' }; },
+  });
+  const job = addJob(queue, 'Ada');
+  await d.send(job, PRINTERS[0]);
+
+  assert.deepEqual(calls, [[PRINTERS[0].id, job.id]], 'the printer was cleared for this job');
+  assert.deepEqual(sends, [PRINTERS[0].id]);
+  // and the order matters: clearing after the send is useless
+  assert.equal(queue.get(job.id).status, 'printing');
+});
+
+test('a pre-send check that throws does not stop the job going out', async () => {
+  // It is a courtesy to the printer, not a gate. A booth that refuses to send
+  // because a status read failed is worse than one that sends anyway.
+  const { queue, cfg, root } = harness([PRINTERS[0]]);
+  const sends = [];
+  const d = createDispatcher({
+    cfg, queue, outDir: path.join(root, 'output'),
+    transport: async (p) => { sends.push(p.id); return { ok: true, sent: true }; },
+    beforeSend: async () => { throw new Error('printer went quiet'); },
+  });
+  const job = addJob(queue, 'Bo');
+  await d.send(job, PRINTERS[0]);
+  assert.deepEqual(sends, [PRINTERS[0].id], 'the send still happened');
+});

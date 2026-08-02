@@ -20,7 +20,7 @@
 // actually looked at everything it tells us.
 
 import { loadConfig } from '../src/config.js';
-import { publishCommand, watchPrinter, isConfigured, readCommandReply, errorCodeText } from '../src/integrations/bambu.js';
+import { publishCommand, watchPrinter, isConfigured, readCommandReply, errorCodeText, needsClearing } from '../src/integrations/bambu.js';
 
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d; };
@@ -131,6 +131,15 @@ function reportState() {
   const show = ['gcode_state', 'print_error', 'mc_percent', 'mc_remaining_time', 'subtask_name',
     'print_type', 'nozzle_temper', 'bed_temper', 'sdcard', 'home_flag', 'lifecycle', 'wifi_signal'];
   for (const k of show) if (p[k] !== undefined) console.log(`        ${k}: ${JSON.stringify(p[k])}`);
+  if (needsClearing(p.gcode_state)) {
+    console.log('');
+    console.log(`        >>> THIS IS THE PROBLEM. The printer is still holding "${p.subtask_name}".`);
+    console.log('        >>> A Bambu in FAILED or FINISH does not go back to idle on its own, and');
+    console.log('        >>> refuses every new print command until it is told to let go — the same');
+    console.log('        >>> refusal whatever you send it.');
+    console.log('        >>> Clear it with:  npm run clear-printer');
+    console.log('');
+  }
   if (typeof p.print_error === 'number' && p.print_error !== 0) {
     console.log(`        ^^ print_error is set: ${errorCodeText(p.print_error)}`);
   }
