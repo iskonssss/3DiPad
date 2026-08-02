@@ -321,3 +321,24 @@ test('seven identical refusals mean the request was never the problem', () => {
   // Refused by nothing at all is its own case, not silently treated as either.
   assert.match(readPattern([{ name: 'a', outcome: 'no answer' }]).join('\n'), /did not answer at all/);
 });
+
+test('the printer state we care about is pulled out of a full status push', () => {
+  // A machine with an unresolved warning can sit at IDLE and refuse new jobs,
+  // and we have never looked at everything it tells us — only gcode_state and
+  // percent. readStatus is what the booth runs on, so check it survives a real
+  // status shape and reports the error field that would explain a refusal.
+  const push = { print: {
+    gcode_state: 'IDLE', mc_percent: 0, mc_remaining_time: 0,
+    print_error: 84033543, nozzle_temper: 21.5, bed_temper: 20.9,
+    hms: [{ attr: 50348044, code: 65543 }], subtask_name: 'BLACK-BLACK_0017',
+  } };
+  const s = readStatus(push);
+  assert.equal(s.state, 'IDLE');
+  assert.equal(s.errorCode, 84033543, 'a non-zero print_error is carried, not dropped');
+  assert.equal(s.file, 'BLACK-BLACK_0017');
+
+  // zero means no error and must not be reported as one
+  assert.equal(readStatus({ print: { gcode_state: 'IDLE', print_error: 0 } }).errorCode, undefined);
+  // and a push with nothing we understand is null rather than an empty object
+  assert.equal(readStatus({ print: { wifi_signal: '-48dBm' } }), null);
+});
