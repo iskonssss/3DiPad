@@ -162,6 +162,44 @@ export function ftpErrorText(e) {
 }
 
 /**
+ * Can this printer be told to print at all?
+ *
+ * Bambu gates third-party print control behind Developer Mode, separately from
+ * everything else. With it off, the printer answers status, obeys the chamber
+ * light, accepts FTPS uploads — and refuses every command in the `print`
+ * namespace with err_code 0x05024007. A booth set up that way looks completely
+ * healthy and cannot start a single job, which cost a week to work out once.
+ *
+ * `pause` is the probe: it is in the print namespace, and it does nothing at
+ * all to an idle printer. Never sent to one that is mid-print.
+ */
+export async function printControlCheck(printer, cfg, liveState, waitMs = 4000) {
+  const state = String(liveState?.state || '').toUpperCase();
+  if (!state) return { ok: null, reason: 'no status yet' };
+  if (!['IDLE', 'FINISH', 'FAILED'].includes(state)) {
+    return { ok: null, reason: `printer is ${state} — not safe to test now` };
+  }
+
+  const { publishCommand, watchPrinter, readCommandReply } = await import('./integrations/bambu.js');
+  let reply = null;
+  const watch = watchPrinter(printer, cfg, () => {}, (msg) => {
+    const r = readCommandReply(msg);
+    if (r && r.command === 'pause') reply = r;
+  });
+  try {
+    await publishCommand(printer, { print: { sequence_id: String(Date.now() % 100000), command: 'pause', param: '' } }, cfg);
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline && !reply) await new Promise((r) => setTimeout(r, 250));
+  } finally {
+    watch.stop();
+  }
+
+  if (!reply) return { ok: null, reason: 'no answer' };
+  if (reply.result === 'success') return { ok: true };
+  return { ok: false, reason: reply.reason || reply.result, errCode: reply.errCode };
+}
+
+/**
  * Check a printer and return findings a person can act on.
  *
  * `liveState` is the status monitor's last report and `health` its connection
@@ -169,7 +207,7 @@ export function ftpErrorText(e) {
  * client at a time and the monitor already holds it, so opening another to test
  * would be testing whether we can break our own connection.
  */
-export async function checkPrinter(printer, liveState = null, health = null) {
+export async function checkPrinter(printer, liveState = null, health = null, cfg = null) {
   const findings = [];
   const fail = (msg, hint) => findings.push({ ok: false, msg, hint });
   const pass = (msg) => findings.push({ ok: true, msg });
@@ -228,6 +266,19 @@ export async function checkPrinter(printer, liveState = null, health = null) {
       msg: 'No status received yet — the dashboard will show this printer as NO SIGNAL',
       hint: 'Give it a few seconds after saving and check again. If it stays this way the serial is the thing to re-check. You can still send to it: the file goes to the SD card and you press Print on the printer.',
     });
+  }
+
+  // The check that would have saved a week: a printer can pass everything above
+  // and still refuse every print command.
+  if (cfg && liveState?.state) {
+    const control = await printControlCheck(printer, cfg, liveState);
+    if (control.ok === true) pass('It accepts print commands');
+    else if (control.ok === false) {
+      fail('It refuses print commands — files will upload and nothing will ever start',
+        'Turn DEVELOPER MODE on in the printer\'s network settings (or in Bambu Handy), then restart it. ' +
+        'Bambu gates third-party print control behind that switch, separately from status and the light, ' +
+        'so everything else here can pass while nothing can be printed.');
+    }
   }
 
   // Whatever the printer last said about a command we sent it. When a file

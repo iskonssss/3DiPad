@@ -13,8 +13,15 @@
 //
 // Requirements per printer (config.integrations.printers[]):
 //   { id, name, ip, serial, accessCode }
-// and on the printer itself: Settings -> Network -> **LAN Mode ON**, then note
-// the Access Code and Serial shown there.
+// and on the printer itself: Settings -> Network -> **LAN Mode ON** and
+// **DEVELOPER MODE ON**, then note the Access Code and Serial shown there.
+//
+// Developer Mode is not optional and is easy to miss. Bambu gates third-party
+// print control behind it, separately from everything else: with it off, the
+// printer reports status, obeys ledctrl, and accepts FTPS uploads, while every
+// command in the `print` namespace — project_file, gcode_file, even stop —
+// comes back with err_code 0x05024007. A booth in that state looks entirely
+// healthy and cannot start a single job.
 //
 // NOTE: both TLS endpoints use the printer's self-signed certificate, so
 // certificate verification is disabled for these direct-to-printer connections

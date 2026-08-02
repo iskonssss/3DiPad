@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { maskCode, publicPrinters, savePrinter, checkPrinter, configPath , ftpErrorText} from '../src/printers.js';
+import { maskCode, publicPrinters, savePrinter, checkPrinter, configPath , ftpErrorText, printControlCheck} from '../src/printers.js';
 
 // Setting a printer up used to mean four positional arguments in a terminal.
 // These cover the pieces the dashboard now drives instead.
@@ -167,4 +167,27 @@ test('an FTP code on its own is translated into what it means here', () => {
   // and something we have no note for passes through unharmed
   assert.equal(ftpErrorText(new Error('ECONNREFUSED')), 'ECONNREFUSED');
   assert.equal(ftpErrorText(null), '');
+});
+
+test('a printer that will not accept print commands is not called healthy', async () => {
+  // The week-long fault: Developer Mode off. Ports open, access code accepted,
+  // SD card writable, status arriving, chamber light obeying — and every print
+  // command refused. Every check we had passed.
+  const printer = { id: 'A1-1', name: 'Printer 1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
+  const cfg = { integrations: { lan: { enabled: true } } };
+
+  // Mid-print is never a safe moment to send `pause` as a probe.
+  for (const state of ['RUNNING', 'PREPARE', 'PAUSE']) {
+    const r = await printControlCheck(printer, cfg, { state });
+    assert.equal(r.ok, null, `must not probe a printer that is ${state}`);
+    assert.match(r.reason, new RegExp(state, 'i'));
+  }
+  // and neither is a printer we cannot see
+  assert.equal((await printControlCheck(printer, cfg, null)).ok, null);
+  assert.equal((await printControlCheck(printer, cfg, {})).ok, null);
+
+  // With no printer there, it reports "no answer" rather than claiming a pass.
+  const idle = await printControlCheck(printer, cfg, { state: 'IDLE' }, 600);
+  assert.equal(idle.ok, null);
+  assert.equal(idle.reason, 'no answer', 'silence is not success');
 });
