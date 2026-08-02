@@ -80,7 +80,13 @@ test('the 3mf carries the numbers the tablet promised', () => {
 test('the archive is a real zip, and a smaller upload than the raw g-code', () => {
   const buf = build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' });
   assert.equal(buf.readUInt32LE(0), 0x04034b50, 'starts with a local file header');
-  assert.ok(buf.length < Buffer.byteLength(GCODE), 'g-code compresses, so the booth uploads less');
+  // The 3mf now carries a fixed ~53KB slicer profile, which a two-line test
+  // g-code cannot pay for. What matters is the real case: a keychain is
+  // hundreds of thousands of lines of very repetitive g-code, and that
+  // compresses far harder than the profile costs.
+  const real = build3mf({ gcode: GCODE.repeat(4000), meta: META, cfg: CFG, name: 'k' });
+  assert.ok(real.length < Buffer.byteLength(GCODE.repeat(4000)) / 2,
+    'g-code compresses, so the booth uploads much less than it generated');
 
   // an empty archive is still a valid one
   assert.equal(unzip(zip([])) && Object.keys(unzip(zip([]))).length, 0);
@@ -121,12 +127,12 @@ test('extra parts can be added, for bisecting what the firmware requires', () =>
   // 3mf carries fourteen parts ours does not. Guessing which one matters is
   // what tools/probe-start.mjs exists to avoid: it builds variants with parts
   // added and asks the printer, one at a time.
-  const settings = '{"printer_model":"Bambu Lab A1 mini","nozzle_diameter":["0.4"]}';
+  const settings = '{"probe":"one part at a time"}';
   const files = unzip(build3mf({
     gcode: GCODE, meta: META, cfg: CFG, name: 'k',
-    extraParts: [{ name: 'Metadata/project_settings.config', data: settings }],
+    extraParts: [{ name: 'Metadata/probe.config', data: settings }],
   }));
-  assert.equal(files['Metadata/project_settings.config'].toString(), settings);
+  assert.equal(files['Metadata/probe.config'].toString(), settings);
   // and the archive is still whole: the g-code and its digest survive
   assert.equal(files['Metadata/plate_1.gcode'].toString(), GCODE);
   assert.ok(files['Metadata/plate_1.gcode.md5']);
@@ -140,13 +146,17 @@ test('a Bambu Studio 3mf can be told apart from one of ours', () => {
   // So a reference file can be found in a folder rather than typed as a path.
   // The last person asked for one pasted the words "path\to" from the example,
   // which is a fair reading of an example that looks like a command.
+  // This used to answer by looking for a slicer profile, on the grounds that
+  // theirs had one and ours never would. Ours carries one now, so an absence
+  // proves nothing — a real export names itself instead, and that is asked
+  // directly.
   const ours = build3mf({ gcode: GCODE, meta: META, cfg: CFG, name: 'k' });
-  assert.equal(isBambuStudio3mf(ours), false, 'ours has never carried a slicer profile');
+  assert.equal(isBambuStudio3mf(ours), false, 'ours is not a Bambu Studio export');
   assert.equal(plateGcodeName(ours), 'Metadata/plate_1.gcode');
 
   const theirs = build3mf({
     gcode: GCODE, meta: META, cfg: CFG, name: 'k',
-    extraParts: [{ name: 'Metadata/project_settings.config', data: '{"printer_model":"Bambu Lab A1 mini"}' }],
+    extraParts: [{ name: '3D/3dmodel.model', data: '<model><metadata name="Application">BambuStudio-02.07.01.62</metadata></model>' }],
   });
   assert.equal(isBambuStudio3mf(theirs), true);
 
@@ -158,4 +168,64 @@ test('a Bambu Studio 3mf can be told apart from one of ours', () => {
   assert.deepEqual(zipNames(junk), []);
   assert.equal(zipMember(junk, 'anything'), null);
   assert.equal(zipMember(ours, 'Metadata/nope'), null, 'a missing member is null, not a throw');
+});
+
+/**
+ * The profile the printer needs in order to LOAD the second colour.
+ *
+ * Everything worked right up to the moment the printer was asked to take
+ * filament 2, at which point it sat on "the filament is not inserted" and
+ * refused every other command. Our 3mf declared that a second filament exists
+ * and shipped nothing saying what it is — no type, no temperature, nothing to
+ * run a load routine with. A real Bambu Studio export carries 571 settings for
+ * that, 168 of them one per filament, and we carried none.
+ */
+test('the 3mf carries a filament profile for both colours', async () => {
+  const { build3mf, zipMember, zipNames, isBambuStudio3mf } = await import('../src/integrations/bambu3mf.js');
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const colours = { layer1: 'BLACK', layer2: 'PINK' };
+  const { gcode, meta } = generate({
+    shape: 'rectangle', colours, hole: null,
+    design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  }, cfg);
+  const buf = build3mf({ gcode, meta: { ...meta, colours }, cfg, name: 'test' });
+
+  assert.ok(zipNames(buf).includes('Metadata/project_settings.config'), 'no slicer profile at all');
+  // ...but carrying a profile does not make it a Bambu Studio export, and the
+  // two questions must not be conflated again.
+  assert.equal(isBambuStudio3mf(buf), false);
+
+  const ps = JSON.parse(zipMember(buf, 'Metadata/project_settings.config').toString());
+  // Two of everything per-filament, or the second slot is a slot the printer
+  // knows the name of and nothing else.
+  for (const k of ['filament_type', 'filament_colour', 'filament_settings_id', 'nozzle_temperature', 'filament_self_index']) {
+    assert.ok(Array.isArray(ps[k]) && ps[k].length === 2, `${k} must describe both filaments, got ${JSON.stringify(ps[k])}`);
+  }
+  assert.deepEqual(ps.filament_colour, ['#1c1c1e', '#ff5fa2'], 'the job\'s own colours must reach the profile');
+  assert.deepEqual(ps.nozzle_temperature, [String(cfg.temp.nozzle), String(cfg.temp.nozzle)]);
+});
+
+test('the 3mf says which layers each colour covers', async () => {
+  const { build3mf, zipMember } = await import('../src/integrations/bambu3mf.js');
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const colours = { layer1: 'BLACK', layer2: 'PINK' };
+  const { gcode, meta } = generate({
+    shape: 'rectangle', colours, hole: null,
+    design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  }, cfg);
+  const info = zipMember(build3mf({ gcode, meta: { ...meta, colours }, cfg, name: 'test' }), 'Metadata/slice_info.config').toString();
+
+  // Bambu's own export declares this. Without it the firmware is told two
+  // filaments exist but never where the second one starts.
+  assert.match(info, /<layer_filament_lists>/);
+  assert.match(info, /filament_list="0 1"/, 'the layer where the two colours meet must be named');
+  assert.match(info, /<nozzle id="0"/);
+  // and both filaments must be fully described, not just colour-tagged
+  const filaments = info.match(/<filament id="\d"[^>]*>/g) || [];
+  assert.equal(filaments.length, 2);
+  for (const f of filaments) assert.match(f, /nozzle_diameter="[\d.]+"/, `no nozzle on ${f}`);
 });
