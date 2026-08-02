@@ -101,6 +101,8 @@
     "cutX": 180,
     "cutRetractMm": 18,
     "_tool_comment": "Which filament slot the change targets. 254 is the EXTERNAL SPOOL and is what a booth with no AMS wants. 0-3 are AMS slots and get an A suffix; asking for one with no AMS attached gives an AMS Lite communication error and deadlocks the printer. 255 means no tool at all and does nothing.",
+    "_amsFraming_comment": "Whether M620/M621 carry the AMS \"A\" suffix. Measured: with it the cut and retract happen but the load deadlocks on a booth with no AMS; without it the load prompts correctly but the cut is skipped. Set true to keep the AMS framing the cut wants while `tool` stays on the external spool the load needs — that combination is untested.",
+    "amsFraming": false,
     "tool": 254,
     "pauseGcode": [
       "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="

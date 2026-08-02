@@ -682,7 +682,6 @@ export function colourChangeBlock(cfg, atZ = 0) {
   // all and does nothing. The `A` suffix is AMS addressing too: Bambu's own
   // end-of-print unload, on a machine with no AMS, is "M620 S255" with no A.
   const tool = c.tool ?? 254;
-  const ams = tool < 254 ? 'A' : '';
   if (purge > 0) {
     const bites = Math.max(1, Math.round(c.purgeBites ?? 4));
     const each = purge / bites;
@@ -766,7 +765,18 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   // all and does nothing. The `A` suffix is AMS addressing too: Bambu's own
   // end-of-print unload, on a machine with no AMS, is "M620 S255" with no A.
   const tool = c.tool ?? 254;
-  const ams = tool < 254 ? 'A' : '';
+  // The "A" suffix on M620/M621 is AMS framing, and the two halves of this
+  // sequence want opposite things from it. Measured on the machine, one run each:
+  //
+  //   M620 S1A   (AMS)       cut + retract happened     load deadlocked
+  //   M620 S254  (external)  cut skipped                load prompted and worked
+  //
+  // M620.11 is what performs the cut, and it only seems to act when the change
+  // was opened AMS-style. So framing and tool are separate knobs: amsFraming
+  // keeps the wrapper the cut wants while `tool` stays on the external spool the
+  // load needs. Whether the printer accepts that combination is the one thing
+  // left to find out, and it is one print to try.
+  const ams = (c.amsFraming ?? tool < 254) ? 'A' : '';
 
   const out = [
     '; ===== A1 mini filament change: cut, unload, reload =====',
