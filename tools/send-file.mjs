@@ -24,6 +24,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { loadConfig } from '../src/config.js';
 import { uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured } from '../src/integrations/bambu.js';
+import { refuseIfBoothRunning } from './booth-running.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -38,6 +39,8 @@ if (!file) {
   console.error('                          [--param Metadata/plate_1.gcode] [--dir cache] [--no-start]');
   process.exit(2);
 }
+
+await refuseIfBoothRunning(process.argv, 'send-file');
 if (!fs.existsSync(file)) {
   console.error(`No such file: ${path.resolve(file)}`);
   process.exit(2);

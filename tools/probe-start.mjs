@@ -30,6 +30,7 @@ import {
   uploadFile, buildPrintCommand, publishCommand, watchPrinter, isConfigured, readCommandReply, readPattern,
 } from '../src/integrations/bambu.js';
 import { ftpsCheck, ftpErrorText } from '../src/printers.js';
+import { refuseIfBoothRunning } from './booth-running.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d; };
@@ -42,6 +43,8 @@ if (!printer) {
   console.error(wanted ? `No printer with id ${wanted}.` : 'No printer configured — use the setup page first.');
   process.exit(2);
 }
+
+await refuseIfBoothRunning(process.argv, 'probe-start');
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), '3dipad-probe-'));
 const waitMs = Number(flag('wait', '18000'));
