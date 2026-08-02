@@ -228,6 +228,18 @@
   .adm-send button.warn { background: #ff8a34; color: #241203; }
   .adm-send button[disabled] { background: #1b2440; color: #5d6a8c; }
   .adm-none { color: var(--muted); text-align: center; padding: 40px 10px; }
+  .adm-pin { max-width: 300px; margin: 8vh auto 0; text-align: center; }
+  .adm-pin .dots { display: flex; gap: 12px; justify-content: center; margin: 18px 0 22px; }
+  .adm-pin .dots i { width: 15px; height: 15px; border-radius: 50%; background: #ffffff26; }
+  .adm-pin .dots i.on { background: var(--accent); }
+  .adm-pin.wrong .dots { animation: admshake .4s; }
+  @keyframes admshake { 25%{transform:translateX(-9px)} 50%{transform:translateX(9px)} 75%{transform:translateX(-5px)} }
+  .adm-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .adm-keys button { padding: 17px 0; border: 0; border-radius: 12px; background: #22305a;
+                     color: var(--ink); font: inherit; font-size: 21px; font-weight: 800; }
+  .adm-keys button:active { background: #2f4076; }
+  .adm-pin .why { color: var(--muted); font-size: 13px; min-height: 18px; margin-top: 12px; }
+  .adm-pin .why.bad { color: var(--danger); }
 </style>
 
 <button class="adm-dot adm-hold" id="adm-dot" aria-label="Operator panel — hold to open">⚙ Hold</button>
@@ -237,6 +249,15 @@
   <p class="hint">Check the filament in the machine before you send. Hold ⚙ to open this.</p>
   <div class="adm-p" id="adm-printers"></div>
   <div id="adm-jobs"></div>
+</div>
+<div class="adm" id="adm-lock" role="dialog" aria-label="Operator PIN">
+  <button class="adm-close" onclick="admClose()">Close</button>
+  <div class="adm-pin" id="adm-pin">
+    <h3>Operator PIN</h3>
+    <div class="dots" id="adm-dots"><i></i><i></i><i></i><i></i></div>
+    <div class="adm-keys" id="adm-keys"></div>
+    <p class="why" id="adm-why"></p>
+  </div>
 </div>
 
 <div id="app">
@@ -890,14 +911,91 @@ function admHold(el){
   for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) el.addEventListener(ev, cancel);
 }
 
-function admOpen(){
+/* ---- PIN ----
+   The hold keeps out the child who leans on the screen. The PIN keeps out the
+   one who watched an adult do it and wants a turn — which, at a booth full of
+   children being shown a machine, is most of them.
+
+   The PIN is never sent to the tablet: the digits go to the server and it
+   answers yes or no, so there is nothing to find by looking at the page. It
+   stays unlocked for a while afterwards, because an operator placing a queue of
+   jobs should not type it once per child. */
+let admUnlockedUntil = 0, admPinBuf = '', admLockMin = 10;
+
+async function admOpen(){
+  if(Date.now() < admUnlockedUntil) return admShow();
+  // Ask the server whether it wants a PIN at all. An empty attempt answers that
+  // without being counted as a guess, and means the tablet never has to be told
+  // in advance — so there is nothing about the PIN baked into the page.
+  let d;
+  try{ d = await admUnlock(''); }
+  catch{ return admLockOpen('No connection to the booth server'); }
+  admLockMin = d.lockMinutes ?? 10;
+  if(d.ok){ admUnlockedUntil = Date.now() + admLockMin * 60000; return admShow(); }
+  admLockOpen();
+}
+
+function admShow(){
+  $('#adm-lock').classList.remove('open');
   $('#adm').classList.add('open');
   admRefresh();
+  clearInterval(admPoll);
   admPoll = setInterval(admRefresh, 4000);
 }
+
 function admClose(){
   $('#adm').classList.remove('open');
+  $('#adm-lock').classList.remove('open');
   clearInterval(admPoll); admPoll = null;
+}
+
+async function admUnlock(pin){
+  const r = await fetch('api/admin/unlock', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(pin ? {pin} : {})});
+  return r.json();
+}
+
+function admLockOpen(msg){
+  admPinBuf = '';
+  $('#adm-keys').innerHTML = ['1','2','3','4','5','6','7','8','9','','0','⌫']
+    .map(k => k ? `<button onclick="admPinKey('${k}')">${k}</button>` : '<span></span>').join('');
+  $('#adm-lock').classList.add('open');
+  admPinDraw();
+  const why = $('#adm-why');
+  why.classList.toggle('bad', !!msg);
+  why.textContent = msg || '';
+}
+
+function admPinDraw(){
+  $$('#adm-dots i').forEach((d,i) => d.classList.toggle('on', i < admPinBuf.length));
+}
+
+async function admPinKey(k){
+  if(k === '⌫'){ admPinBuf = admPinBuf.slice(0,-1); return admPinDraw(); }
+  if(admPinBuf.length >= 4) return;
+  admPinBuf += k;
+  admPinDraw();
+  if(admPinBuf.length < 4) return;
+
+  const tried = admPinBuf;
+  admPinBuf = '';
+  const why = $('#adm-why');
+  why.classList.remove('bad');
+  why.textContent = 'Checking…';
+  let d;
+  try{ d = await admUnlock(tried); }
+  catch{ why.classList.add('bad'); why.textContent = 'No connection to the booth server'; return admPinDraw(); }
+
+  if(d.ok){
+    admUnlockedUntil = Date.now() + (d.lockMinutes ?? admLockMin) * 60000;
+    why.textContent = '';
+    return admShow();
+  }
+  admPinDraw();
+  $('#adm-pin').classList.add('wrong');
+  setTimeout(() => $('#adm-pin').classList.remove('wrong'), 450);
+  why.classList.add('bad');
+  why.textContent = d.retryInSec ? `Too many tries — wait ${d.retryInSec}s` : 'Wrong PIN';
 }
 
 /** Same rules as the dashboard: only a printer that can take work is pressable. */

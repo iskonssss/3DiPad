@@ -66,6 +66,62 @@ app.get('/api/config', (_req, res) => {
   res.json({ palette: cfg.palette, build: cfg.build, limits: cfg.limits });
 });
 
+/**
+ * The PIN behind the send-to-printer panel.
+ *
+ * This is a lock on a booth, not on a bank. It stops the child who watched an
+ * adult hold the corner button and wants to try it themselves, and it stops an
+ * idle tap during the ten seconds nobody is watching the iPad. It does not stop
+ * anyone who can reach the booth Wi-Fi and POST to the API directly, and it is
+ * not meant to — the printers are two feet away and have their own screens.
+ */
+function operatorPin() {
+  return String(process.env.BOOTH_ADMIN_PIN || cfg.operator?.pin || '').trim();
+}
+
+// Wrong guesses, by address. Four digits is 10,000 tries, which is nothing for
+// a script and a very long afternoon for a seven-year-old — so the delay grows
+// and then the door shuts, which is enough for the second case and honest about
+// the first.
+const pinTries = new Map();
+app.post('/api/admin/unlock', async (req, res) => {
+  const pin = operatorPin();
+  const lockMinutes = cfg.operator?.lockMinutes ?? 10;
+  const given = String(req.body?.pin ?? '');
+
+  // No PIN configured: the hold is the whole lock, and the panel opens.
+  if (!pin) return res.json({ ok: true, pinRequired: false, lockMinutes });
+
+  // An empty body is the kiosk asking "do you want a PIN?", not a guess at one.
+  // Counting it as a wrong try would lock the operator out of their own booth
+  // simply for opening the panel five times.
+  if (!given) return res.json({ ok: false, pinRequired: true, lockMinutes });
+
+  const who = req.ip || 'unknown';
+  const rec = pinTries.get(who) || { wrong: 0, until: 0 };
+  if (Date.now() < rec.until) {
+    return res.status(429).json({ ok: false, pinRequired: true, error: 'Too many wrong tries', retryInSec: Math.ceil((rec.until - Date.now()) / 1000) });
+  }
+  // The same pause on every guess, right or wrong, so the answer cannot be
+  // timed and a rapid-fire guesser gets nowhere.
+  await new Promise((r) => setTimeout(r, 350));
+
+  if (given === pin) {
+    pinTries.delete(who);
+    return res.json({ ok: true, pinRequired: true, lockMinutes });
+  }
+  rec.wrong += 1;
+  if (rec.wrong >= 5) { rec.until = Date.now() + 60000; rec.wrong = 0; }
+  pinTries.set(who, rec);
+  // Say so on the guess that shuts the door, not on the next one. An operator
+  // who mistypes their way into a lockout should find out then, rather than
+  // getting an unexplained "wait 60s" the next time they reach for the panel.
+  if (rec.until > Date.now()) {
+    return res.status(429).json({ ok: false, pinRequired: true, error: 'Too many wrong tries', retryInSec: Math.ceil((rec.until - Date.now()) / 1000) });
+  }
+  res.status(401).json({ ok: false, pinRequired: true, error: 'Wrong PIN' });
+});
+
 app.post('/api/estimate', (req, res) => {
   try {
     const design = sanitizeDesign(req.body);
