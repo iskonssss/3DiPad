@@ -827,33 +827,52 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
     // If the cut did work, the old colour is already out and the operator just
     // loads the new one. If it did not, this is the swap they were doing
     // before. Either way the print stops.
-    ...pauseLines(c),
+    //
+    // It goes AFTER M621, below, and that placement is the whole point: see the
+    // note there.
   ];
+
+  // Everything from here runs OUTSIDE the M620/M621 pair, and that is not
+  // tidiness — it is the difference between a keychain and a one-colour lump.
+  //
+  // The pause and the purge used to sit inside the block. A printer that will
+  // not do the change does not refuse it line by line; it skips from M620 to
+  // M621 and carries on, taking everything between them with it. So the one
+  // command that guarantees a stop was being discarded by the same firmware
+  // decision that discarded the change — and the print ran through in one
+  // colour with no pause, exactly as if we had asked for nothing at all.
+  //
+  // Out here, the stop survives whatever the printer decides about the block
+  // above it. If the change worked, this is one redundant press and a purge
+  // that costs a few centimetres. If it did not, it is the whole swap.
+  const tail = [...pauseLines(c)];
 
   if (purge > 0) {
     // The slicer's shape: one long push to pack the melt zone, then short slow
     // ones that break the strand so it drops instead of trailing across the part.
-    out.push('; --- purge the new colour ---', 'M400', `M109 S${t}`, 'M106 P1 S60');
+    tail.push('; --- purge the new colour ---', 'M400', `M109 S${t}`, 'M106 P1 S60');
     const head = Math.min(23.7, purge);
-    out.push(`G1 E${head.toFixed(2)} F${feed}`);
+    tail.push(`G1 E${head.toFixed(2)} F${feed}`);
     const rest = purge - head;
     if (rest > 0) {
       for (let i = 0; i < 4; i++) {
-        out.push(`G1 E${(rest * 0.02).toFixed(2)} F50`);
-        out.push(`G1 E${(rest * 0.23).toFixed(2)} F${feed}`);
+        tail.push(`G1 E${(rest * 0.02).toFixed(2)} F50`);
+        tail.push(`G1 E${(rest * 0.23).toFixed(2)} F${feed}`);
       }
     }
-    out.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
+    tail.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
   }
 
   const wipes = Math.max(0, Math.round(c.wipes ?? 4));
   if (wipes > 0) {
-    out.push('; --- wipe on the brush ---', 'M400', 'M106 P1 S178', 'M400 S3');
-    for (let i = 0; i < wipes; i++) out.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');
-    out.push('M400', 'M106 P1 S0');
+    tail.push('; --- wipe on the brush ---', 'M400', 'M106 P1 S178', 'M400 S3');
+    for (let i = 0; i < wipes; i++) tail.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');
+    tail.push('M400', 'M106 P1 S0');
   }
 
-  out.push('M629', `M621 S${tool}${ams}`, 'G392 S0', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
+  out.push('M629', `M621 S${tool}${ams}`, 'G392 S0', 'M400', 'G92 E0');
+  out.push(...tail);
+  out.push(`G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
 
