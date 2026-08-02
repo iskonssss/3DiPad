@@ -342,3 +342,23 @@ test('the printer state we care about is pulled out of a full status push', () =
   // and a push with nothing we understand is null rather than an empty object
   assert.equal(readStatus({ print: { wifi_signal: '-48dBm' } }), null);
 });
+
+test('a reply is recognised whatever namespace it comes back in', () => {
+  // The booth watched this exact message go past and reported that the printer
+  // had not answered at all — the one reply that proved our session was
+  // trusted, and it was dropped because it was not under `print`.
+  const led = readCommandReply({ system: {
+    sequence_id: '826', command: 'ledctrl', led_node: 'chamber_light',
+    led_mode: 'off', reason: 'success', result: 'success',
+  } });
+  assert.ok(led, 'a system reply is still a reply');
+  assert.equal(led.command, 'ledctrl');
+  assert.equal(led.result, 'success');
+  assert.equal(led.sequenceId, '826');
+
+  // print still works, and a refusal there is still a refusal
+  assert.equal(readCommandReply({ print: { command: 'project_file', err_code: 84033543 } }).result, 'error');
+  // and the routine pushes are still not replies, in any namespace
+  assert.equal(readCommandReply({ print: { command: 'push_status', gcode_state: 'IDLE' } }), null);
+  assert.equal(readCommandReply({ system: { command: 'ledctrl' } }), null, 'no result and no error is not an answer');
+});

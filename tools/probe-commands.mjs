@@ -34,9 +34,14 @@ if (!printer) {
   process.exit(2);
 }
 
-let full = null;
-const watch = watchPrinter(printer, cfg, () => {});
-const raw = [];
+// Keep every message, not just the ones watchPrinter files as interesting.
+// The complete state arrives only in a status push, and those are exactly what
+// the `recent` ring leaves out.
+let fullest = null;
+const watch = watchPrinter(printer, cfg, () => {}, (msg) => {
+  const p = msg?.print;
+  if (p && (!fullest || Object.keys(p).length > Object.keys(fullest).length)) fullest = p;
+});
 
 console.log('');
 console.log(`  Talking to ${printer.name} (${printer.id}) at ${printer.ip}`);
@@ -117,13 +122,12 @@ watch.stop();
 process.exit(0);
 
 function reportState() {
-  const recent = watch.health().recent;
-  const status = recent.map((m) => m.msg).filter((m) => m?.print).pop();
-  if (!status) {
-    console.log('        no full status arrived — it sends deltas and we caught none');
+  const p = fullest;
+  if (!p) {
+    console.log('        no status arrived at all');
     return;
   }
-  const p = status.print;
+  console.log(`        (${Object.keys(p).length} fields in the fullest push seen)`);
   const show = ['gcode_state', 'print_error', 'mc_percent', 'mc_remaining_time', 'subtask_name',
     'print_type', 'nozzle_temper', 'bed_temper', 'sdcard', 'home_flag', 'lifecycle', 'wifi_signal'];
   for (const k of show) if (p[k] !== undefined) console.log(`        ${k}: ${JSON.stringify(p[k])}`);
@@ -137,6 +141,16 @@ function reportState() {
     console.log('        ^^ an unresolved warning can stop it accepting new jobs.');
   } else if (p.hms) {
     console.log('        HMS warnings active: none');
+  }
+  // Anything else that is set and looks like trouble. We have been reading two
+  // fields out of these messages for weeks; print the rest rather than guess
+  // again about which one matters.
+  const suspicious = Object.entries(p).filter(([k, v]) =>
+    /err|fail|warn|state|flag|status|sdcard|nozzle_type|cali/i.test(k) && !show.includes(k) &&
+    (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'));
+  if (suspicious.length) {
+    console.log('        other fields worth seeing:');
+    for (const [k, v] of suspicious) console.log(`          ${k}: ${JSON.stringify(v)}`);
   }
 }
 
