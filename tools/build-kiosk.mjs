@@ -93,7 +93,10 @@ const engine = parts.map((p) => `/* ===== ${p.file} ===== */\n${p.code}`).join('
    Generating it removes that whole class of bug. Server-only sections (printer
    credentials, CRM webhooks, output paths) are left out — the browser has no
    use for them and they don't belong in a file served to the public. */
-const SERVER_ONLY = ['integrations', 'output'];
+// Baked into the page the tablets load, so anything here is readable by anyone
+// who opens the kiosk. `operator` holds the PIN: it must never be built in, and
+// the kiosk asks the server about it at runtime instead.
+const SERVER_ONLY = ['integrations', 'output', 'operator'];
 
 function stripComments(value) {
   if (Array.isArray(value)) return value.map(stripComments);

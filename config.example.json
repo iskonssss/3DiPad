@@ -128,6 +128,11 @@
     "leadsDir": "leads",
     "filenamePattern": "{c1}-{c2}_{seq}.gcode"
   },
+  "operator": {
+    "_comment": "The send-to-printer panel on the kiosk. The PIN stops a child who has worked out the hold — it is not security, and anyone on the booth Wi-Fi can still reach the API. Leave \"pin\" empty for no PIN (the hold alone). Put the real one in .env as BOOTH_ADMIN_PIN if you would rather it were not in a file you edit at the booth.",
+    "pin": "",
+    "lockMinutes": 10
+  },
   "integrations": {
     "notify": {
       "_comment": "Who sends the WhatsApp: 'ghl' (GoHighLevel inbound webhook — recommended, GHL owns the message + nurture), 'meta' (direct WhatsApp Cloud API, see whatsapp block), or 'none'.",
