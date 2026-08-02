@@ -17,7 +17,7 @@ import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
 import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
-import { lastCommandSent, clearIfStuck, needsClearing } from './integrations/bambu.js';
+import { lastCommandSent, clearIfStuck, needsClearing, publishCommand, buildStopCommand } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -186,6 +186,27 @@ app.post('/api/jobs/:id/reprint', (req, res) => {
   console.log(`[reprint] ${job.filename} queued again as #${String(job.seq).padStart(4, '0')}`);
   dispatcher.pump();
   res.json({ ok: true, job: publicJob(job) });
+});
+
+/**
+ * Stop whatever a printer is doing, now.
+ *
+ * There was no way to do this without a terminal, which is the wrong answer at
+ * a booth: a print going wrong in front of a queue of parents is exactly when
+ * nobody should be looking up a command. The printer is left in FAILED, which
+ * the monitor turns into a failed job, and the card then offers Print again.
+ */
+app.post('/api/printers/:id/stop', async (req, res) => {
+  const printer = (cfg.integrations?.printers || []).find((p) => p.id === req.params.id);
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer' });
+
+  const r = await publishCommand(printer, buildStopCommand(), cfg);
+  if (!r.ok) return res.status(502).json({ ok: false, error: `could not reach ${printer.name}: ${r.error}` });
+
+  const job = queue.active().find((j) => j.printerId === printer.id && ['assigned', 'printing', 'colour_change'].includes(j.status));
+  if (job) queue.setStatus(job.id, 'failed', { failure: 'stopped from the dashboard' });
+  console.log(`[${printer.id}] STOPPED from the dashboard${job ? ` — ${job.filename}` : ''}`);
+  res.json({ ok: true, stopped: job ? job.filename : null });
 });
 
 app.post('/api/jobs/:id/status', async (req, res) => {
