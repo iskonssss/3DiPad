@@ -26,6 +26,7 @@
 // Zipped here rather than with a library: the booth laptop should not need an
 // npm install the morning of a fair.
 
+import fs from 'node:fs';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 
@@ -169,13 +170,23 @@ export function zipMember(buf, want) {
 /**
  * Did Bambu Studio make this 3mf, or did we?
  *
- * Theirs carries the full slicer profile at Metadata/project_settings.config;
- * ours has never had one. That is how a reference file can be picked out of a
- * folder without anyone typing a path — which matters, because the last person
- * asked to supply one pasted the words "path\to" from the example.
+ * This used to answer by looking for Metadata/project_settings.config, on the
+ * grounds that theirs carried the slicer profile and ours never had one. Ours
+ * carries one now — that is the whole point of the change that broke this — so
+ * the absence of a profile no longer means anything.
+ *
+ * A real export names itself in 3D/3dmodel.model — Application is
+ * "BambuStudio-02.07.01.62" — so ask that directly. Asking what a file IS beats
+ * inferring from what we happen not to produce yet, which is exactly what rotted
+ * the moment we started producing it.
  */
 export function isBambuStudio3mf(buf) {
-  try { return !!zipMember(buf, 'Metadata/project_settings.config'); } catch { return false; }
+  try {
+    const model = zipMember(buf, '3D/3dmodel.model');
+    if (!model) return false;
+    // A real export names itself: Application = "BambuStudio-02.07.01.62".
+    return /name="Application">\s*BambuStudio/i.test(model.toString());
+  } catch { return false; }
 }
 
 /** Which plate inside a 3mf holds the g-code: Metadata/plate_N.gcode. */
@@ -240,6 +251,36 @@ const xmlEscape = (s) => String(s ?? '').replace(/[<>&"']/g, (c) =>
  * `meta` is the generator's own output — bbox, colours, estimated minutes and
  * grams — so the printer's screen shows the same numbers the tablet promised.
  */
+/**
+ * The slicer profile the printer needs in order to LOAD the second colour.
+ *
+ * A real Bambu Studio 3mf carries Metadata/project_settings.config: 571 keys,
+ * 168 of them one-per-filament. We shipped none of it, and everything worked
+ * right up to the moment the printer was asked to take filament 2 — at which
+ * point it sat on "the filament is not inserted" and refused every other
+ * command, because it had been told a second filament exists and given nothing
+ * that says what it is. No type, no temperature, nothing to run a load with.
+ *
+ * This is that file, taken verbatim from a two-colour external-spool export for
+ * an A1 mini — a profile known to work on this exact printer, rather than one
+ * assembled from guesses. Only the colours are substituted; nozzle_temperature
+ * in it is already 220, which is what the booth prints at.
+ */
+const PROJECT_SETTINGS = JSON.parse(
+  fs.readFileSync(new URL('./templates/a1mini.project_settings.json', import.meta.url), 'utf8'),
+);
+
+/** The profile with this job's two colours in it. */
+function projectSettings(c1, c2, cfg) {
+  const out = { ...PROJECT_SETTINGS, filament_colour: [c1, c2] };
+  const t = cfg.temp?.nozzle;
+  if (t) {
+    out.nozzle_temperature = [String(t), String(t)];
+    out.nozzle_temperature_initial_layer = [String(cfg.temp?.nozzleFirst ?? t), String(t)];
+  }
+  return JSON.stringify(out, null, 4);
+}
+
 export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new Date(), extraParts = [] }) {
   const body = Buffer.from(gcode, 'utf8');
   const md5 = crypto.createHash('md5').update(body).digest('hex').toUpperCase();
@@ -253,6 +294,11 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
   const bbox = [bx - w / 2, by - h / 2, bx + w / 2, by + h / 2];
   const nozzle = cfg.build?.nozzleDiameter ?? 0.4;
   const seconds = Math.round((meta.estMinutes ?? 12) * 60);
+  // Which layers each colour covers, and the one layer where they meet. Bambu's
+  // own export declares this; without it the firmware is told two filaments
+  // exist but never where the second one starts.
+  const backing = meta.backingLayers ?? 7;
+  const total = meta.layers ?? backing + (meta.designLayers ?? 2);
 
   const plateJson = {
     bbox_all: bbox,
@@ -275,6 +321,12 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
   </header>
   <plate>
     <metadata key="index" value="1"/>
+    <metadata key="extruder_type" value="0"/>
+    <metadata key="nozzle_volume_type" value="0"/>
+    <metadata key="enable_filament_dynamic_map" value="false"/>
+    <metadata key="has_filament_switcher" value="false"/>
+    <metadata key="filament_maps" value="1 1"/>
+    <metadata key="limit_filament_maps" value="0 0"/>
     <metadata key="printer_model_id" value="${xmlEscape(cfg.integrations?.lan?.printerModelId || 'N1')}"/>
     <metadata key="nozzle_diameters" value="${nozzle}"/>
     <metadata key="timelapse_type" value="0"/>
@@ -284,8 +336,14 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
     <metadata key="support_used" value="false"/>
     <metadata key="label_object_enabled" value="false"/>
     <object identify_id="1" name="${xmlEscape(name)}" skipped="false" />
-    <filament id="1" tray_info_idx="GFL99" type="PLA" color="${c1}" used_m="2.00" used_g="${meta.estGrams ?? 6}" used_for_object="true" used_for_support="false"/>
-    <filament id="2" tray_info_idx="GFL99" type="PLA" color="${c2}" used_m="0.30" used_g="1" used_for_object="true" used_for_support="false"/>
+    <filament id="1" tray_info_idx="GFL99" type="PLA" color="${c1}" used_m="2.00" used_g="${meta.estGrams ?? 6}" group_id="0" nozzle_diameter="${nozzle}" volume_type="Standard" used_for_object="true" used_for_support="false"/>
+    <filament id="2" tray_info_idx="GFL99" type="PLA" color="${c2}" used_m="0.30" used_g="1" group_id="0" nozzle_diameter="${nozzle}" volume_type="Standard" used_for_object="true" used_for_support="false"/>
+    <nozzle id="0" extruder_id="1" nozzle_diameter="${nozzle}" volume_type="Standard"/>
+    <layer_filament_lists>
+      <layer_filament_list filament_list="0" layer_ranges="0 ${Math.max(0, backing - 1)}" />
+      <layer_filament_list filament_list="0 1" layer_ranges="${backing} ${backing}" />
+      <layer_filament_list filament_list="1" layer_ranges="${backing + 1} ${Math.max(backing + 1, total - 1)}" />
+    </layer_filament_lists>
   </plate>
 </config>
 `;
@@ -316,7 +374,7 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
 </config>
 `;
 
-  return zip([
+  const parts = [
     { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -344,12 +402,23 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
     { name: 'Metadata/plate_1_small.png', data: solidPng(48, 48, rgb(c1)) },
     { name: 'Metadata/plate_1.json', data: JSON.stringify(plateJson) },
     { name: 'Metadata/slice_info.config', data: sliceInfo },
+    { name: 'Metadata/project_settings.config', data: projectSettings(c1, c2, cfg) },
+    // Which filament is in use across the print: colour 1, then 2, and this is
+    // what tells the firmware a change is coming rather than surprising it.
+    { name: 'Metadata/filament_sequence.json', data: JSON.stringify({ plate_1: { nozzle_sequence: [0, 0], optimal_assignment: [0, 0], sequence: [1, 2] } }) },
     { name: 'Metadata/plate_1.gcode', data: body },
     { name: 'Metadata/plate_1.gcode.md5', data: md5 },
     // For bisecting what the firmware actually requires: tools/probe-start.mjs
     // builds variants of this archive with parts added, so the difference
     // between a project the printer opens and one it refuses can be found a
     // part at a time rather than guessed at.
-    ...extraParts,
-  ], now);
+  ];
+
+  // An extra part named the same as one we already ship REPLACES it. Appending
+  // used to put a second entry with that name behind the first in the central
+  // directory, so the override silently did nothing and the probe tool was
+  // measuring an archive it thought it had modified.
+  const byName = new Map(parts.map((part) => [part.name, part]));
+  for (const part of extraParts) byName.set(part.name, part);
+  return zip([...byName.values()], now);
 }
