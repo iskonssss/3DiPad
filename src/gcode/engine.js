@@ -640,6 +640,12 @@ export function colourChangeBlock(cfg, atZ = 0) {
   // Purged in bites, like the slicer does: a long slow push packs the melt zone
   // and the short fast ones break the strand so it drops instead of trailing.
   const purge = Math.max(0, c.purgeMm ?? 60);
+  // The filament slot to change into. 1, read out of a real Bambu Studio export
+  // for a manual external-spool change on this printer — NOT 255. 255 means "no
+  // next tool" and appears only in the end-of-print unload; asking for it takes
+  // the branch of Bambu's own template that does nothing, which is how a
+  // two-colour keychain came out in one colour.
+  const tool = c.tool ?? 1;
   if (purge > 0) {
     const bites = Math.max(1, Math.round(c.purgeBites ?? 4));
     const each = purge / bites;
@@ -711,12 +717,18 @@ export function bambuChangeBlock(cfg, atZ = 0) {
   // conversion, and the reason its purge feedrates look like arbitrary numbers.
   const feed = Math.round(((c.flushMmps ?? cfg.speed?.maxVolumetricMmps ?? 12) / 2.4053) * 60);
   const purge = Math.max(0, c.purgeMm ?? 60);
+  // The filament slot to change into. 1, read out of a real Bambu Studio export
+  // for a manual external-spool change on this printer — NOT 255. 255 means "no
+  // next tool" and appears only in the end-of-print unload; asking for it takes
+  // the branch of Bambu's own template that does nothing, which is how a
+  // two-colour keychain came out in one colour.
+  const tool = c.tool ?? 1;
 
   const out = [
     '; ===== A1 mini filament change: cut, unload, reload =====',
     'G392 S0',
     'M1007 S0',
-    'M620 S255A ; 255 = the external spool',
+    `M620 S${tool}A`,
     'M204 S9000',
     `G1 Z${up} F1200`,
     'M400',
@@ -727,7 +739,9 @@ export function bambuChangeBlock(cfg, atZ = 0) {
     `M620.11 S1 I254 E-${cutRetract} F1200 ; the long retraction that cuts it`,
     'M400',
     `M620.1 E F${feed} T${t}`,
-    'T255 ; unload the old colour, then ask for the new one',
+    `M620.10 A0 F${feed}`,
+    `T${tool} ; the change itself — the printer stops and asks, because the`,
+    '        ; print task was sent with manual_color_change set',
     `M620.1 E F${feed} T${t}`,
     'G1 Y90 F9000',
     'M400',
@@ -772,7 +786,7 @@ export function bambuChangeBlock(cfg, atZ = 0) {
     out.push('M400', 'M106 P1 S0');
   }
 
-  out.push('M629', 'M621 S255A', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
+  out.push('M629', `M621 S${tool}A`, 'G392 S0', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
 

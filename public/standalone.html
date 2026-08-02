@@ -521,7 +521,7 @@ const CFG = {
     "wipes": 4
   },
   "template": {
-    "startResolved": "; ============================================================================\n; A1 mini START — real sequence (adapted from a working A1 mini print).\n; Homes, optionally calibrates, then lays a prime line, in relative-E (M83),\n; which is exactly what the engine emits. Braced names are substituted by the\n; engine: temperatures from the temp block, the calibration step from the\n; calibration block (bed levelling is off by default - see config.example.json).\n; ============================================================================\nG90\nM83\nM140 S{bedFirst}\nM104 S140 ; preheat nozzle for homing/levelling\nM190 S{bedFirst} ; wait for bed temp\nG28 ; home all axes\n{calibration}\nM104 S{nozzleFirst}\nM109 S{nozzleFirst} ; wait for full print temp before any extrusion\nM106 S0 ; part fan off for the first layer\nG1 Z5 F1200\n; --- prime line ---\nG1 E-0.8 F2100\nG1 X10 Y3 F12000\nG1 Z0.25 F1200\nG1 E0.8 F2100\nG1 X65 Y3 E4.116 F720\nG1 X65 Y3.8 E0.06 F720\nG1 X10 Y3.8 E4.116 F720\nG1 X18 Y3.8 F4800\nG1 E-0.8 F2100\nG1 Z0.85 F1200",
+    "startResolved": "; ============================================================================\n; A1 mini START — real sequence (adapted from a working A1 mini print).\n; Homes, optionally calibrates, then lays a prime line, in relative-E (M83),\n; which is exactly what the engine emits. Braced names are substituted by the\n; engine: temperatures from the temp block, the calibration step from the\n; calibration block (bed levelling is off by default - see config.example.json).\n; ============================================================================\n; --- start tune: \"Witch Doctor\" ---\n; \"Ooh ee ooh ah ah, ting tang, walla walla bing bang.\"\n;\n; Not decoration at a booth: a child who has just handed over their drawing has\n; no other way to know that THEIR print is the one that started, and a tune\n; carries across a fair floor where a screen does not. One they can sing back is\n; worth more than a chime.\n;\n; Format, worked out from Bambu's own start tune in an exported A1 mini file:\n; three voices, each a pitch/duration/volume triple — A,B,L then C,D,M then E,F,N.\n; Pitch is a MIDI note number and 0 is a rest; here the melody is doubled on\n; voices 2 and 3, which is what Bambu does. Duration 10 is a beat, 20 holds.\n; Kept in the same low register as Bambu's own tune, which is known to sound on\n; this hardware — the notes are played by the stepper motors, so pitch is not\n; free and a melody two octaves up may not carry.\n;\n; The tune is by ear. If a phrase is wrong, the numbers below are MIDI notes:\n; C=48 D=50 E=52 F=53 G=55 A=57 B=59, and +12 is an octave up.\nM17\nM400 S1\nM1006 S1\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; Ooh\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; ee\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; ooh\nM1006 A0 B0 L100 C52 D10 M100 E52 F10 N100  ; ah\nM1006 A48 B20 L100 C52 D20 M100 E52 F20 N100  ; ah\nM1006 A0 B10 L100 C0 D10 M100 E0 F10 N100\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; ting\nM1006 A0 B0 L100 C55 D20 M100 E55 F20 N100  ; tang\nM1006 A0 B10 L100 C0 D10 M100 E0 F10 N100\nM1006 A0 B0 L100 C57 D10 M100 E57 F10 N100  ; wal\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; la\nM1006 A0 B0 L100 C57 D10 M100 E57 F10 N100  ; wal\nM1006 A0 B0 L100 C55 D10 M100 E55 F10 N100  ; la\nM1006 A0 B10 L100 C0 D10 M100 E0 F10 N100\nM1006 A52 B20 L100 C52 D20 M100 E52 F20 N100  ; bing\nM1006 A48 B20 L100 C48 D20 M100 E48 F20 N100  ; bang\nM1006 W\nM18\n\nG90\nM83\nM140 S{bedFirst}\nM104 S140 ; preheat nozzle for homing/levelling\nM190 S{bedFirst} ; wait for bed temp\nG28 ; home all axes\n{calibration}\nM104 S{nozzleFirst}\nM109 S{nozzleFirst} ; wait for full print temp before any extrusion\nM106 S0 ; part fan off for the first layer\nG1 Z5 F1200\n; --- prime line ---\nG1 E-0.8 F2100\nG1 X10 Y3 F12000\nG1 Z0.25 F1200\nG1 E0.8 F2100\nG1 X65 Y3 E4.116 F720\nG1 X65 Y3.8 E0.06 F720\nG1 X10 Y3.8 E4.116 F720\nG1 X18 Y3.8 F4800\nG1 E-0.8 F2100\nG1 Z0.85 F1200",
     "endResolved": "; ============================================================================\n; A1 mini END — retract, lift clear, park at the back, cool down.\n; ============================================================================\nG1 E-0.8 F2100\nG91\nG1 Z15 F1200\nG90\nG1 X10 Y170 F12000\nM104 S0\nM140 S0\nM106 S0\nM84\nM117 Print complete"
   },
   "palette": [
@@ -2075,6 +2075,12 @@ function colourChangeBlock(cfg, atZ = 0) {
   // Purged in bites, like the slicer does: a long slow push packs the melt zone
   // and the short fast ones break the strand so it drops instead of trailing.
   const purge = Math.max(0, c.purgeMm ?? 60);
+  // The filament slot to change into. 1, read out of a real Bambu Studio export
+  // for a manual external-spool change on this printer — NOT 255. 255 means "no
+  // next tool" and appears only in the end-of-print unload; asking for it takes
+  // the branch of Bambu's own template that does nothing, which is how a
+  // two-colour keychain came out in one colour.
+  const tool = c.tool ?? 1;
   if (purge > 0) {
     const bites = Math.max(1, Math.round(c.purgeBites ?? 4));
     const each = purge / bites;
@@ -2146,12 +2152,18 @@ function bambuChangeBlock(cfg, atZ = 0) {
   // conversion, and the reason its purge feedrates look like arbitrary numbers.
   const feed = Math.round(((c.flushMmps ?? cfg.speed?.maxVolumetricMmps ?? 12) / 2.4053) * 60);
   const purge = Math.max(0, c.purgeMm ?? 60);
+  // The filament slot to change into. 1, read out of a real Bambu Studio export
+  // for a manual external-spool change on this printer — NOT 255. 255 means "no
+  // next tool" and appears only in the end-of-print unload; asking for it takes
+  // the branch of Bambu's own template that does nothing, which is how a
+  // two-colour keychain came out in one colour.
+  const tool = c.tool ?? 1;
 
   const out = [
     '; ===== A1 mini filament change: cut, unload, reload =====',
     'G392 S0',
     'M1007 S0',
-    'M620 S255A ; 255 = the external spool',
+    `M620 S${tool}A`,
     'M204 S9000',
     `G1 Z${up} F1200`,
     'M400',
@@ -2162,7 +2174,9 @@ function bambuChangeBlock(cfg, atZ = 0) {
     `M620.11 S1 I254 E-${cutRetract} F1200 ; the long retraction that cuts it`,
     'M400',
     `M620.1 E F${feed} T${t}`,
-    'T255 ; unload the old colour, then ask for the new one',
+    `M620.10 A0 F${feed}`,
+    `T${tool} ; the change itself — the printer stops and asks, because the`,
+    '        ; print task was sent with manual_color_change set',
     `M620.1 E F${feed} T${t}`,
     'G1 Y90 F9000',
     'M400',
@@ -2207,7 +2221,7 @@ function bambuChangeBlock(cfg, atZ = 0) {
     out.push('M400', 'M106 P1 S0');
   }
 
-  out.push('M629', 'M621 S255A', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
+  out.push('M629', `M621 S${tool}A`, 'G392 S0', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
 
