@@ -640,6 +640,7 @@ export function colourChangeBlock(cfg, atZ = 0) {
   const pause = pauseLines(c);
   if (c.mode === 'pause') return pause;
   if (c.mode === 'bambu') return bambuChangeBlock(cfg, atZ);
+  if (c.mode === 'cut') return bambuChangeBlock(cfg, atZ, { load: false });
 
   const t = cfg.temp?.nozzle ?? 220;
   const lift = +(atZ + (c.liftMm ?? 4)).toFixed(2);
@@ -728,7 +729,7 @@ export function colourChangeBlock(cfg, atZ = 0) {
  * is discarded, this still behaves exactly like the "purge" mode and the print
  * still stops. The cut is a bonus, never the thing being relied on.
  */
-export function bambuChangeBlock(cfg, atZ = 0) {
+export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   const c = cfg.colourChange || {};
   const t = cfg.temp?.nozzle ?? 220;
   const up = +(atZ + (c.liftMm ?? 3)).toFixed(2);
@@ -761,8 +762,21 @@ export function bambuChangeBlock(cfg, atZ = 0) {
     'M400',
     `M620.1 E F${feed} T${t}`,
     `M620.10 A0 F${feed}`,
-    `T${tool} ; the change itself — the printer stops and asks, because the`,
-    '        ; print task was sent with manual_color_change set',
+    // The toolchange, and the one part of this that has not worked yet.
+    //
+    // On a real machine the cut and the pull-back both happened; T1 then left
+    // the printer sitting on "the filament is not inserted" with no way to feed
+    // the new colour in. The likely reason is that our 3mf declares one
+    // filament, so slot 1 is a slot the printer has no configuration for: it
+    // knows to ask, and does not know what it is being handed.
+    //
+    // mode "cut" leaves this line out. The cut and the unload are the fiddly
+    // half and they work; loading from the printer's own filament menu is
+    // twenty seconds an operator already knows how to do.
+    ...(opts.load === false
+      ? ['; no toolchange — load from the printer\'s filament menu at the pause below']
+      : [`T${tool} ; the printer stops and asks, because the print task was sent`,
+         '        ; with manual_color_change set']),
     `M620.1 E F${feed} T${t}`,
     'G1 Y90 F9000',
     'M400',
