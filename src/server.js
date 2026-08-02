@@ -17,7 +17,7 @@ import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
 import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
-import { lastCommandSent } from './integrations/bambu.js';
+import { lastCommandSent, clearIfStuck, needsClearing } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -404,10 +404,27 @@ function probeStart(printer) {
   });
 }
 
+/**
+ * Hand the printer back to itself before giving it something new.
+ *
+ * gcode_state stays FAILED after a print dies — the machine goes on naming the
+ * job that failed and refuses everything else. FINISH behaves the same way
+ * until the plate is taken. Both are cleared with the same command the
+ * printer's own screen sends.
+ */
+function clearBeforeSend(printer) {
+  return clearIfStuck(printer, cfg, () => monitor.states()[printer.id]);
+}
+
 const dispatcher = createDispatcher({
-  cfg, queue, outDir, confirmStart, probeStart,
+  cfg, queue, outDir, confirmStart, probeStart, beforeSend: clearBeforeSend,
   onEvent: (e) => {
-    if (e.type === 'variant') {
+    if (e.type === 'cleared') {
+      console.log(e.ok
+        ? `[${e.printer.id}] was holding a finished/failed job — cleared it first`
+        : `[${e.printer.id}] is stuck in ${e.state} and would not clear. Dismiss the last print on its screen.`);
+    }
+    else if (e.type === 'variant') {
       // Only say a command worked when the printer was actually seen to move.
       // This used to print "start command that worked" for the only command we
       // tried, on a printer that never started — a log line asserting the exact

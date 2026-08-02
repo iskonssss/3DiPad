@@ -4,6 +4,7 @@ import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
   readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent, readPattern,
+  buildStopCommand, needsClearing, clearIfStuck,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -361,4 +362,43 @@ test('a reply is recognised whatever namespace it comes back in', () => {
   // and the routine pushes are still not replies, in any namespace
   assert.equal(readCommandReply({ print: { command: 'push_status', gcode_state: 'IDLE' } }), null);
   assert.equal(readCommandReply({ system: { command: 'ledctrl' } }), null, 'no result and no error is not an answer');
+});
+
+test('a printer holding a failed job is cleared before it is sent another', async () => {
+  // The whole investigation in one test. The A1 mini sat in gcode_state FAILED,
+  // still naming YELLOW-BLACK_0009, and refused seven different print requests
+  // with the identical err_code 0x05024007 — a 3mf Bambu Studio made, one we
+  // made, two directories, three command shapes. Meanwhile ledctrl answered
+  // "success" and the light obeyed. It was never the request.
+  assert.equal(needsClearing('FAILED'), true);
+  assert.equal(needsClearing('FINISH'), true);
+  assert.equal(needsClearing('IDLE'), false);
+  assert.equal(needsClearing('RUNNING'), false);
+  assert.equal(needsClearing(undefined), false, 'a printer we cannot see is not "stuck"');
+
+  const stop = buildStopCommand(7);
+  assert.equal(stop.print.command, 'stop', 'what the printer\'s own screen sends');
+  assert.equal(stop.print.sequence_id, '7');
+
+  const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
+  const cfg = { integrations: { lan: { enabled: true } } };
+
+  // it lets go a moment after being asked
+  let state = { state: 'FAILED', file: 'YELLOW-BLACK_0009.gcode' };
+  setTimeout(() => { state = { state: 'IDLE' }; }, 600);
+  const r = await clearIfStuck(printer, cfg, () => state, { waitMs: 4000 });
+  assert.equal(r.needed, true);
+  assert.equal(r.cleared, true);
+  assert.equal(r.state, 'IDLE');
+
+  // an idle printer is left alone entirely
+  const idle = await clearIfStuck(printer, cfg, () => ({ state: 'IDLE' }));
+  assert.equal(idle.needed, false);
+  assert.equal(idle.cleared, false, 'nothing to do is not the same as having done it');
+
+  // one that will not let go says so rather than hanging or pretending
+  const stuck = await clearIfStuck(printer, cfg, () => ({ state: 'FAILED' }), { waitMs: 900 });
+  assert.equal(stuck.needed, true);
+  assert.equal(stuck.cleared, false);
+  assert.equal(stuck.state, 'FAILED');
 });

@@ -122,6 +122,48 @@ export function buildPrintCommand(remotePath, opts = {}) {
   }
 }
 
+/**
+ * Tell the printer to let go of the job it is still holding.
+ *
+ * A Bambu that has failed a print does not return to idle on its own: it sits
+ * in gcode_state FAILED, still naming the job that died, and refuses every new
+ * print command until someone clears it. The refusal is the same whatever you
+ * send, which is why seven different requests — a 3mf Bambu Studio made, one we
+ * made, two directories, three command shapes — all came back
+ * err_code 0x05024007. It was never about the request.
+ *
+ * `stop` is what the printer's own screen sends when you dismiss a failed job.
+ */
+export function buildStopCommand(sequenceId) {
+  return { print: { sequence_id: String(sequenceId ?? Date.now()), command: 'stop', param: '' } };
+}
+
+/** States a printer will not accept a new job from until it is cleared. */
+export const STUCK_STATES = ['FAILED', 'FINISH'];
+
+export function needsClearing(state) {
+  return STUCK_STATES.includes(String(state || '').toUpperCase());
+}
+
+/**
+ * Clear a stuck printer and wait for it to say it is idle again.
+ * Returns { cleared, state } — cleared false means it never let go.
+ */
+export async function clearIfStuck(printer, cfg, readState, opts = {}) {
+  const before = readState();
+  if (!needsClearing(before?.state)) return { cleared: false, needed: false, state: before?.state };
+
+  await publishCommand(printer, buildStopCommand(opts.sequenceId), cfg);
+
+  const deadline = Date.now() + (opts.waitMs ?? cfg?.integrations?.lan?.clearWaitMs ?? 8000);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    const now = readState();
+    if (!needsClearing(now?.state)) return { cleared: true, needed: true, state: now?.state };
+  }
+  return { cleared: false, needed: true, state: readState()?.state };
+}
+
 /** Upload a local file to the printer's SD card over implicit-TLS FTPS. */
 export async function uploadFile(printer, filePath, cfg) {
   const lan = cfg?.integrations?.lan || {};

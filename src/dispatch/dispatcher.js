@@ -16,7 +16,7 @@
 import path from 'node:path';
 import { sendToPrinter } from '../integrations/bambu.js';
 
-export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter, confirmStart = null, probeStart = null }) {
+export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, transport = sendToPrinter, confirmStart = null, probeStart = null, beforeSend = null }) {
   let running = false;
   let again = false;
 
@@ -49,6 +49,16 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
   /** Upload + start a job already assigned to `printer`. Never throws. */
   async function send(job, printer) {
     const filePath = path.join(outDir, job.filename);
+    // A printer that failed its last print keeps holding it, and refuses every
+    // new job until told to let go. Without this, one bad print takes a machine
+    // out of the booth for the rest of the day and every send after it fails
+    // for a reason that has nothing to do with the job being sent.
+    if (beforeSend) {
+      try {
+        const r = await beforeSend(printer, job);
+        if (r?.needed) onEvent({ type: 'cleared', job, printer, ok: !!r.cleared, state: r.state });
+      } catch (e) { console.error('pre-send check failed', e); }
+    }
     // probeStart lets the transport find out which start command this firmware
     // obeys, by watching whether the printer moved after each one. It is a short
     // wait (a few seconds each) and only happens while the shape is unknown.

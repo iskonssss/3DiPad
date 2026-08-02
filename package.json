@@ -12,7 +12,8 @@
     "test-printer": "node tools/test-printer.mjs",
     "send-file": "node tools/send-file.mjs",
     "probe-start": "node tools/probe-start.mjs",
-    "probe-commands": "node tools/probe-commands.mjs"
+    "probe-commands": "node tools/probe-commands.mjs",
+    "clear-printer": "node tools/clear-printer.mjs"
   },
   "engines": {
     "node": ">=20"

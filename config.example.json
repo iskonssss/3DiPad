@@ -171,6 +171,8 @@
       "printerModelId": "N1",
       "bedType": "textured_plate",
       "_start_comment": "Only consulted for container 'gcode', where firmware disagrees about the path prefix and the command name: 'auto' tries each shape in order and keeps the one the printer visibly acts on, waiting startProbeMs between tries. A 3mf has exactly one start command (project_file), so nothing is probed. project_file carries bed_leveling/flow_cali false as print-task parameters.",
+      "_clear_comment": "A Bambu that has failed or finished a print keeps holding it: gcode_state stays FAILED, it goes on naming the dead job, and it refuses every new print command until told to let go — with the same err_code whatever you send, which is why this looked like a protocol fault for weeks. The booth sends the printer's own 'stop' before each job and waits this long for it to return to idle.",
+      "clearWaitMs": 8000,
       "startCommand": "auto",
       "startProbeMs": 12000
     },
