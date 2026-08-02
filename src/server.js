@@ -659,13 +659,24 @@ const server = app.listen(port, () => {
   // this booth does — and the difference between the two is the difference
   // between the printer cutting and unloading by itself and an operator working
   // the filament menu at every swap. Worth one line rather than a guess.
-  const ccMode = cfg.colourChange?.gcode ? 'custom gcode' : (cfg.colourChange?.mode || 'purge');
-  if (ccMode === 'bambu') {
+  if (cfg.colourChange?.gcode) {
+    // The trap this line exists for. `gcode` replaces the whole block, so a
+    // config carrying it ignores `mode` completely — and a booth that had been
+    // set up with a bare "M400 U1" was emitting only that: no park, no retract,
+    // no purge, whatever mode said. From outside a generated file the two are
+    // indistinguishable, and telling someone to change `mode` in that state is
+    // advice that cannot work.
+    const lines = [].concat(cfg.colourChange.gcode);
+    console.log(`  swap:      YOUR OWN GCODE, ${lines.length} line${lines.length === 1 ? '' : 's'} — colourChange.mode is ignored`);
+    console.log(`             ${String(lines[0]).slice(0, 62)}`);
+    console.log('             To use the printer\'s own cut-and-reload instead, DELETE the');
+    console.log('             "gcode" key from colourChange in config.json and set mode = "bambu".');
+  } else if (cfg.colourChange?.mode === 'bambu') {
     console.log('  swap:      the printer cuts and reloads by itself (colourChange.mode = "bambu")');
     console.log('             Undocumented Bambu commands. Watch the first one — if it stalls,');
     console.log('             set colourChange.mode back to "purge" in config.json.');
   } else {
-    console.log(`  swap:      "${ccMode}" — the operator unloads and loads from the printer's menu`);
+    console.log(`  swap:      "${cfg.colourChange?.mode || 'purge'}" — the operator unloads and loads from the printer's menu`);
     console.log('             Set colourChange.mode = "bambu" in config.json to have the printer do it.');
   }
 
