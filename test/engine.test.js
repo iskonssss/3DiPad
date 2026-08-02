@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import nodeFs from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { generate } from '../src/gcode/engine.js';
 import { shapePolygon, pointInPolygon, distToBoundary, holeIsValid, presetHole } from '../src/gcode/geometry.js';
@@ -591,4 +592,54 @@ test('whatever the default swap is, it is a mode that exists and stops the print
   // keychain in one colour, and nothing downstream would notice.
   const block = colourChangeBlock(cfg, 2.24).join('\n');
   assert.ok(/M400 U1|T255/.test(block), `the "${mode}" swap never stops the print`);
+});
+
+/**
+ * A config carrying colourChange.gcode replaces the whole block and ignores
+ * `mode` entirely.
+ *
+ * A booth had been set up that way with a bare "M400 U1" and was emitting only
+ * that — no park, no retract, no purge — while every conversation about it
+ * assumed the shipped block was running. From outside a generated file the two
+ * are indistinguishable, which is what made it survive so long.
+ */
+test('an explicit gcode override beats every mode, and is not silently ignored', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+  const mine = ['M400 U1 ; swap it yourself'];
+
+  for (const mode of ['purge', 'pause', 'bambu']) {
+    const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode, gcode: mine } }, 2.24);
+    assert.deepEqual(block, mine, `mode "${mode}" leaked into an explicit override`);
+  }
+
+  // …and with the override gone, the mode is honoured again.
+  const { gcode, ...noOverride } = { ...base.colourChange, mode: 'bambu' };
+  const back = colourChangeBlock({ ...base, colourChange: noOverride }, 2.24).join('\n');
+  assert.match(back, /^T255\b/m, 'removing the override should give the printer its own change back');
+});
+
+test('the booth says which swap is really in effect, including the override', () => {
+  const fs = nodeFs;
+  const src = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const from = src.indexOf('if (cfg.colourChange?.gcode) {');
+  const to = src.indexOf('const synced = syncedFolderWarning();');
+  assert.ok(from >= 0 && to > from, 'the startup swap report moved');
+  const report = src.slice(from, to);
+
+  const say = (colourChange) => {
+    const out = [];
+    new Function('cfg', 'console', report)({ colourChange }, { log: (s) => out.push(s) });
+    return out.join('\n');
+  };
+
+  // The override must name itself AND say to delete the key — telling someone
+  // to change `mode` while `gcode` is set is advice that cannot work.
+  const overridden = say({ gcode: ['M400 U1 ; swap it yourself'], mode: 'bambu' });
+  assert.match(overridden, /mode is ignored/i);
+  assert.match(overridden, /DELETE/);
+
+  assert.match(say({ mode: 'bambu' }), /cuts and reloads by itself/);
+  assert.match(say({ mode: 'purge' }), /operator unloads and loads/);
 });
