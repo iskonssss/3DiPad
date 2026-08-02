@@ -436,6 +436,10 @@ const CFG = {
       "heart": [
         58,
         54
+      ],
+      "jersey": [
+        54,
+        60
       ]
     },
     "customMax": [
@@ -504,6 +508,8 @@ const CFG = {
   },
   "colourChange": {
     "mode": "purge",
+    "cutX": 180,
+    "cutRetractMm": 18,
     "pauseGcode": [
       "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="
     ],
@@ -904,6 +910,7 @@ function shapePolygon(shape, cfg, customOutline) {
     case 'square': return rect(s.square[0], s.square[1]);
     case 'circle': return ellipse(s.circle[0], s.circle[0]);
     case 'heart': return heart(s.heart[0], s.heart[1]);
+    case 'jersey': return jersey(s.jersey[0], s.jersey[1]);
     case 'custom': return customShape(customOutline, cfg);
     default: return rect(s.rectangle[0], s.rectangle[1]);
   }
@@ -945,6 +952,57 @@ function heart(w, h, seg = 120) {
   const sx = w / (maxX - minX), sy = h / (maxY - minY);
   return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
 }
+/**
+ * A football jersey: straight torso, sleeves out at the shoulders, round collar.
+ *
+ * Drawn in a 0..1 box and scaled to w x h, so the proportions hold whatever
+ * size the booth is set to. Traced counter-clockwise from the bottom-left of
+ * the hem — round the right side, over the shoulders, back down the left.
+ *
+ * Two things are deliberate. The collar is an arc rather than a V notch,
+ * because a sharp inward corner is where an inward offset (the 0.8 mm top
+ * chamfer) folds over itself. And the cuffs stop short of a point for the same
+ * reason a real one does: a tip narrower than the nozzle is not a shape, it is
+ * a gap the slicer has to guess at.
+ */
+function jersey(w, h) {
+  const neckHalf = 0.105;   // collar half-width, as a fraction of the width
+  const neckDrop = 0.125;   // how far the collar cuts down from the shoulder line
+  const pts = [
+    { x: 0.285, y: 0.000 },  // hem, left
+    { x: 0.715, y: 0.000 },  // hem, right
+    { x: 0.735, y: 0.545 },  // right side, up to the armpit
+    { x: 0.800, y: 0.590 },
+    { x: 0.940, y: 0.635 },
+    { x: 1.000, y: 0.690 },  // right cuff, bottom
+    { x: 0.980, y: 0.845 },  // right cuff, top
+    { x: 0.830, y: 0.910 },
+    { x: 0.680, y: 0.965 },  // right shoulder
+  ];
+  // The collar, swept right to left so it stays in step with the winding.
+  const seg = 16;
+  for (let i = 0; i <= seg; i++) {
+    const a = (Math.PI * i) / seg;
+    pts.push({ x: 0.5 + neckHalf * Math.cos(a), y: 0.985 - neckDrop * Math.sin(a) });
+  }
+  pts.push(
+    { x: 0.320, y: 0.965 },  // left shoulder
+    { x: 0.170, y: 0.910 },
+    { x: 0.020, y: 0.845 },  // left cuff, top
+    { x: 0.000, y: 0.690 },  // left cuff, bottom
+    { x: 0.060, y: 0.635 },
+    { x: 0.200, y: 0.590 },
+    { x: 0.265, y: 0.545 },  // left armpit
+  );
+  // Fit the drawn extents to w x h exactly, so shapeSizes means what it says —
+  // the collar arc stops just short of the top of the box, and left alone that
+  // would quietly make every jersey a millimetre shorter than configured.
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  const sx = w / (Math.max(...xs) - minX), sy = h / (Math.max(...ys) - minY);
+  return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
+}
+
 function customShape(outline, cfg) {
   const [maxW, maxH] = cfg.build.customMax;
   if (!Array.isArray(outline) || outline.length < 3) return rect(60, 40);
@@ -1959,6 +2017,7 @@ function colourChangeBlock(cfg, atZ = 0) {
   if (c.gcode) return asLines(c.gcode);           // explicit override wins
   const pause = asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
   if (c.mode === 'pause') return pause;
+  if (c.mode === 'bambu') return bambuChangeBlock(cfg, atZ);
 
   const t = cfg.temp?.nozzle ?? 220;
   const lift = +(atZ + (c.liftMm ?? 4)).toFixed(2);
@@ -2004,6 +2063,95 @@ function colourChangeBlock(cfg, atZ = 0) {
 }
 
 /**
+ * The A1 mini's own filament change — cut, unload, prompt, reload — rather than
+ * our approximation of it.
+ *
+ * The hand-rolled block above parks and retracts 8 mm and pauses, which clears
+ * the melt zone but leaves the operator to work the printer's filament menu at
+ * every single swap. What everyone actually wants is what Bambu Studio does:
+ * the head goes to the cutter, snips, the printer pulls the old colour out and
+ * asks for the new one, and feeds it in until the extruder gear catches.
+ *
+ * None of that can be arrived at by reasoning — the commands are undocumented
+ * Bambu internals and the cutter is at a machine-specific coordinate. These
+ * lines are transcribed from Bambu Studio's own A1 mini profile
+ * (resources/profiles/BBL/machine, "A1 mini 0.4 nozzle template
+ * change_filament_gcode"), with the slicer's template expressions resolved for
+ * a single-extruder external-spool change:
+ *
+ *   next_extruder = 255      the external spool rather than an AMS slot
+ *   G1 X180                  the cutter, at the right-hand edge of a 180 bed
+ *   M620.11 S1 I254 E-18     the long retraction that performs the cut
+ *   T255                     unload, then ask for the new filament
+ *   feedrate                 flush_volumetric_speed / 2.4053 * 60, i.e. mm/min
+ *                            of 1.75 mm filament for a given mm^3/s
+ *
+ * Off by default. Every command here is one the firmware may or may not accept
+ * on any given version, and the failure mode is a print that stalls half way —
+ * so it is opt-in until it has been watched on a real keychain.
+ */
+function bambuChangeBlock(cfg, atZ = 0) {
+  const c = cfg.colourChange || {};
+  const t = cfg.temp?.nozzle ?? 220;
+  const up = +(atZ + (c.liftMm ?? 3)).toFixed(2);
+  const cutX = c.cutX ?? 180;                       // A1 mini: the 180 mm edge
+  const cutRetract = c.cutRetractMm ?? 18;          // retraction_distances_when_cut
+  // mm/min of 1.75 mm filament for a given volumetric rate — the slicer's own
+  // conversion, and the reason its purge feedrates look like arbitrary numbers.
+  const feed = Math.round(((c.flushMmps ?? cfg.speed?.maxVolumetricMmps ?? 12) / 2.4053) * 60);
+  const purge = Math.max(0, c.purgeMm ?? 60);
+
+  const out = [
+    '; ===== A1 mini filament change: cut, unload, reload =====',
+    'G392 S0',
+    'M1007 S0',
+    'M620 S255A ; 255 = the external spool',
+    'M204 S9000',
+    `G1 Z${up} F1200`,
+    'M400',
+    'M106 P1 S0',
+    'M106 P2 S0',
+    `M104 S${t} ; keep the old colour molten for the cut`,
+    `G1 X${cutX} F18000 ; to the cutter`,
+    `M620.11 S1 I254 E-${cutRetract} F1200 ; the long retraction that cuts it`,
+    'M400',
+    `M620.1 E F${feed} T${t}`,
+    'T255 ; unload the old colour, then ask for the new one',
+    `M620.1 E F${feed} T${t}`,
+    'G1 Y90 F9000',
+    'M400',
+    'G92 E0',
+    'M628 S0',
+  ];
+
+  if (purge > 0) {
+    // The slicer's shape: one long push to pack the melt zone, then short slow
+    // ones that break the strand so it drops instead of trailing across the part.
+    out.push('; --- purge the new colour ---', 'M400', `M109 S${t}`, 'M106 P1 S60');
+    const head = Math.min(23.7, purge);
+    out.push(`G1 E${head.toFixed(2)} F${feed}`);
+    const rest = purge - head;
+    if (rest > 0) {
+      for (let i = 0; i < 4; i++) {
+        out.push(`G1 E${(rest * 0.02).toFixed(2)} F50`);
+        out.push(`G1 E${(rest * 0.23).toFixed(2)} F${feed}`);
+      }
+    }
+    out.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
+  }
+
+  const wipes = Math.max(0, Math.round(c.wipes ?? 4));
+  if (wipes > 0) {
+    out.push('; --- wipe on the brush ---', 'M400', 'M106 P1 S178', 'M400 S3');
+    for (let i = 0; i < wipes; i++) out.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');
+    out.push('M400', 'M106 P1 S0');
+  }
+
+  out.push('M629', 'M621 S255A', 'M400', 'G92 E0', `G1 Z${up} F3000`, 'M1007 S1');
+  return out;
+}
+
+/**
  * The calibration block for the start template.
  *
  * A full G29 mesh probe costs well over a minute — on a 13-minute keychain that
@@ -2044,11 +2192,12 @@ const SHAPE_ICONS={
   square:'<rect x="4" y="4" width="16" height="16" rx="2"/>',
   circle:'<circle cx="12" cy="12" r="9"/>',
   heart:'<path d="M12 21C5 15 3 11 3 8a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 3-2 7-9 13z"/>',
+  jersey:'<path d="M9 3 5 5 2 7l1 4 2-1v9h10v-9l2 1 1-4-3-2-4-2a3 3 0 0 1-6 0z"/>',
   custom:'<path d="M4 14c1-6 6-9 9-8s6 5 5 9-6 6-10 4-5-3-4-5z"/>',
 };
 // Custom first, and the default — draw-your-own is the point of the booth, and
 // the preset shapes are the fallback for kids who'd rather not.
-const SHAPES=[['custom','Custom'],['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart']];
+const SHAPES=[['custom','Custom'],['rectangle','Rectangle'],['square','Square'],['circle','Circle'],['heart','Heart'],['jersey','Jersey']];
 const DEFAULT_SHAPE='custom';
 
 /* Country codes for the mobile field. Singapore first (booth default); `len`

@@ -413,7 +413,7 @@ function sanitizeContact(c) {
   return { name, phone, phoneE164, country };
 }
 
-const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
+const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'jersey', 'custom'];
 
 function sanitizeDesign(body) {
   const b = cfg.build;

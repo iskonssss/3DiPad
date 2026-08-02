@@ -174,3 +174,91 @@ test('inset still copes with a concave shape', () => {
   assert.ok(inner.length > 8, 'the inset survives');
   for (const p of inner) assert.ok(pointInPolygon(p, poly), 'every inset point is inside the original');
 });
+
+/**
+ * The jersey.
+ *
+ * Its collar and armpits are concave, which is where an inward offset folds
+ * over itself and a plate comes out with a hole in it — so the shape is only
+ * worth having if the insets the engine actually takes still nest. Those are
+ * the perimeters and the 0.8 mm top chamfer, and they are taken with
+ * insetPolygon, not the analytic offset.
+ */
+test('the jersey survives every inset the engine takes from it', async () => {
+  const { shapePolygon } = await import('../src/gcode/geometry.js');
+  const { insetPolygon } = await import('../src/gcode/outline.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+
+  const { poly, bbox } = shapePolygon('jersey', cfg);
+  assert.equal(+bbox.w.toFixed(1), cfg.build.shapeSizes.jersey[0], 'shapeSizes must mean what it says');
+  assert.equal(+bbox.h.toFixed(1), cfg.build.shapeSizes.jersey[1]);
+
+  // A shape that crosses itself is not a shape. Sleeves and collar are exactly
+  // where a hand-placed outline goes wrong.
+  const crosses = (a, b, c, d) => {
+    const s = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+    return s(a, b, c) !== s(a, b, d) && s(c, d, a) !== s(c, d, b);
+  };
+  for (let i = 0; i < poly.length; i++) {
+    for (let j = i + 2; j < poly.length; j++) {
+      if (i === 0 && j === poly.length - 1) continue;
+      assert.ok(!crosses(poly[i], poly[(i + 1) % poly.length], poly[j], poly[(j + 1) % poly.length]),
+        `the outline crosses itself at ${i}/${j}`);
+    }
+  }
+
+  let area2 = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    area2 += p.x * q.y - q.x * p.y;
+  }
+  assert.ok(area2 > 0, 'the outline must wind counter-clockwise like every other shape');
+
+  let last = Infinity;
+  for (const d of [0.45, 0.8, 1.35, 2.0, 2.8]) {
+    const inset = insetPolygon(poly, d, { cell: 0.25 });
+    assert.ok(inset.length >= 3, `the shape collapses at a ${d}mm inset`);
+    // each inset must be strictly inside the last, or the collar has folded
+    const xs = inset.map((p) => p.x), ys = inset.map((p) => p.y);
+    const span = (Math.max(...xs) - Math.min(...xs)) + (Math.max(...ys) - Math.min(...ys));
+    assert.ok(span < last, `the ${d}mm inset is not inside the one before it`);
+    last = span;
+  }
+});
+
+test('a jersey keychain still fits in the print-time budget', async () => {
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const { meta } = generate({
+    shape: 'jersey', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: { x: 27, y: 52 },
+    strokes: [{ layer: 'layer2', width: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  }, cfg);
+  assert.ok(!meta.overBudget, `a plain jersey already exceeds the budget at ${meta.estMinutes} min`);
+  assert.ok(meta.estMinutes < cfg.limits.warnPrintMinutes, `${meta.estMinutes} min leaves no room for a drawing`);
+});
+
+test('every shape the booth offers is one the generator knows', async () => {
+  const fs = await import('node:fs');
+  const kiosk = fs.readFileSync(new URL('../src/kiosk/kiosk.html', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const { loadConfig } = await import('../src/config.js');
+  const { shapePolygon } = await import('../src/gcode/geometry.js');
+  const cfg = loadConfig();
+
+  const offered = [...kiosk.matchAll(/\['(\w+)','[^']+'\]/g)].map((m) => m[1]);
+  assert.ok(offered.includes('jersey'), 'the kiosk stopped offering the jersey');
+  const accepted = server.match(/const SHAPES = \[([^\]]+)\]/)[1].match(/'(\w+)'/g).map((s) => s.slice(1, -1));
+
+  for (const shape of offered) {
+    assert.ok(accepted.includes(shape), `the kiosk offers "${shape}" but the server rejects it`);
+    if (shape === 'custom') continue;
+    assert.ok(cfg.build.shapeSizes[shape], `"${shape}" has no size in config`);
+    const { poly } = shapePolygon(shape, cfg);
+    assert.ok(poly.length >= 3, `"${shape}" does not generate an outline`);
+  }
+  // and an icon each, or the chip is a blank square on the tablet
+  const icons = kiosk.slice(kiosk.indexOf('const SHAPE_ICONS'), kiosk.indexOf('const SHAPES='));
+  for (const shape of offered) assert.ok(icons.includes(`${shape}:`), `"${shape}" has no chip icon`);
+});

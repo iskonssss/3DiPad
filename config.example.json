@@ -17,6 +17,10 @@
       "heart": [
         58,
         54
+      ],
+      "jersey": [
+        54,
+        60
       ]
     },
     "customMax": [
@@ -91,7 +95,11 @@
   },
   "colourChange": {
     "_comment": "The filament swap at the backing->design transition, shaped like Bambu Studio's 'multi-colour with external spool': park clear, back the old colour out of the melt zone, pause for the swap, then purge and wipe the new colour so the drawing does not start in the old one. Set mode to 'pause' for a bare M400 U1 and let the printer's filament menu handle it. Setting a 'gcode' array replaces the whole block.",
+    "_mode_comment": "\"purge\" (default) parks, retracts and pauses — the operator works the printer's filament menu to unload and load. \"bambu\" emits the A1 mini's OWN change sequence, transcribed from Bambu Studio's machine profile: it drives the head into the cutter, snips, unloads, asks for the new spool on the printer screen, and feeds it until the extruder gear catches — what you get slicing a two-colour print with an external spool. It uses undocumented Bambu commands (G392/M620.x/T255/M628/M629), so WATCH THE FIRST ONE before trusting it to a queue of children. \"pause\" is a bare M400 U1.",
     "mode": "purge",
+    "_bambu_comment": "Only used when mode is \"bambu\". cutX is where the cutter lives — 180 is the right-hand edge of the A1 mini's 180mm bed and is taken from Bambu's own A1 mini profile. Do NOT copy an A1 (non-mini) value here; the bed is a different size and the head would be driven into the frame. cutRetractMm is Bambu's retraction_distances_when_cut. flushMmps defaults to speed.maxVolumetricMmps.",
+    "cutX": 180,
+    "cutRetractMm": 18,
     "pauseGcode": [
       "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="
     ],

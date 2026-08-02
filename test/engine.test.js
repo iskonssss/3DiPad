@@ -519,3 +519,63 @@ test('the g-code is in the three blocks Bambu firmware reads', () => {
   assert.match(header, new RegExp(`^; total filament weight \\[g\\] : ${meta.estGrams.toFixed(1)}`, 'm'));
   assert.match(header, /^; max_z_height: \d+\.\d+$/m);
 });
+
+/**
+ * The A1 mini's own filament change.
+ *
+ * Transcribed from Bambu Studio's machine profile rather than reasoned out —
+ * the commands are undocumented and the cutter is at a machine-specific
+ * coordinate, so the only defensible source is the slicer's own file. These
+ * assertions are here because a silent edit to any of them is a head driven
+ * into the frame or a print that stalls half way through a child's keychain.
+ */
+test('the bambu colour change cuts, unloads and reloads, in that order', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const lines = colourChangeBlock({ ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu' } }, 2.24);
+  const at = (re) => lines.findIndex((l) => re.test(l));
+
+  // 255 is the external spool. An AMS slot number here would send the printer
+  // looking for a unit that is not attached.
+  assert.ok(at(/^M620 S255A/) >= 0, 'the change must be opened against the external spool');
+  assert.ok(at(/^M621 S255A/) > at(/^M620 S255A/), 'and closed again');
+
+  // The cut is a move into the cutter followed by the long retraction. Either
+  // one alone does nothing useful, and the order is not interchangeable.
+  const cut = at(/^G1 X180 F18000/);
+  const snip = at(/^M620\.11 S1 I254 E-18/);
+  const unload = at(/^T255/);
+  assert.ok(cut >= 0, 'no move to the cutter');
+  assert.ok(snip > cut, 'the retraction that cuts must follow the move to the cutter');
+  assert.ok(unload > snip, 'the unload must come after the cut, or it pulls uncut filament back');
+
+  // Purge and wipe belong after the new colour is in, never before.
+  const purge = at(/^G1 E23\.70/);
+  assert.ok(purge > unload, 'the purge must happen after the reload');
+  assert.ok(at(/^G1 X-13\.5/) > purge, 'the wipe must follow the purge');
+
+  // The slicer's own conversion: mm^3/s -> mm/min of 1.75mm filament.
+  const feed = Math.round((cfg.speed.maxVolumetricMmps / 2.4053) * 60);
+  assert.ok(lines.some((l) => l.includes(`F${feed}`)), `purge feedrate should be ${feed} mm/min`);
+});
+
+test('the cutter coordinate is the mini bed, and stays inside it', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const lines = colourChangeBlock({ ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu' } }, 2.24);
+  const cutX = lines.find((l) => /^G1 X\d+ F18000/.test(l)).match(/X(\d+)/)[1];
+  // The A1 (non-mini) puts this elsewhere on a bigger bed. Copying that value
+  // onto a mini drives the head into the frame.
+  assert.equal(Number(cutX), 180, 'the A1 mini cutter is at the 180mm edge');
+  assert.ok(Number(cutX) <= 180, 'the cut position must be on the bed');
+});
+
+test('the safe colour change is still the default', async () => {
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  // "bambu" fires undocumented commands at the firmware. It is a good default
+  // only once somebody has stood and watched one, and nobody has yet.
+  assert.notEqual(cfg.colourChange.mode, 'bambu', 'do not ship the untested change as the default');
+});

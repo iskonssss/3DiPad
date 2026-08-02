@@ -12,7 +12,7 @@ import { generate } from './engine.js';
 
 const cfg = loadConfig();
 const arg = process.argv[2] || 'rectangle';
-const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
+const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'jersey', 'custom'];
 
 let design;
 if (SHAPES.includes(arg)) {
