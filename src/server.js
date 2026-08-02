@@ -299,7 +299,7 @@ function publicJob(j) {
   return {
     id: j.id, seq: j.seq, name: j.contact.name, phone: j.contact.phone,
     colours: j.colours, shape: j.shape, hole: j.hole, filename: j.filename, status: j.status,
-    reprintOf: j.reprintOf || null, failure: j.failure || null,
+    reprintOf: j.reprintOf || null, failure: j.failure || null, dispatch: j.dispatch || null,
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
     driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',

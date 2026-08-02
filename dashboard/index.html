@@ -294,6 +294,13 @@
         const pName = (printers.find(p=>p.id===j.printerId)||{}).name || '';
         const when = past && j.createdAt
           ? `<span class="when">${new Date(j.createdAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span>` : '';
+        // Why the last send did not work. It was recorded on the job and shown
+        // nowhere: the toast that said it is long gone, and the card the
+        // operator is looking at gave no hint that anything had been tried.
+        const sendFail = j.dispatch && j.dispatch.ok === false && !j.dispatch.manual
+          ? `<div class="swap-banner" style="background:#3a2330;color:#ffb4b4;text-align:left">
+               Last send failed${j.dispatch.stage ? ` at ${esc(j.dispatch.stage)}` : ''}: ${esc(j.dispatch.error || 'no reason given')}
+             </div>` : '';
         const failed = j.status === 'failed' && j.failure
           ? `<div class="swap-banner" style="background:var(--danger);color:#2b0b0b">⚠️ ${esc(j.failure)}</div>` : '';
         const swap = j.status === 'colour_change'
@@ -301,7 +308,7 @@
         const notify = j.notify ? (j.notify.ok ? '✅ sent' : (j.notify.queued ? '⏳ retrying' : '⚠️ '+(j.notify.error||j.notify.skipped||'failed'))) : '';
         const lead = j.leadPush ? (j.leadPush.ok ? '· CRM ✓' : (j.leadPush.queued ? '· CRM ⏳' : '')) : '';
         return `<div class="card st-${j.status}${past ? ' past' : ''}">
-          ${swap}${failed}
+          ${swap}${failed}${sendFail}
           <div class="top">
             <div><div class="who">${esc(j.name)}</div><div class="seq">#${String(j.seq).padStart(4,'0')} · ${j.phone} ${when}</div></div>
             <span class="status ${j.status}">${j.status.replace('_',' ')}</span>
