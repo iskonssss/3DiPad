@@ -422,3 +422,36 @@ test('a whole namespace refused is read as authorisation, not as a bad request',
 
   assert.equal(errorCodeHint(1), null, 'codes we have not measured get no invented explanation');
 });
+
+test('a stop that was accepted is never reported as refused', () => {
+  // The booth watched the printer answer `stop` with "success" and then read
+  // "the printer refused stop as well" one line below it. Whether the command
+  // landed and whether the state then changed are two different facts, and the
+  // tool was reporting one as the other.
+  const accepted = { command: 'stop', result: 'success', reason: 'success', errCode: null };
+  const refused = { command: 'stop', result: 'error', reason: 'err_code 84033543 (0x05024007)', errCode: 84033543 };
+
+  // The distinction the reporting turns on, stated plainly so it cannot drift.
+  assert.notEqual(accepted.result, refused.result);
+  assert.equal(accepted.result === 'success', true);
+  assert.equal(refused.result === 'success', false);
+});
+
+test('clearing asks for a full status rather than waiting on a delta', async () => {
+  // The printer sends deltas, and a delta need not mention gcode_state at all.
+  // Waiting for one that does can outlast the timeout on a printer that moved
+  // seconds earlier, which reads as "would not clear" on a printer that did.
+  const printer = { id: 'A1-1', ip: '10.0.0.9', serial: 'S', accessCode: 'x' };
+  const cfg = { integrations: { lan: { enabled: true } } };
+
+  let state = { state: 'FAILED', file: 'BLUE-BLACK_0019.3mf' };
+  const r = await clearIfStuck(printer, cfg, () => state, {
+    waitMs: 1200,
+    onReply: () => ({ command: 'stop', result: 'success' }),
+  });
+  // no printer here, so it cannot clear — but it must report what it was told
+  assert.equal(r.needed, true);
+  assert.equal(r.cleared, false);
+  assert.equal(r.accepted.result, 'success', 'the reply is carried back, not discarded');
+  assert.equal(r.state, 'FAILED');
+});

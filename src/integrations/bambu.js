@@ -158,17 +158,31 @@ export function needsClearing(state) {
  */
 export async function clearIfStuck(printer, cfg, readState, opts = {}) {
   const before = readState();
-  if (!needsClearing(before?.state)) return { cleared: false, needed: false, state: before?.state };
+  if (!needsClearing(before?.state)) return { cleared: false, needed: false, accepted: null, state: before?.state };
 
+  // Whether the printer took the command and whether it then changed state are
+  // two different facts, and conflating them produced a tool that watched
+  // `stop` answer "success" and reported that it had been refused.
+  const accepted = opts.onReply ? opts.onReply() : null;
   await publishCommand(printer, buildStopCommand(opts.sequenceId), cfg);
 
   const deadline = Date.now() + (opts.waitMs ?? cfg?.integrations?.lan?.clearWaitMs ?? 8000);
+  let asked = false;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 400));
     const now = readState();
-    if (!needsClearing(now?.state)) return { cleared: true, needed: true, state: now?.state };
+    if (!needsClearing(now?.state)) {
+      return { cleared: true, needed: true, accepted: opts.onReply ? opts.onReply() : null, state: now?.state };
+    }
+    // The printer sends deltas, and a delta need not mention gcode_state at
+    // all — so waiting for one to arrive can outlast the timeout even though
+    // the printer moved. Ask for the whole picture once, half way through.
+    if (!asked && Date.now() > deadline - (opts.waitMs ?? 8000) / 2) {
+      asked = true;
+      await publishCommand(printer, { pushing: { sequence_id: '2', command: 'pushall' } }, cfg);
+    }
   }
-  return { cleared: false, needed: true, state: readState()?.state };
+  return { cleared: false, needed: true, accepted: opts.onReply ? opts.onReply() : null, state: readState()?.state };
 }
 
 /** Upload a local file to the printer's SD card over implicit-TLS FTPS. */
