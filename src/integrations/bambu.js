@@ -370,7 +370,12 @@ export function readStatus(msg) {
  * for testing.
  */
 export function readCommandReply(msg) {
-  const p = msg?.print;
+  // Replies come back under whichever namespace the command was sent in:
+  // print for jobs, system for the light and the like, pushing for status.
+  // Reading only `print` meant the booth watched a ledctrl answer
+  // "result":"success" go past and reported that the printer had not answered
+  // at all — the one reply that proved the session was trusted.
+  const p = msg?.print || msg?.system || msg?.pushing || msg?.info || msg?.camera;
   if (!p || !p.command) return null;
   // push_status is the printer talking to itself on a timer, not to us
   if (p.command === 'push_status' || p.command === 'pushall') return null;
@@ -424,7 +429,7 @@ export function errorCodeHint(code) {
  * Watch a printer's report topic. onStatus(status) fires on each meaningful
  * update. Returns a handle with .stop(). Reconnects automatically.
  */
-export function watchPrinter(printer, cfg, onStatus) {
+export function watchPrinter(printer, cfg, onStatus, onRaw = null) {
   // Health is reported separately from status because the two failures look
   // identical from outside and need opposite fixes: an MQTT session that never
   // connects is credentials or network, while one that connects and then hears
@@ -461,6 +466,12 @@ export function watchPrinter(printer, cfg, onStatus) {
     health.lastMessageAt = new Date().toISOString();
     let msg;
     try { msg = JSON.parse(buf.toString()); } catch { return; }
+    // Everything, including the routine status pushes that `recent` filters
+    // out. The full state only ever arrives in one of those, so a diagnostic
+    // that reads `recent` can never see it — which is how "no full status
+    // arrived" was reported by a tool watching a printer that was pushing
+    // status the whole time.
+    if (onRaw) { try { onRaw(msg); } catch (e) { console.error('raw handler failed', e); } }
     // With debug on, print everything that is not the routine status push. If a
     // start command is being refused for a reason we have not learned to
     // recognise, this is where it will be visible.
