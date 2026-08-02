@@ -192,7 +192,54 @@
     border: 1px solid var(--line); opacity: 0; transition: all .25s; pointer-events: none; max-width: 88vw; text-align: center; z-index: 40; }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
   .toast.err { border-color: var(--danger); }
+
+  /* ---- operator panel ----
+     The booth runs on the same iPad the kids draw on, and walking to the laptop
+     to place every job is the slowest part of the whole booth. This is the
+     dashboard's send row and nothing else, over the top of the kiosk.
+     Opened by HOLDING the corner dot, not tapping it: a tap is what a curious
+     six-year-old does, and the buttons in here start real prints. */
+  .adm-dot { position: fixed; top: 0; right: 0; width: 54px; height: 54px; z-index: 45;
+             opacity: .28; border: 0; background: transparent; color: var(--ink);
+             font-size: 17px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .adm-dot:active { opacity: .9; }
+  .adm { position: fixed; inset: 0; z-index: 50; background: #0b1220f2; overflow-y: auto;
+         display: none; padding: 18px; -webkit-overflow-scrolling: touch; }
+  .adm.open { display: block; }
+  .adm h3 { margin: 0 0 2px; font-size: 20px; }
+  .adm .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  .adm-close { position: absolute; top: 14px; right: 16px; background: #22305a; color: var(--ink);
+               border: 0; border-radius: 10px; padding: 10px 15px; font: inherit; font-weight: 700; }
+  .adm-p { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .adm-p span { padding: 7px 11px; border-radius: 9px; font-size: 13px; font-weight: 800; color: #0b1220; }
+  .adm-p .free { background: #34d399; } .adm-p .busy { background: #ff6b6b; }
+  .adm-p .soon { background: #ff8a34; } .adm-p .dead { background: #243050; color: #9fb0d6; }
+  .adm-job { background: #16203a; border: 1px solid #ffffff14; border-radius: 14px;
+             padding: 12px; margin-bottom: 11px; }
+  .adm-job .who { font-weight: 800; font-size: 16px; }
+  .adm-job .sub { color: var(--muted); font-size: 12px; margin: 2px 0 9px; }
+  .adm-cols { display: flex; align-items: center; gap: 6px; font-size: 12px;
+              font-weight: 700; margin-bottom: 10px; }
+  .adm-sw { width: 20px; height: 20px; border-radius: 5px; border: 2px solid #0b122055;
+            box-shadow: 0 0 0 1px #ffffff99 inset; }
+  .adm-send { display: flex; gap: 8px; flex-wrap: wrap; }
+  .adm-send button { flex: 1 1 30%; min-width: 96px; padding: 13px 8px; border-radius: 10px;
+                     border: 0; font: inherit; font-weight: 800; font-size: 14px;
+                     background: #2b3a63; color: var(--ink); }
+  .adm-send button.can { background: #34d399; color: #04371f; }
+  .adm-send button.warn { background: #ff8a34; color: #241203; }
+  .adm-send button[disabled] { background: #1b2440; color: #5d6a8c; }
+  .adm-none { color: var(--muted); text-align: center; padding: 40px 10px; }
 </style>
+
+<button class="adm-dot" id="adm-dot" aria-label="Operator panel — hold to open">⚙</button>
+<div class="adm" id="adm" role="dialog" aria-label="Send to printer">
+  <button class="adm-close" onclick="admClose()">Close</button>
+  <h3>Send to a printer</h3>
+  <p class="hint">Check the filament in the machine before you send. Hold ⚙ to open this.</p>
+  <div class="adm-p" id="adm-printers"></div>
+  <div id="adm-jobs"></div>
+</div>
 
 <div id="app">
   <section class="screen active" data-screen="welcome">
@@ -2417,6 +2464,89 @@ function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H
     if(st.pts.length===1){g.beginPath();g.arc(X(st.pts[0].x),Y(st.pts[0].y),g.lineWidth/2,0,7);g.fill();continue;}
     g.beginPath();st.pts.forEach((p,i)=>{const px=X(p.x),py=Y(p.y);i?g.lineTo(px,py):g.moveTo(px,py);});g.stroke();}}
 
+/* ---- operator panel ----
+   The same decision the dashboard makes, on the tablet that is already in the
+   operator's hand. Only the send exists here: no history, no status changes, no
+   colour swaps. Those belong on the laptop, where there is room to be careful.
+
+   Booth build only — there is no queue to place without a server. */
+let admTimer = null, admPoll = null;
+
+function admInit(){
+  const dot = $('#adm-dot');
+  if(!window.__BOOTH_SERVER__){ dot.style.display = 'none'; return; }
+  // Hold, do not tap. A tap is what a curious child does, and every button
+  // behind this one starts a real print on a real machine.
+  const start = (e) => { e.preventDefault(); admTimer = setTimeout(admOpen, 800); };
+  const cancel = () => { clearTimeout(admTimer); admTimer = null; };
+  dot.addEventListener('touchstart', start, {passive:false});
+  dot.addEventListener('mousedown', start);
+  for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) dot.addEventListener(ev, cancel);
+}
+
+function admOpen(){
+  $('#adm').classList.add('open');
+  admRefresh();
+  admPoll = setInterval(admRefresh, 4000);
+}
+function admClose(){
+  $('#adm').classList.remove('open');
+  clearInterval(admPoll); admPoll = null;
+}
+
+/** Same rules as the dashboard: only a printer that can take work is pressable. */
+function admPrinterState(p, jobs){
+  if(!p.configured) return {cls:'dead', label:'not set up', send:null};
+  const st = String(p.live?.state||'').toUpperCase();
+  if(!st) return {cls:'dead', label:'no signal', send:'warn'};
+  const holding = jobs.find(j => j.printerId===p.id && ['assigned','printing','colour_change'].includes(j.status));
+  if(st==='PAUSE') return {cls:'soon', label:'swap now', send:null};
+  if(st==='FAILED') return {cls:'soon', label:'failed — clear bed', send:'warn'};
+  if(['RUNNING','PREPARE','SLICING'].includes(st)) return {cls:'busy', label:'printing', send:null};
+  if(holding) return {cls:'busy', label:'starting', send:null};
+  return {cls:'free', label:'ready', send:'can'};
+}
+
+async function admRefresh(){
+  let d;
+  try{ d = await (await fetch('api/jobs')).json(); }
+  catch{ $('#adm-jobs').innerHTML = '<div class="adm-none">No connection to the booth server.</div>'; return; }
+
+  const printers = d.printers||[], jobs = d.jobs||[];
+  $('#adm-printers').innerHTML = printers.map(p => {
+    const s = admPrinterState(p, jobs);
+    return `<span class="${s.cls}">${esc(p.name)} · ${s.label}</span>`;
+  }).join('');
+
+  const waiting = jobs.filter(j => ['queued','assigned','failed'].includes(j.status));
+  if(!waiting.length){ $('#adm-jobs').innerHTML = '<div class="adm-none">Nothing waiting. Every job is on a printer.</div>'; return; }
+
+  $('#adm-jobs').innerHTML = waiting.map(j => {
+    const sw = n => `<span class="adm-sw" style="background:${COLOUR_HEX[String(n).toUpperCase()]||'#888'}"></span>`;
+    const btns = printers.map(p => {
+      const s = admPrinterState(p, jobs);
+      return `<button class="${s.send||''}" ${s.send?'':'disabled'} onclick="admSend('${j.id}','${p.id}')">${esc(p.name)}${s.send==='warn'?' ⚠':''}</button>`;
+    }).join('');
+    return `<div class="adm-job">
+      <div class="who">${esc(j.name)}</div>
+      <div class="sub">#${String(j.seq).padStart(4,'0')} · ~${j.est} min · ${esc(j.status)}</div>
+      <div class="adm-cols">${sw(j.colours.layer1)}${esc(j.colours.layer1)} → ${sw(j.colours.layer2)}${esc(j.colours.layer2)}</div>
+      <div class="adm-send">${btns}</div>
+    </div>`;
+  }).join('');
+}
+
+async function admSend(jobId, printerId){
+  for(const b of $$('.adm-send button')) b.disabled = true;
+  try{
+    const r = await fetch(`api/jobs/${jobId}/dispatch`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({printerId})});
+    const d = await r.json();
+    toast(d.ok ? 'Sent to the printer' : ('Could not send: ' + (d.error || d.result?.error || 'unknown')), !d.ok);
+  }catch{ toast('No connection to the booth server', true); }
+  admRefresh();
+}
+
 /* ---- submit ----
    Standalone build: generates the g-code in-browser and downloads it.
    Booth build (window.__BOOTH_SERVER__): posts the design to the booth server,
@@ -2465,11 +2595,11 @@ function nextSeq(){let n=0;try{n=(parseInt(localStorage.getItem('3dipad_seq')||'
 function downloadText(name,text){downloadBlob(name,new Blob([text],{type:'text/plain'}));}
 function downloadBlob(name,blob){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.rel='noopener';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(url);},4000);}
 let toastT;function toast(msg,err){const t=$('#toast');t.textContent=msg;t.classList.toggle('err',!!err);t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2800);}
-const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 
 /* ---- boot (after all declarations) ---- */
-setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();
+setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();admInit();
 $('#submit').addEventListener('click',submit);
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);
 
