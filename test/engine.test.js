@@ -752,3 +752,30 @@ test('the change asks for a real filament slot, never 255', async () => {
   assert.match(block, /^M620 S1A$/m);
   assert.match(block, /^M621 S1A$/m, 'the change must be closed as well as opened');
 });
+
+/**
+ * "cut" — the half of the Bambu change that has actually been seen to work.
+ *
+ * On a real print the cut and the pull-back both happened; the toolchange then
+ * left the printer on "the filament is not inserted" with no way to feed the
+ * new colour in. Cutting is the fiddly part and it works. Loading from the
+ * printer's own filament menu is twenty seconds an operator already knows.
+ */
+test('the "cut" mode cuts and unloads but leaves the loading to a person', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+  const cut = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'cut' } }, 2.24);
+  const full = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu' } }, 2.24);
+
+  const has = (b, re) => b.some((l) => re.test(l));
+  for (const [name, block] of [['cut', cut], ['bambu', full]]) {
+    assert.ok(has(block, /^G1 X180 F18000/), `${name} should still go to the cutter`);
+    assert.ok(has(block, /^M620\.11 S1 I254 E-18/), `${name} should still cut`);
+    assert.ok(has(block, /^M400 U1\b/), `${name} must stop`);
+    assert.ok(has(block, /^G1 E23\.70/), `${name} should still purge the new colour`);
+  }
+  // The one difference, and the whole point of the mode.
+  assert.ok(!has(cut, /^T\d/), '"cut" must not ask for a toolchange');
+  assert.ok(has(full, /^T1\b/), '"bambu" still does');
+});
