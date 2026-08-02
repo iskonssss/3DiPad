@@ -48,7 +48,12 @@ for (const shape of SHAPES) {
     assert.equal(meta.shape, shape);
     assert.ok(/^G28\b/m.test(gcode), 'homes before printing');
     assert.ok(gcode.includes('M83'), 'relative extrusion');
-    assert.ok(gcode.includes('M400 U1'), 'M400 U1 colour-change pause');
+    // How the swap happens is a config choice: "purge" stops with M400 U1 and
+    // waits for a person, "bambu" hands the whole thing to the printer with
+    // T255. What must never happen is a two-colour file with no swap in it at
+    // all, which would print the drawing in the backing colour.
+    assert.ok(/^M400 U1\b/m.test(gcode) || /^T255\b/m.test(gcode),
+      'the file must stop for the colour change one way or the other');
     assert.ok(meta.backingLayers >= 5, 'backing has several layers');
     assert.equal(meta.designLayers, cfg.build.designLayers, 'design height is the configured layer count');
     assert.ok(meta.strokeCount >= 1, 'strokes survived');
@@ -397,12 +402,14 @@ test('the visible top layer is printed slower than the buried ones', () => {
   assert.ok(cfg.speed.topSurface < cap, `topSurface ${cfg.speed.topSurface} is above the flow cap ${cap.toFixed(0)}`);
 });
 
+const purgeCfg = { ...cfg, colourChange: { ...cfg.colourChange, mode: 'purge' } };
+
 test('the colour change parks, pauses, purges and wipes', () => {
   // Shaped after Bambu Studio's "multi-colour with external spool", read off a
   // real A1 mini file. A bare pause left purging to the operator's own filament
   // menu, so whatever was still in the nozzle went into the first millimetres
   // of the drawing.
-  const { gcode } = generate(design('rectangle'), cfg);
+  const { gcode } = generate(design('rectangle'), purgeCfg);
   const block = gcode.slice(gcode.indexOf('COLOUR CHANGE'), gcode.indexOf('DESIGN (colour 2)'));
 
   const at = (re) => block.search(re);
@@ -572,10 +579,16 @@ test('the cutter coordinate is the mini bed, and stays inside it', async () => {
   assert.ok(Number(cutX) <= 180, 'the cut position must be on the bed');
 });
 
-test('the safe colour change is still the default', async () => {
+test('whatever the default swap is, it is a mode that exists and stops the print', async () => {
   const { loadConfig } = await import('../src/config.js');
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const cfg = loadConfig();
-  // "bambu" fires undocumented commands at the firmware. It is a good default
-  // only once somebody has stood and watched one, and nobody has yet.
-  assert.notEqual(cfg.colourChange.mode, 'bambu', 'do not ship the untested change as the default');
+  const mode = cfg.colourChange.mode;
+  assert.ok(['purge', 'pause', 'bambu'].includes(mode), `"${mode}" is not a colour-change mode`);
+
+  // The one thing no mode may do is carry on printing. A block that neither
+  // waits for a person nor hands over to the printer produces a two-colour
+  // keychain in one colour, and nothing downstream would notice.
+  const block = colourChangeBlock(cfg, 2.24).join('\n');
+  assert.ok(/M400 U1|T255/.test(block), `the "${mode}" swap never stops the print`);
 });

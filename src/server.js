@@ -654,6 +654,21 @@ const server = app.listen(port, () => {
   const ready = (cfg.integrations?.printers || []).filter((p) => p.ip && p.serial && p.accessCode).length;
   console.log(`  printers:  LAN ${lan ? 'ON' : 'off'}, ${ready} configured`);
 
+  // Which colour change is actually in effect. config.json wins over the
+  // shipped default, so changing the default does not necessarily change what
+  // this booth does — and the difference between the two is the difference
+  // between the printer cutting and unloading by itself and an operator working
+  // the filament menu at every swap. Worth one line rather than a guess.
+  const ccMode = cfg.colourChange?.gcode ? 'custom gcode' : (cfg.colourChange?.mode || 'purge');
+  if (ccMode === 'bambu') {
+    console.log('  swap:      the printer cuts and reloads by itself (colourChange.mode = "bambu")');
+    console.log('             Undocumented Bambu commands. Watch the first one — if it stalls,');
+    console.log('             set colourChange.mode back to "purge" in config.json.');
+  } else {
+    console.log(`  swap:      "${ccMode}" — the operator unloads and loads from the printer's menu`);
+    console.log('             Set colourChange.mode = "bambu" in config.json to have the printer do it.');
+  }
+
   const synced = syncedFolderWarning();
   if (synced) {
     console.log('');
