@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "npm run build && node src/server.js",
     "test": "node --test \"test/**/*.test.js\"",
     "gen": "node src/gcode/cli.js",
     "build": "node tools/build-kiosk.mjs",
@@ -13,7 +13,8 @@
     "send-file": "node tools/send-file.mjs",
     "probe-start": "node tools/probe-start.mjs",
     "probe-commands": "node tools/probe-commands.mjs",
-    "clear-printer": "node tools/clear-printer.mjs"
+    "clear-printer": "node tools/clear-printer.mjs",
+    "pretest": "npm run build"
   },
   "engines": {
     "node": ">=20"

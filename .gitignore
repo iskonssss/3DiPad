@@ -15,3 +15,14 @@ Thumbs.db
 .Trashes
 leads.csv
 leads/
+
+# Built by `npm run build` from src/kiosk/kiosk.html — generated, not source.
+#
+# These were tracked, and on the Windows booth laptop that meant every launch
+# left them "modified" against the checkout and the next `git pull` refused to
+# run, in the middle of a fair day. The .gitattributes below pins line endings
+# and still did not settle it. A generated file in git is a merge conflict
+# waiting for the worst possible moment; `npm start` builds them now, so the
+# tablets always get exactly what is in src/.
+public/index.html
+public/standalone.html
