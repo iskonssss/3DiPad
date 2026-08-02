@@ -782,3 +782,28 @@ test('the "cut" mode cuts and unloads but leaves the loading to a person', async
   assert.ok(!has(cut, /^T\d/), '"cut" must not ask for a toolchange');
   assert.ok(has(full, /^T254\b/), '"bambu" still does');
 });
+
+/**
+ * The stop must survive the printer refusing the change.
+ *
+ * A printer that will not do a filament change does not refuse it line by line
+ * — it skips from M620 to M621 and carries on. The pause and the purge used to
+ * sit between them, so the one command that guarantees a stop was discarded by
+ * the same firmware decision that discarded the change. The print ran straight
+ * through in one colour with no pause at all, exactly as if nothing had been
+ * asked for.
+ */
+test('the pause survives the printer skipping the whole change block', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+
+  for (const amsFraming of [false, true]) {
+    const b = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu', amsFraming } }, 2.24);
+    const at = (re) => b.findIndex((l) => re.test(l));
+    const close = at(/^M621 S/);
+    assert.ok(close > 0, 'the change block must be closed');
+    assert.ok(at(/^M400 U1/) > close, `amsFraming:${amsFraming} — the pause is inside the block and can be skipped with it`);
+    assert.ok(at(/^G1 E23/) > close, `amsFraming:${amsFraming} — the purge is inside the block`);
+  }
+});
