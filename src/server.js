@@ -441,9 +441,13 @@ const dispatcher = createDispatcher({
   cfg, queue, outDir, confirmStart, probeStart, beforeSend: clearBeforeSend,
   onEvent: (e) => {
     if (e.type === 'cleared') {
+      // Not a failure to report loudly. FAILED may simply be the printer's
+      // record of how the last job ended rather than a lock on the next one —
+      // it accepts `stop` and answers "success" while staying there. The send
+      // goes ahead either way; this line is a note, not an alarm.
       console.log(e.ok
         ? `[${e.printer.id}] was holding a finished/failed job — cleared it first`
-        : `[${e.printer.id}] is stuck in ${e.state} and would not clear. Dismiss the last print on its screen.`);
+        : `[${e.printer.id}] still reports ${e.state} after a stop it accepted — sending anyway`);
     }
     else if (e.type === 'variant') {
       // Only say a command worked when the printer was actually seen to move.
