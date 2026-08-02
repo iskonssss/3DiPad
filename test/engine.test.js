@@ -551,14 +551,14 @@ test('the bambu colour change cuts, unloads and reloads, in that order', async (
 
   // 255 is the external spool. An AMS slot number here would send the printer
   // looking for a unit that is not attached.
-  assert.ok(at(/^M620 S255A/) >= 0, 'the change must be opened against the external spool');
-  assert.ok(at(/^M621 S255A/) > at(/^M620 S255A/), 'and closed again');
+  assert.ok(at(/^M620 S1A/) >= 0, 'the change must be opened against a real filament slot');
+  assert.ok(at(/^M621 S1A/) > at(/^M620 S1A/), 'and closed again');
 
   // The cut is a move into the cutter followed by the long retraction. Either
   // one alone does nothing useful, and the order is not interchangeable.
   const cut = at(/^G1 X180 F18000/);
   const snip = at(/^M620\.11 S1 I254 E-18/);
-  const unload = at(/^T255/);
+  const unload = at(/^T1\b/);
   assert.ok(cut >= 0, 'no move to the cutter');
   assert.ok(snip > cut, 'the retraction that cuts must follow the move to the cutter');
   assert.ok(unload > snip, 'the unload must come after the cut, or it pulls uncut filament back');
@@ -622,7 +622,7 @@ test('an explicit gcode override beats every mode, and is not silently ignored',
   // …and with the override gone, the mode is honoured again.
   const { gcode, ...noOverride } = { ...base.colourChange, mode: 'bambu' };
   const back = colourChangeBlock({ ...base, colourChange: noOverride }, 2.24).join('\n');
-  assert.match(back, /^T255\b/m, 'removing the override should give the printer its own change back');
+  assert.match(back, /^T1\b/m, 'removing the override should give the printer its own change back');
 });
 
 test('the booth says which swap is really in effect, including the override', () => {
@@ -690,4 +690,65 @@ test('a file that would never stop is refused rather than written', async () => 
   // A hand-written override that does pause is still perfectly fine.
   const { gcode } = generate(d, { ...base, colourChange: { gcode: ['M400 U1 ; swap it'] } });
   assert.match(gcode, /^M400 U1\b/m);
+});
+
+/**
+ * The A1 mini's start tune, note-for-note out of a Bambu Studio export.
+ *
+ * Not decoration at a booth. A child who has just handed over their drawing has
+ * no other way to know their print is the one that started, and the sound
+ * carries over a fair floor where the screen does not.
+ */
+test('the printer plays its start tune, before it starts moving', async () => {
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const { gcode } = generate({
+    shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: null,
+    design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  }, loadConfig());
+
+  const notes = gcode.match(/^M1006 A\d+ B\d+ L\d+ C\d+ D\d+ M\d+ E\d+ F\d+ N\d+/gm) || [];
+  assert.ok(notes.length >= 12, `only ${notes.length} notes — that is a chime, not a tune`);
+  // Every pitch must be a rest or sit in the register Bambu's own tune uses.
+  // The notes are played by the stepper motors, so pitch is not free: a melody
+  // transposed two octaves up may simply not sound.
+  for (const n of notes) {
+    for (const p of n.match(/[ACE](\d+)/g).map((m) => Number(m.slice(1)))) {
+      assert.ok(p === 0 || (p >= 36 && p <= 72), `pitch ${p} is outside the range this hardware is known to play`);
+    }
+  }
+  assert.match(gcode, /^M1006 S1$/m, 'the tune has to be opened');
+  assert.match(gcode, /^M1006 W$/m, 'and closed, or the notes are never played');
+  // M17 energises the motors the tune is played on; without it there is silence.
+  assert.ok(gcode.indexOf('M17') < gcode.indexOf('M1006 S1'), 'motors must be on before the tune');
+  assert.ok(gcode.indexOf('M1006 W') < gcode.indexOf('G28'), 'it should play while the printer is still still');
+});
+
+/**
+ * The manual colour change is a property of the print TASK, not of the g-code.
+ * Read out of a .bbl Bambu Studio produced for an external-spool manual change
+ * on this printer. Weeks went into trying to make the swap happen from g-code
+ * alone; the T1 in the file is only half of it, and without this flag the
+ * firmware has no reason to stop and ask anybody for anything.
+ */
+test('the print task asks for a manual colour change, on an external spool', async () => {
+  const { buildPrintCommand } = await import('../src/integrations/bambu.js');
+  const cmd = buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file', gcodePath: 'Metadata/plate_1.gcode' });
+  assert.equal(cmd.print.manual_color_change, true);
+  assert.equal(cmd.print.use_ams, false, 'an AMS would do the change itself');
+});
+
+test('the change asks for a real filament slot, never 255', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig();
+  const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu' } }, 2.24).join('\n');
+
+  // 255 means "no next tool" and appears only in an end-of-print unload. Asking
+  // for it takes the branch of Bambu's own template that does nothing, which is
+  // how a two-colour keychain came out in one colour.
+  assert.ok(!/\bT255\b|\bS255A\b/.test(block), 'T255 is the do-nothing branch');
+  assert.match(block, /^T1\b/m, 'the slot Bambu Studio itself emits for this change');
+  assert.match(block, /^M620 S1A$/m);
+  assert.match(block, /^M621 S1A$/m, 'the change must be closed as well as opened');
 });

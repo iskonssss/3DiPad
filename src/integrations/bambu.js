@@ -117,6 +117,14 @@ export function buildPrintCommand(remotePath, opts = {}) {
           vibration_cali: false,
           layer_inspect: false,
           use_ams: false,
+          // The manual colour change is a property of the PRINT TASK, not of
+          // the g-code. Read out of a .bbl that Bambu Studio produced for an
+          // external-spool manual change on this exact printer, alongside
+          // "use ams": false — and it is why weeks of trying to make the swap
+          // happen from g-code alone got nowhere. The T1 in the file is only
+          // half of it; without this flag the firmware has no reason to stop
+          // and ask anybody for anything.
+          manual_color_change: true,
           profile_id: '0', project_id: '0', subtask_id: '0', task_id: '0',
         },
       };
