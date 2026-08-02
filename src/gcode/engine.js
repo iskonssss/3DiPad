@@ -18,8 +18,8 @@ import {
   shapePolygon, scanlineSpans, subtractInterval, boundsY,
   toBed, presetHole, holeIsValid, pointInPolygon,
 } from './geometry.js';
-import { prepareStrokes, totalLength } from './strokes.js';
-import { insetPolygon, erode } from './outline.js';
+import { prepareStrokes, totalLength, simplify } from './strokes.js';
+import { insetPolygon, erode, smooth, decimate } from './outline.js';
 import { buildCoverage, maskContours, maskRows, contourToMm } from './fill.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
@@ -419,7 +419,7 @@ function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
   const perim = erode(cov.mask, cov.w, cov.h, lw / 2 / cov.cell);
   em.comment('design outline');
   for (const loop of maskContours(perim, cov.w, cov.h)) {
-    const pts = contourToMm(loop, cov);
+    const pts = smoothContour(contourToMm(loop, cov), cov.cell);
     if (pts.length >= 3) perimeterLoop(em, cfg, bbox, pts, feed, layerH);
   }
 
@@ -435,6 +435,27 @@ function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
     const toPlate = vertical ? (p) => cov.toMm({ x: p.y, y: p.x }) : (p) => cov.toMm(p);
     drawSpanRegions(em, cfg, bbox, rows, lw, feed, layerH, toPlate);
   }
+}
+
+/**
+ * Take the staircase out of a traced contour.
+ *
+ * The drawing is stamped into a grid and its printed edge is a marching-squares
+ * trace of that grid, so the edge only ever runs along a cell side or across a
+ * cell corner. On a line a child drew at some angle that is a saw: measured on
+ * one straight diagonal stroke, the traced edge changed direction 87 times in
+ * 309 points. That is what "rough, like it jumps point to point" was — not the
+ * drawn points, which are smoothed well before this, and not the bead width.
+ *
+ * Chaikin over points a cell apart averages the steps away; the simplify pass
+ * afterwards drops what is then redundant, which matters because a contour has
+ * a point per cell and the file would otherwise carry all of them. Smoothing
+ * pulls the loop in by well under a cell — invisible against a bead more than
+ * ten cells wide.
+ */
+function smoothContour(pts, cell) {
+  if (pts.length < 8) return pts;
+  return simplify(smooth(decimate(pts, cell * 0.9, true), 2, false), cell / 3);
 }
 
 function makeEmitter(cfg, crossSection) {

@@ -167,3 +167,70 @@ test('the two design layers cross-hatch instead of stacking one direction', () =
   const dir = heights.map((k) => (byZ.get(k).dx > byZ.get(k).dy ? 'x' : 'y'));
   assert.notEqual(dir[0], dir[1], 'the two layers run the same way — they should cross');
 });
+
+/**
+ * The printed edge of a drawing must not be a staircase.
+ *
+ * The drawing is stamped into a 0.12mm grid and its outline is a marching-
+ * squares trace of that grid, so the edge only ever runs along a cell side or
+ * across a cell corner. On a line drawn at any other angle that is a saw: on
+ * one straight diagonal stroke the raw trace changed direction 87 times in 309
+ * points. It read on the print as "rough, like it jumps point to point" — and
+ * it is nothing to do with the drawn points, which are smoothed long before
+ * this, or with the bead width.
+ */
+test('the outline of a drawing is smooth, not a staircase of the grid it was rasterised on', async () => {
+  const { buildCoverage, maskContours, contourToMm } = await import('../src/gcode/fill.js');
+  const { prepareStrokes, simplify } = await import('../src/gcode/strokes.js');
+  const { shapePolygon } = await import('../src/gcode/geometry.js');
+  const { erode, smooth, decimate } = await import('../src/gcode/outline.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const { poly, bbox } = shapePolygon('square', cfg);
+
+  // A straight diagonal: any staircase stands out against it unmistakably.
+  const strokes = prepareStrokes([{ w: 1.6, pts: [{ x: 12, y: 12 }, { x: 48, y: 48 }] }], poly, cfg, null, 1.5);
+  const cov = buildCoverage(strokes, cfg, bbox, poly, null, 1.5);
+  const perim = erode(cov.mask, cov.w, cov.h, cfg.build.lineWidth / 2 / cov.cell);
+  const raw = maskContours(perim, cov.w, cov.h).map((l) => contourToMm(l, cov)).sort((a, b) => b.length - a.length)[0];
+
+  // How many times does the edge reverse direction along a run that should be
+  // dead straight? That reversal count is the roughness.
+  const wobbles = (pts) => {
+    const off = pts.map((p) => Math.abs((p.x - 12) - (p.y - 12)) / Math.SQRT2).filter((v) => v < 3);
+    let n = 0;
+    for (let i = 2; i < off.length; i++) if ((off[i] - off[i - 1]) * (off[i - 1] - off[i - 2]) < 0) n++;
+    return { n, of: off.length };
+  };
+
+  const before = wobbles(raw);
+  assert.ok(before.n > 20, `the raw trace should be a saw; got ${before.n} reversals, so this test is no longer measuring anything`);
+
+  // the same smoothing designLayer applies
+  const after = wobbles(simplify(smooth(decimate(raw, cov.cell * 0.9, true), 2, false), cov.cell / 3));
+  assert.ok(after.n * 5 < before.n, `still ${after.n} reversals against ${before.n} raw — the staircase is not gone`);
+});
+
+test('smoothing the outline does not move it off the drawing', async () => {
+  const { buildCoverage, maskContours, contourToMm } = await import('../src/gcode/fill.js');
+  const { prepareStrokes, simplify } = await import('../src/gcode/strokes.js');
+  const { shapePolygon } = await import('../src/gcode/geometry.js');
+  const { erode, smooth, decimate } = await import('../src/gcode/outline.js');
+  const { loadConfig } = await import('../src/config.js');
+  const cfg = loadConfig();
+  const { poly, bbox } = shapePolygon('square', cfg);
+
+  // A squiggle with real curvature — the case where over-smoothing would show,
+  // by rounding off the loops a child actually drew.
+  const drawn = [];
+  for (let t = 0; t <= 1.0001; t += 0.045) drawn.push({ x: 8 + 44 * t, y: 30 + 14 * Math.sin(t * Math.PI * 2.5) });
+  const cov = buildCoverage(prepareStrokes([{ w: 1.6, pts: drawn }], poly, cfg, null, 1.5), cfg, bbox, poly, null, 1.5);
+  const perim = erode(cov.mask, cov.w, cov.h, cfg.build.lineWidth / 2 / cov.cell);
+  const raw = maskContours(perim, cov.w, cov.h).map((l) => contourToMm(l, cov)).sort((a, b) => b.length - a.length)[0];
+  const sm = simplify(smooth(decimate(raw, cov.cell * 0.9, true), 2, false), cov.cell / 3);
+
+  const drift = Math.max(...sm.map((p) => Math.min(...raw.map((q) => Math.hypot(p.x - q.x, p.y - q.y)))));
+  assert.ok(drift < cfg.build.beadWidth / 4,
+    `smoothing moved the edge ${drift.toFixed(3)}mm, which is visible against a ${cfg.build.beadWidth}mm bead`);
+  assert.ok(sm.length >= 40, `${sm.length} points cannot describe a squiggle — it has been simplified into a polygon`);
+});
