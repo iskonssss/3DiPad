@@ -79,14 +79,31 @@ test('every printer the panel offers is labelled, and the label is plain', () =>
  * to queue against, so the standalone build must never show the way in.
  */
 test('the way into the operator panel is a hold, and only on the booth build', () => {
-  const init = kiosk.slice(kiosk.indexOf('function admInit()'), kiosk.indexOf('function admOpen()'));
-  assert.match(init, /__BOOTH_SERVER__/, 'the gear must hide itself off the booth build');
-  assert.match(init, /setTimeout\(admOpen,\s*(\d{3,})\)/, 'opening must be on a timer, not a tap');
-  assert.ok(Number(init.match(/setTimeout\(admOpen,\s*(\d+)\)/)[1]) >= 600, 'the hold is too short to be deliberate');
+  const init = kiosk.slice(kiosk.indexOf('const ADM_HOLD_MS'), kiosk.indexOf('function admOpen()'));
+  assert.match(init, /__BOOTH_SERVER__/, 'the way in must hide itself off the booth build');
+  assert.match(init, /setTimeout\([^,]*admOpen[^,]*,\s*ADM_HOLD_MS\)/, 'opening must be on a timer, not a tap');
+  assert.ok(Number(kiosk.match(/ADM_HOLD_MS\s*=\s*(\d+)/)[1]) >= 600, 'the hold is too short to be deliberate');
   for (const ev of ['touchend', 'touchmove', 'touchcancel', 'mouseup']) {
     assert.ok(init.includes(ev), `a hold interrupted by ${ev} must not open the panel`);
   }
   assert.ok(kiosk.includes('admInit()'), 'admInit is never called');
+});
+
+/**
+ * The first version of this was a 28%-opacity glyph with no border and no
+ * feedback. Holding it looked exactly like a dead button for the whole second
+ * before it opened, so on the booth it read as "the panel is not there" — which
+ * is the same outcome as not shipping it. A hold has to show itself filling.
+ */
+test('holding shows itself working, and there are two ways in', () => {
+  const init = kiosk.slice(kiosk.indexOf('const ADM_HOLD_MS'), kiosk.indexOf('function admOpen()'));
+  assert.match(init, /classList\.add\('holding'\)/, 'the hold must show progress while it is held');
+  assert.match(init, /classList\.remove\('holding'\)/, 'letting go must reset the progress');
+  assert.match(kiosk, /\.adm-hold\.holding\s*{[^}]*transition:[^}]*\d+ms/, 'the fill must be timed, not instant');
+  // The moment an operator wants to place a job is the moment a design lands,
+  // so the done screen offers the same way in as the corner.
+  assert.ok(kiosk.includes('id="done-send"'), 'the done screen has no way to send');
+  assert.equal((kiosk.match(/class="[^"]*\badm-hold\b/g) || []).length, 2, 'expected exactly two ways in');
 });
 
 test('the built kiosk carries the panel, and the standalone build carries no server calls', () => {

@@ -197,12 +197,22 @@
      The booth runs on the same iPad the kids draw on, and walking to the laptop
      to place every job is the slowest part of the whole booth. This is the
      dashboard's send row and nothing else, over the top of the kiosk.
-     Opened by HOLDING the corner dot, not tapping it: a tap is what a curious
-     six-year-old does, and the buttons in here start real prints. */
-  .adm-dot { position: fixed; top: 0; right: 0; width: 54px; height: 54px; z-index: 45;
-             opacity: .28; border: 0; background: transparent; color: var(--ink);
-             font-size: 17px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .adm-dot:active { opacity: .9; }
+     Opened by HOLDING it, not tapping: a tap is what a curious six-year-old
+     does, and the buttons in here start real prints.
+
+     A hold is only a good idea if you can see it working. The first version of
+     this was a 28%-opacity glyph with no border and no feedback, and holding it
+     looked exactly like a dead button for the whole second before it opened —
+     so the way in has to announce both that it is there and that it is filling. */
+  .adm-hold { -webkit-tap-highlight-color: transparent; touch-action: none;
+              background-image: linear-gradient(to top, var(--accent) 0 100%);
+              background-repeat: no-repeat; background-position: bottom; background-size: 100% 0%; }
+  .adm-hold.holding { background-size: 100% 100%; transition: background-size 620ms linear; }
+  .adm-dot { position: fixed; top: 8px; right: 8px; z-index: 45; padding: 9px 13px;
+             border: 1px solid #ffffff33; border-radius: 11px; background-color: #1b2440cc;
+             color: var(--ink); font: inherit; font-size: 13px; font-weight: 800;
+             opacity: .62; cursor: pointer; }
+  .adm-dot:active { opacity: 1; }
   .adm { position: fixed; inset: 0; z-index: 50; background: #0b1220f2; overflow-y: auto;
          display: none; padding: 18px; -webkit-overflow-scrolling: touch; }
   .adm.open { display: block; }
@@ -232,7 +242,7 @@
   .adm-none { color: var(--muted); text-align: center; padding: 40px 10px; }
 </style>
 
-<button class="adm-dot" id="adm-dot" aria-label="Operator panel — hold to open">⚙</button>
+<button class="adm-dot adm-hold" id="adm-dot" aria-label="Operator panel — hold to open">⚙ Hold</button>
 <div class="adm" id="adm" role="dialog" aria-label="Send to printer">
   <button class="adm-close" onclick="admClose()">Close</button>
   <h3>Send to a printer</h3>
@@ -369,6 +379,10 @@
         <button class="btn grow" id="again">Design another</button>
       </div>
       <p class="foot" id="done-foot"></p>
+      <!-- The moment the operator actually wants to place a job is the moment a
+           design lands, so the way in is here as well as in the corner. Booth
+           build only, and held rather than tapped like every other way in. -->
+      <button class="btn ghost adm-hold" id="done-send" style="display:none;margin-top:6px;">⚙ Hold to send to a printer</button>
     </div>
   </section>
 
@@ -2472,16 +2486,29 @@ function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H
    Booth build only — there is no queue to place without a server. */
 let admTimer = null, admPoll = null;
 
+const ADM_HOLD_MS = 620;
+
 function admInit(){
-  const dot = $('#adm-dot');
-  if(!window.__BOOTH_SERVER__){ dot.style.display = 'none'; return; }
-  // Hold, do not tap. A tap is what a curious child does, and every button
-  // behind this one starts a real print on a real machine.
-  const start = (e) => { e.preventDefault(); admTimer = setTimeout(admOpen, 800); };
-  const cancel = () => { clearTimeout(admTimer); admTimer = null; };
-  dot.addEventListener('touchstart', start, {passive:false});
-  dot.addEventListener('mousedown', start);
-  for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) dot.addEventListener(ev, cancel);
+  // No server means no queue to place, so the standalone build never shows a
+  // way in at all rather than offering one that cannot work.
+  if(!window.__BOOTH_SERVER__){ $('#adm-dot').style.display = 'none'; return; }
+  $('#done-send').style.display = '';
+  for(const el of $$('.adm-hold')) admHold(el);
+}
+
+/** Hold, do not tap. A tap is what a curious child does, and every button
+    behind this one starts a real print on a real machine. The button fills as
+    it is held — without that, a hold and a broken button look identical. */
+function admHold(el){
+  const start = (e) => {
+    e.preventDefault();
+    el.classList.add('holding');
+    admTimer = setTimeout(() => { cancel(); admOpen(); }, ADM_HOLD_MS);
+  };
+  const cancel = () => { clearTimeout(admTimer); admTimer = null; el.classList.remove('holding'); };
+  el.addEventListener('touchstart', start, {passive:false});
+  el.addEventListener('mousedown', start);
+  for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) el.addEventListener(ev, cancel);
 }
 
 function admOpen(){
