@@ -27,7 +27,7 @@ export function buildPayload(cfg, job, event) {
     phone_e164: job.contact.phoneE164 || toE164(job.contact.phone),
     country: job.contact.country || '',
     // context — map to GHL custom fields / used in the template
-    fair: g.eventName || 'Not So Little Fair',
+    fair: g.eventName || '3D Workshop',
     tags: g.tags || [],
     job_id: job.id,
     seq: job.seq,
