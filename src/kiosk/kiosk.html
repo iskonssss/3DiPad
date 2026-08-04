@@ -269,7 +269,7 @@
 <div id="app">
   <section class="screen active" data-screen="welcome">
     <div class="hero">
-      <span class="tagline">Not So Little Fair · 3D Workshop</span>
+      <span class="tagline" id="tagline">3D Workshop</span>
       <h1>Draw it.<br /><span class="hl">Wear it.</span></h1>
       <p class="sub">Design your own keychain — pick a shape, colours and pen, draw, and we 3D-print it while you explore the fair.</p>
       <button class="btn big" data-go="contact">Start designing ✏️</button>
@@ -1166,6 +1166,7 @@ const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;',
 const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 
 /* ---- boot (after all declarations) ---- */
+if(CFG.eventName)$('#tagline').textContent=CFG.eventName;
 setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();admInit();
 $('#submit').addEventListener('click',submit);
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);updateUndo();

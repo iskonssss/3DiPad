@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildPayload } from '../src/integrations/ghl.js';
 
 const cfg = {
-  integrations: { ghl: { eventName: 'Not So Little Fair', tags: ['NSLF-2026', '3d-workshop-lead'] } },
+  integrations: { ghl: { eventName: 'Some Fair', tags: ['NSLF-2026', '3d-workshop-lead'] } },
 };
 
 const job = {
@@ -25,7 +25,7 @@ test('GHL lead payload maps contact + context fields', () => {
   assert.equal(p.layer2, 'PINK');
   assert.equal(p.hole, 'centre');
   assert.equal(p.est_minutes, 14.1);
-  assert.equal(p.fair, 'Not So Little Fair');
+  assert.equal(p.fair, 'Some Fair');
   assert.deepEqual(p.tags, ['NSLF-2026', '3d-workshop-lead']);
 });
 

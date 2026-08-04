@@ -122,6 +122,8 @@
     "startFile": "src/gcode/templates/a1mini.start.gcode",
     "endFile": "src/gcode/templates/a1mini.end.gcode"
   },
+  "_eventName_comment": "Shown on the kiosk welcome screen and sent with every lead. Name the event, the school or the studio — this software is not tied to any one of them.",
+  "eventName": "3D Workshop",
   "palette": [
     "BLACK",
     "WHITE",
@@ -152,7 +154,7 @@
     },
     "ghl": {
       "_comment": "Inbound-webhook URLs go in .env (GHL_LEAD_WEBHOOK_URL / GHL_READY_WEBHOOK_URL) or here. One URL is fine — branch on payload.event in the GHL workflow.",
-      "eventName": "Not So Little Fair",
+      "eventName": "3D Workshop",
       "tags": [
         "NSLF-2026",
         "3d-workshop-lead"
