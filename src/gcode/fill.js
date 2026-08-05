@@ -81,7 +81,7 @@ function stampSegment(mask, w, h, a, b, r) {
   }
 }
 
-function clearDisc(mask, w, h, cx, cy, r) {
+export function clearDisc(mask, w, h, cx, cy, r) {
   const r2 = r * r;
   for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(h - 1, Math.ceil(cy + r)); y++) {
     for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(w - 1, Math.ceil(cx + r)); x++) {

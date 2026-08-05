@@ -23,6 +23,7 @@ const ENGINE_MODULES = [
   'src/gcode/geometry.js',
   'src/gcode/strokes.js',
   'src/gcode/fill.js',
+  'src/gcode/image.js',
   'src/gcode/engine.js',
 ];
 

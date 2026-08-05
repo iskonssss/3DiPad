@@ -145,8 +145,8 @@ app.post('/api/submit', async (req, res) => {
   if (meta.overBudget) {
     return res.status(422).json({ ok: false, error: 'Design exceeds the print-time limit — simplify it.', meta });
   }
-  if (!meta.strokeCount) {
-    return res.status(422).json({ ok: false, error: 'Nothing to print — draw a design first.', meta });
+  if (!meta.hasDesign) {
+    return res.status(422).json({ ok: false, error: 'Nothing to print — draw or upload a design first.', meta });
   }
 
   const seq = queue.nextSeq();
@@ -425,12 +425,13 @@ function sanitizeDesign(body) {
   // the drawing area is bounded by the largest shape we allow
   const lim = Math.max(b.customMax[0], b.customMax[1], ...Object.values(b.shapeSizes).flat());
   const design = cleanStrokes(body?.design, lim);
+  const image = sanitizeImage(body?.image);
   const customOutline = shape === 'custom' ? cleanPoints(body?.customOutline, b.customMax[0], b.customMax[1]) : null;
   const holePos = ['left', 'right', 'top', 'none'].includes(body?.holePos) ? body.holePos : null;
   const hole = body?.hole && Number.isFinite(+body.hole.x) && Number.isFinite(+body.hole.y)
     ? { x: clamp(+body.hole.x, 0, lim), y: clamp(+body.hole.y, 0, lim) }
     : null;
-  return { shape, colours, design, customOutline, hole, holePos: holePos || 'top' };
+  return { shape, colours, design, image, customOutline, hole, holePos: holePos || 'top' };
 }
 
 function pickColour(name) {
@@ -467,6 +468,21 @@ function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
   }
   return out;
 }
+// An uploaded drawing arrives already decoded and thresholded by the browser:
+// { w, h, data } where data is base64 bit-packed ink (see image.js). Cap the
+// dimensions — a plate-resolution mask needs no more than about 850 cells on
+// its long side, and the point of the cap is to refuse a payload that would
+// blow the mask past what imageCoverage will raster.
+function sanitizeImage(img) {
+  if (!img || typeof img !== 'object') return null;
+  const w = img.w | 0, h = img.h | 0;
+  if (w < 1 || h < 1 || w > 2000 || h > 2000 || w * h > 3_000_000) return null;
+  if (typeof img.data !== 'string' || !img.data.length) return null;
+  // base64 of a bit-packed mask: about ceil(w*h/8) bytes, ~1.34x as base64.
+  if (img.data.length > Math.ceil((w * h) / 8) * 2 + 8) return null;
+  return { w, h, data: img.data };
+}
+
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
 
 /**

@@ -21,6 +21,7 @@ import {
 import { prepareStrokes, totalLength, simplify } from './strokes.js';
 import { insetPolygon, erode, smooth, decimate } from './outline.js';
 import { buildCoverage, maskContours, maskRows, contourToMm } from './fill.js';
+import { imageCoverage, decodeBitmap } from './image.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
 const ACCEL_FUDGE = 1.6;
@@ -162,7 +163,11 @@ export function generate(design, cfg) {
   for (const line of swap) em.raw(line);
 
   // ---- design (colour 2), raised beads ----
-  const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
+  // An uploaded drawing arrives as a bitmap, not as strokes. It becomes the
+  // same coverage mask a drawing does, so everything below is shared; only the
+  // source of the mask differs.
+  const bitmap = design.image ? decodeBitmap(design.image) : null;
+  const strokes = bitmap ? [] : prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
   // Design height is counted in layers, not mm — 2 layers reads as a raised
   // line you can feel without looking like a slab on top of the plate.
   const nDesign = Math.max(1, b.designLayers ?? Math.round((b.designThickness ?? 0.56) / b.layerHeight));
@@ -178,8 +183,10 @@ export function generate(design, cfg) {
   // one lays a full bead over the last — the same spot gets material four or
   // five times and melts into a blob. From a mask, the toolpath is the same
   // whether the kid used one stroke or a hundred.
-  const cov = buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin);
-  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${strokes.length} strokes =====`);
+  const cov = bitmap
+    ? imageCoverage(bitmap, cfg, bbox, poly, hole, b.designEdgeMargin)
+    : buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin);
+  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${bitmap ? 'imported image' : `${strokes.length} strokes`} =====`);
   designZs.forEach((z, k) => {
     marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
@@ -230,6 +237,10 @@ export function generate(design, cfg) {
     meta: {
       shape, bbox, hole: hole.none ? null : { x: +hole.cx.toFixed(1), y: +hole.cy.toFixed(1) }, colours: design.colours,
       backingLayers: nBack, designLayers: designZs.length, strokeCount: strokes.length,
+      // Whether the design layer actually produced anything to print. Strokes
+      // that all clipped off the plate, or an image that thresholded to blank,
+      // leave a keychain that is one colour — the submit guard refuses it.
+      fromImage: !!bitmap, hasDesign: !!cov,
       drawnLengthMm: Math.round(totalLength(strokes)),
       estMinutes: +estMinutes.toFixed(1), estGrams: +grams.toFixed(1),
       overBudget: estMinutes > cfg.limits.maxPrintMinutes, nearBudget: estMinutes > cfg.limits.warnPrintMinutes,

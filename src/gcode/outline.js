@@ -257,7 +257,7 @@ export function erode(mask, w, h, r) {
   for (let i = 0; i < out.length; i++) out[i] = d[i] > r ? 1 : 0;
   return out;
 }
-function dilate(mask, w, h, r) {
+export function dilate(mask, w, h, r) {
   if (r <= 0) return mask;
   const d = distanceTo(mask, w, h, 1); // distance to foreground
   const out = new Uint8Array(w * h);

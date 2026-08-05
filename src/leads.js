@@ -4,6 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { shapePolygon } from './gcode/geometry.js';
+import { imageCoverage, decodeBitmap } from './gcode/image.js';
+import { maskContours, contourToMm } from './gcode/fill.js';
 
 /** `dir` is where lead records go — see output.leadsDir. */
 export function saveLead(dir, job, design, cfg) {
@@ -54,7 +56,23 @@ function designSvg(design, job, cfg) {
   const hole = job.hole
     ? `<circle cx="${X(job.hole.x)}" cy="${Y(job.hole.y)}" r="${cfg.build.holeDiameter / 2}" fill="#fff" stroke="#aab"/>`
     : '';
-  const strokes = (design.design || [])
+  // An uploaded drawing has no strokes; its visual record is the printed
+  // silhouette itself — the same coverage the g-code was built from, traced to
+  // filled contours so the record shows exactly what came off the plate.
+  const design2 = design.image ? imageContours(design, poly, cfg) : strokePaths(design.design, X, Y, cfg);
+
+  const label = `${job.filename} — ${job.contact.name} ${job.contact.phone}${design.image ? ' (imported image)' : ''}`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW * 4}" height="${svgH * 4}">
+  <rect width="${svgW}" height="${svgH}" fill="#fff"/>
+  <path d="${outline}" fill="#f0f2f6" stroke="#ccd"/>
+  ${hole}
+  ${design2}
+  <text x="${pad}" y="${svgH - 4}" font-family="sans-serif" font-size="4" fill="#333">${escapeXml(label)}</text>
+</svg>`;
+}
+
+function strokePaths(strokes, X, Y, cfg) {
+  return (strokes || [])
     .map((s) => {
       const pts = Array.isArray(s?.pts) ? s.pts : Array.isArray(s) ? s : [];
       const w = Number.isFinite(+s?.w) ? +s.w : cfg.build.beadWidth;
@@ -64,15 +82,29 @@ function designSvg(design, job, cfg) {
       return `<path d="${d}" fill="none" stroke="#e11" stroke-width="${w.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
     })
     .join('');
+}
 
-  const label = `${job.filename} — ${job.contact.name} ${job.contact.phone}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW * 4}" height="${svgH * 4}">
-  <rect width="${svgW}" height="${svgH}" fill="#fff"/>
-  <path d="${outline}" fill="#f0f2f6" stroke="#ccd"/>
-  ${hole}
-  ${strokes}
-  <text x="${pad}" y="${svgH - 4}" font-family="sans-serif" font-size="4" fill="#333">${escapeXml(label)}</text>
-</svg>`;
+/** The imported drawing as filled contours of the exact printed coverage. */
+function imageContours(design, poly, cfg) {
+  try {
+    const bitmap = decodeBitmap(design.image);
+    if (!bitmap) return '';
+    const { poly: pp, bbox } = shapePolygon(design.shape || 'rectangle', cfg, design.customOutline);
+    const cov = imageCoverage(bitmap, cfg, bbox, pp, null, cfg.build.designEdgeMargin);
+    if (!cov) return '';
+    const H = bbox.h, pad = 8;
+    const X = (x) => (x + pad).toFixed(2);
+    const Y = (y) => (H - y + pad).toFixed(2);
+    // fill-rule even-odd so an enclosed hole (a drawn "O") reads as a ring.
+    const d = maskContours(cov.mask, cov.w, cov.h)
+      .map((loop) => contourToMm(loop, cov))
+      .filter((l) => l.length >= 3)
+      .map((l) => l.map((p, i) => `${i ? 'L' : 'M'}${X(p.x)} ${Y(p.y)}`).join(' ') + ' Z')
+      .join(' ');
+    return d ? `<path d="${d}" fill="#e11" fill-rule="evenodd" stroke="none"/>` : '';
+  } catch {
+    return '';
+  }
 }
 
 function escapeXml(s) {
