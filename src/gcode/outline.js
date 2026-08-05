@@ -220,7 +220,7 @@ export function fillPolygon(poly, w, h) {
 
 /* ---------------- morphology via chamfer distance transform ---------------- */
 
-function distanceTo(mask, w, h, target) {
+export function distanceTo(mask, w, h, target) {
   const INF = 1e9;
   const d = new Float32Array(w * h);
   for (let i = 0; i < d.length; i++) d[i] = mask[i] === target ? 0 : INF;

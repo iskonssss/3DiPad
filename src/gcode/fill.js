@@ -168,6 +168,202 @@ export function maskRows(mask, w, h, step, phase = 0, vertical = false) {
   return rows;
 }
 
+/* --------------------- thin features: one bead, one pass -------------------- */
+//
+// A drawn line narrower than about two line widths must be printed as a SINGLE
+// pass down its middle, not as a loop around it.
+//
+// The perimeter path below traces the boundary of whatever it is given. On a
+// wide shape that is right. On a thin one the boundary runs up one side of the
+// ribbon and back down the other, a fraction of a millimetre apart, and each
+// pass extrudes a full bead — so a 0.5mm line was getting 1.68x the plastic the
+// space can hold, measured on the generated file. That is the same
+// stack-it-in-one-spot failure the coverage mask exists to prevent, arriving by
+// a different route, and it reads on the plate as a raised, blobby line.
+//
+// So thin regions are reduced to their centreline and drawn once, at the width
+// the feature actually is.
+
+/**
+ * Zhang-Suen thinning: erode a mask to an 8-connected, one-cell-wide skeleton
+ * without breaking it apart. Standard algorithm — the conditions below are
+ * deliberately verbatim, because a "simplification" of any of them severs
+ * strokes at junctions, and a severed stroke is a gap in the drawing.
+ */
+export function skeletonize(mask, w, h) {
+  const m = Uint8Array.from(mask);
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? m[y * w + x] : 0);
+  // p2..p9, clockwise from north
+  const ring = (x, y) => [
+    at(x, y - 1), at(x + 1, y - 1), at(x + 1, y), at(x + 1, y + 1),
+    at(x, y + 1), at(x - 1, y + 1), at(x - 1, y), at(x - 1, y - 1),
+  ];
+  const transitions = (p) => {
+    let n = 0;
+    for (let i = 0; i < 8; i++) if (!p[i] && p[(i + 1) % 8]) n++;
+    return n;
+  };
+  for (let pass = 0; pass < 200; pass++) {
+    let removed = 0;
+    for (const step of [0, 1]) {
+      const drop = [];
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          if (!m[y * w + x]) continue;
+          const p = ring(x, y);
+          const b = p.reduce((a, v) => a + v, 0);
+          if (b < 2 || b > 6) continue;
+          if (transitions(p) !== 1) continue;
+          const [p2, p3, p4, p5, p6, p7, p8, p9] = p;
+          if (step === 0) {
+            if (p2 && p4 && p6) continue;
+            if (p4 && p6 && p8) continue;
+          } else {
+            if (p2 && p4 && p8) continue;
+            if (p2 && p6 && p8) continue;
+          }
+          drop.push(y * w + x);
+        }
+      }
+      for (const i of drop) m[i] = 0;
+      removed += drop.length;
+    }
+    if (!removed) break;
+  }
+  return m;
+}
+
+const SKEL_NB = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+/**
+ * Remove the whiskers thinning leaves behind, without shortening real strokes.
+ *
+ * Skeletonising anything wider than a hair throws off little branches a few
+ * cells long — at a crossing, at a corner, anywhere the shape bulges. They are
+ * not strokes, but each one is a junction, and a junction breaks the walk below
+ * into more pieces: a plain drawn ring came out as 27 separate runs needing 27
+ * retractions, against the 5 the old path used, which is a lot of stringing
+ * over a keychain to draw one circle.
+ *
+ * A branch is only cut if it runs from a loose end into a junction within
+ * `maxCells`. A stroke that simply ends — the tail of a letter, a hair on a
+ * drawn head — never reaches a junction at all and is left alone however short.
+ */
+export function pruneSpurs(mask, w, h, maxCells) {
+  const m = Uint8Array.from(mask);
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? m[y * w + x] : 0);
+  const nb = (x, y) => {
+    const out = [];
+    for (const [dx, dy] of SKEL_NB) if (at(x + dx, y + dy)) out.push([x + dx, y + dy]);
+    return out;
+  };
+  for (let pass = 0; pass < 8; pass++) {
+    const drop = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!at(x, y) || nb(x, y).length !== 1) continue;   // loose ends only
+        const branch = [[x, y]];
+        let cur = [x, y], prev = null;
+        for (let step = 0; step < maxCells; step++) {
+          const ns = nb(cur[0], cur[1]).filter((n) => !prev || n[0] !== prev[0] || n[1] !== prev[1]);
+          if (ns.length !== 1) break;                       // fork or dead end
+          prev = cur;
+          cur = ns[0];
+          if (nb(cur[0], cur[1]).length > 2) {              // ran into a junction
+            for (const [bx, by] of branch) drop.push(by * w + bx);
+            break;
+          }
+          branch.push(cur);
+        }
+      }
+    }
+    if (!drop.length) break;
+    for (const i of drop) m[i] = 0;
+  }
+  return m;
+}
+
+/**
+ * Walk a one-cell-wide skeleton into polylines of cell coordinates.
+ *
+ * Edges are consumed, not cells, so a junction is passed through as many times
+ * as it has arms — walking cells instead would abandon every branch after the
+ * first and silently drop most of a drawing. Endpoints are used as seeds first
+ * so a stroke is emitted end to end rather than starting from its middle.
+ */
+export function skeletonPaths(mask, w, h) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+
+  // Adjacency, with the redundant diagonals taken out.
+  //
+  // A one-cell-wide curve that is not axis-aligned is a staircase, and on an
+  // 8-connected grid the corner of every step touches THREE cells: the two
+  // along the curve and the diagonal shortcut across it. Read literally that is
+  // a junction, and a curve made of them is hundreds of junctions — which is
+  // how a plain drawn ring came out as 27 separate runs, each paying for its
+  // own retraction, instead of one continuous loop.
+  //
+  // A diagonal whose two ends already share a neighbour is that shortcut, never
+  // a branch, so it is dropped. Connectivity is untouched: the two-step route
+  // through the shared cell is still there.
+  const adj = new Map();
+  const cells = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!at(x, y)) continue;
+      const i = y * w + x;
+      cells.push(i);
+      const s = new Set();
+      for (const [dx, dy] of SKEL_NB) if (at(x + dx, y + dy)) s.add((y + dy) * w + (x + dx));
+      adj.set(i, s);
+    }
+  }
+  for (const i of cells) {
+    const xi = i % w, yi = (i - xi) / w;
+    for (const j of [...adj.get(i)]) {
+      const xj = j % w, yj = (j - xj) / w;
+      if (Math.abs(xi - xj) + Math.abs(yi - yj) !== 2) continue;   // not a diagonal
+      let shared = false;
+      for (const k of adj.get(i)) if (k !== j && adj.get(j).has(k)) { shared = true; break; }
+      if (shared) { adj.get(i).delete(j); adj.get(j).delete(i); }
+    }
+  }
+
+  const used = new Set();
+  const ek = (a, b) => (a < b ? a + ':' + b : b + ':' + a);
+  const walkFrom = (start, paths) => {
+    for (const first of [...adj.get(start)]) {
+      if (used.has(ek(start, first))) continue;
+      let cur = start, next = first;
+      const path = [cur];
+      for (;;) {
+        used.add(ek(cur, next));
+        path.push(next);
+        cur = next;
+        let step = null;
+        for (const k of adj.get(cur)) if (!used.has(ek(cur, k))) { step = k; break; }
+        if (step == null) break;
+        next = step;
+      }
+      if (path.length >= 2) paths.push(path.map((i) => ({ x: i % w, y: (i - (i % w)) / w })));
+    }
+  };
+
+  const paths = [];
+  const deg = (i) => adj.get(i).size;
+  // Loose ends first, so a stroke is drawn end to end rather than from its
+  // middle; then real junctions; then whatever is left, which is a closed loop
+  // — a drawn "O" has no end and no junction at all, and seeding only from
+  // those would drop it without a word.
+  for (const i of cells) if (deg(i) === 1) walkFrom(i, paths);
+  for (const i of cells) if (deg(i) >= 3) walkFrom(i, paths);
+  for (const i of cells) if (deg(i) === 2) walkFrom(i, paths);
+  // A lone cell is a drawn dot — an eye, a full stop. It has no edge to walk,
+  // so it would vanish here, and a dropped dot is a hole in the drawing.
+  for (const i of cells) if (deg(i) === 0) paths.push([{ x: i % w, y: (i - (i % w)) / w }]);
+  return paths;
+}
+
 /** Turn a traced cell contour into a smooth mm path. */
 export function contourToMm(loop, cov, smoothIters = 1) {
   let pts = loop.map(cov.toMm);

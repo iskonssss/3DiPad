@@ -141,6 +141,10 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   // by the same amount and merge features a child meant to keep apart.
   const minW = b.imageMinFeatureMm ?? IMAGE_MIN_FEATURE_MM;
   const minR = (minW / 2) / cell;
+  // Growth is quantised by the grid: a one-cell line dilates to 3 cells or to
+  // 5, never to the 4.17 that would be exactly 0.5mm. 3 cells is 0.36mm, under
+  // the floor and liable to snap, so the wider one is taken — a line comes out
+  // at 0.60mm, at or above what was asked for, never under it.
   if (minR > 0) {
     const wide = dilate(erode(mask, w, h, minR), w, h, minR);   // opening: parts >= minW wide
     const thin = new Uint8Array(w * h);

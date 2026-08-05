@@ -19,8 +19,8 @@ import {
   toBed, presetHole, holeIsValid, pointInPolygon,
 } from './geometry.js';
 import { prepareStrokes, totalLength, simplify } from './strokes.js';
-import { insetPolygon, erode, smooth, decimate } from './outline.js';
-import { buildCoverage, maskContours, maskRows, contourToMm } from './fill.js';
+import { insetPolygon, erode, dilate, smooth, decimate, distanceTo } from './outline.js';
+import { buildCoverage, maskContours, maskRows, contourToMm, skeletonize, skeletonPaths, pruneSpurs } from './fill.js';
 import { imageCoverage, decodeBitmap } from './image.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
@@ -433,9 +433,218 @@ function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
   if (!cov) return;
   const b = cfg.build;
   const lw = b.lineWidth;
+
+  // Split the drawing by how wide it actually is, region by region.
+  //
+  // The test is an opening: what survives eroding by a bead and dilating back
+  // is wide enough to carry a perimeter and a fill, and what does not is a
+  // line. The radius carries the same half-cell correction the widths do —
+  // without it a 0.84mm ring measured as wide enough for a perimeter, and got
+  // one, at 1.17x the plastic it had room for.
+  //
+  // Region by region, NOT blob by blob. Classifying whole blobs was tried and
+  // is badly wrong on real drawings: the one cell where the three arms of a Y
+  // meet is wide, and that single cell dragged the entire stroke network onto
+  // the perimeter path — 1.34x over, on the shape line art is mostly made of.
+  // How wide a bead a single pass may lay. NOT simply "anything narrower than
+  // two lines": a 0.4mm nozzle cannot extrude a 0.9mm bead in one go. Laying a
+  // wide pen in one pass was tried on a real print and came out lumpy and
+  // domed at ~2.5x the backing's flow rate — the reason every line in this file
+  // extrudes at about the nominal width. So one pass covers up to a third more
+  // than a line width, and anything wider is two lines side by side, which is
+  // what a 0.8mm stroke has always been.
+  // Two different limits, and conflating them is what broke this twice.
+  //
+  // `oneBead` is how wide a bead the nozzle may lay in one pass. It is a
+  // hardware fact: a wide pen laid in a single pass came off a real print
+  // lumpy and domed at ~2.5x the backing's flow, so every line in this file
+  // extrudes within a quarter of the nominal width.
+  //
+  // `onePassMax` is how wide a STROKE may be and still be drawn with one pass.
+  // It is deliberately larger. The grid thickens a hairline to 0.60mm, and
+  // drawing that as two adjacent lines lays 0.90mm of plastic into it — so a
+  // stroke slightly wider than one bead is still one pass, extruded at the
+  // bead ceiling and very slightly lean, which is the safe direction to miss.
+  // Wider than this and it really is two lines, exactly as a 0.8mm stroke has
+  // always been.
+  const oneBead = b.singleBeadMaxMm ?? lw * 1.25;
+  const onePassMax = b.onePassMaxMm ?? lw * 1.47;
+  const coreR = onePassMax / (2 * cov.cell) + 0.5;
+  const opened = dilate(erode(cov.mask, cov.w, cov.h, coreR), cov.w, cov.h, coreR);
+  // Decided per blob, by majority.
+  //
+  // Cell by cell, a stroke sitting near the threshold is chopped into
+  // alternating thin and wide fragments along its length, and every fragment
+  // boundary is a retraction: a plain drawn ring went from 5 retractions to 41,
+  // for a stroke that is one continuous line to look at. A stroke is drawn one
+  // way or the other over its whole length.
+  const { thin, wide, anyThin, anyWide } = splitByBlob(cov.mask, opened, cov.w, cov.h);
+
+  if (anyThin) drawThinRuns(em, cfg, bbox, cov, thin, feed, layerH, oneBead);
+  if (anyWide) drawWideArea(em, cfg, bbox, cov, wide, feed, layerH, vertical);
+}
+
+
+/**
+ * Sort blobs into the ones a single bead covers and the ones that need two
+ * lines, by which way the majority of each blob's own area falls.
+ */
+function splitByBlob(mask, opened, w, h) {
+  const seen = new Uint8Array(w * h);
+  const thin = new Uint8Array(w * h);
+  const wide = new Uint8Array(w * h);
+  let anyThin = false, anyWide = false;
+  const stack = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    stack.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    const cells = [];
+    let openN = 0;
+    while (stack.length) {
+      const i = stack.pop();
+      cells.push(i);
+      if (opened[i]) openN++;
+      const x = i % w, y = (i - x) / w;
+      if (x > 0 && mask[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack.push(i - 1); }
+      if (x < w - 1 && mask[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack.push(i + 1); }
+      if (y > 0 && mask[i - w] && !seen[i - w]) { seen[i - w] = 1; stack.push(i - w); }
+      if (y < h - 1 && mask[i + w] && !seen[i + w]) { seen[i + w] = 1; stack.push(i + w); }
+    }
+    const isWide = openN * 2 >= cells.length;
+    for (const i of cells) (isWide ? wide : thin)[i] = 1;
+    if (isWide) anyWide = true; else anyThin = true;
+  }
+  return { thin, wide, anyThin, anyWide };
+}
+
+/**
+ * Draw thin shapes as single passes along their centreline, each at the width
+ * the shape actually is.
+ *
+ * The width comes from the distance transform rather than being assumed: a
+ * hand-drawn line is not a constant width, and extruding a fixed bead along a
+ * varying one is how you get a line that is starved in places and proud in
+ * others. Twice the distance to the background IS the local width.
+ */
+function drawThinRuns(em, cfg, bbox, cov, thin, feed, layerH, oneBead) {
+  const b = cfg.build;
+  const lw = b.lineWidth;
+  const dist = distanceTo(thin, cov.w, cov.h, 0);          // cells to background
+  const spur = Math.max(2, Math.round(lw / cov.cell));
+  const skel = pruneSpurs(skeletonize(thin, cov.w, cov.h), cov.w, cov.h, spur);
+  const paths = skeletonPaths(skel, cov.w, cov.h);
+  if (!paths.length) return;
+
+  // The transform counts STEPS to a background cell, so a cell against the edge
+  // reads 1 when its material only reaches half a cell further. Every reading is
+  // half a cell long, and doubling it puts a whole cell of extra width into
+  // every bead.
+  const widthMm = (p) => {
+    const i = Math.round(p.x / cov.cell + cov.pad), j = Math.round(p.y / cov.cell + cov.pad);
+    if (i < 0 || j < 0 || i >= cov.w || j >= cov.h) return lw;
+    return 2 * Math.max(0, dist[j * cov.w + i] - 0.5) * cov.cell;
+  };
+  const segLen = (pts) => {
+    let L = 0;
+    for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return L;
+  };
+
+  // ---- build the runs, dropping what thinning left behind ----
+  // Skeletonising a crossing throws off short whiskers that are not strokes.
+  // Each one costs a retraction and a travel to print a fraction of a
+  // millimetre, and there were hundreds: 603 travels a layer against the 15 the
+  // old path used, which is a great deal of stringing to buy nothing.
+  const runs = [];
+  for (const cells of paths) {
+    if (cells.length === 1) {
+      const c = cov.toMm(cells[0]);
+      const wMm = Math.max(lw * 0.8, Math.min(oneBead, widthMm(c)));
+      runs.push({ pts: [{ x: c.x - wMm / 4, y: c.y }, { x: c.x + wMm / 4, y: c.y }] });
+      continue;
+    }
+    const raw = cells.map((c) => cov.toMm(c));
+    if (segLen(raw) < lw * 0.75) continue;
+    const pts = simplify(smooth(decimate(raw, cov.cell * 0.9, false), 2, true), cov.cell / 3);
+    if (pts.length >= 2) runs.push({ pts });
+  }
+  if (!runs.length) return;
+
+  // ---- make the plastic match the area ----
+  // Local width is read per point, but a crossing is walked once per arm and
+  // each arm claims the full width there, so the same square millimetre is paid
+  // for several times. Measured on a child's line drawing: 0.619mm of bead
+  // averaged across a drawing whose area over its own centreline length is
+  // 0.512mm — 21% too much plastic, which is exactly the raised, blobby line
+  // this whole path exists to avoid.
+  //
+  // So the widths are scaled to deposit the area the drawing actually covers.
+  // The shape of the variation is kept — a fat stroke stays fatter than a thin
+  // one — while the total is what the plate can hold.
+  let ink = 0;
+  for (let i = 0; i < thin.length; i++) if (thin[i]) ink++;
+  const area = ink * cov.cell * cov.cell;
+  let planned = 0;
+  for (const r of runs) {
+    r.w = [];
+    for (let i = 1; i < r.pts.length; i++) {
+      const mid = { x: (r.pts[i - 1].x + r.pts[i].x) / 2, y: (r.pts[i - 1].y + r.pts[i].y) / 2 };
+      // Capped where the split stops calling a shape thin, not at 2 line
+      // widths: a 1.0mm stroke is handled here, and capping the bead below the
+      // stroke it is filling starves it.
+      const w = Math.max(lw * 0.5, Math.min(oneBead, widthMm(mid)));
+      r.w.push(w);
+      planned += w * Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+    }
+  }
+  // Clamped: a wild correction means the geometry is not what this path assumes,
+  // and starving or flooding the whole drawing is worse than being a little off.
+  const scale = planned > 1e-6 ? Math.max(0.6, Math.min(1.4, area / planned)) : 1;
+
+  // ---- order them so the head is not flung across the plate ----
+  em.comment('design lines (single bead)');
+  const left = runs.slice();
+  let at = null;
+  while (left.length) {
+    let best = 0, bestD = Infinity, flip = false;
+    for (let i = 0; i < left.length; i++) {
+      const p = left[i].pts, a = p[0], z = p[p.length - 1];
+      const da = at ? Math.hypot(a.x - at.x, a.y - at.y) : 0;
+      const dz = at ? Math.hypot(z.x - at.x, z.y - at.y) : 0;
+      if (da < bestD) { bestD = da; best = i; flip = false; }
+      if (dz < bestD) { bestD = dz; best = i; flip = true; }
+    }
+    const run = left.splice(best, 1)[0];
+    const pts = flip ? run.pts.slice().reverse() : run.pts;
+    const ws = flip ? run.w.slice().reverse() : run.w;
+
+    const p0 = toBed(pts[0], bbox, cfg);
+    // A short gap is stepped over rather than retracted for — the same trade the
+    // infill makes, and what keeps hundreds of retractions out of a line drawing.
+    if (at && bestD <= lw * 2) em.moveTo(p0.x, p0.y);
+    else em.travelTo(p0.x, p0.y);
+    for (let i = 1; i < pts.length; i++) {
+      const p = toBed(pts[i], bbox, cfg);
+      // Clamped AFTER scaling: the correction is allowed to trim a bead, never
+      // to push one past what the nozzle can lay. Scaling first put 0.82mm
+      // beads in a file whose ceiling is 0.61 — the lumpy, domed extrusion the
+      // whole single-pass rule exists to stay under.
+      const wSeg = Math.max(lw * 0.5, Math.min(oneBead, ws[i - 1] * scale));
+      em.extrudeTo(p.x, p.y, feed, wSeg, layerH);
+    }
+    at = pts[pts.length - 1];
+  }
+}
+
+/** Perimeter plus fill — the right way to cover a shape wider than a bead. */
+function drawWideArea(em, cfg, bbox, cov, mask, feed, layerH, vertical) {
+  const b = cfg.build;
+  const lw = b.lineWidth;
   const overlap = lw * (b.infillWallOverlap ?? 0.15);
 
-  const perim = erode(cov.mask, cov.w, cov.h, lw / 2 / cov.cell);
+  const perim = erode(mask, cov.w, cov.h, lw / 2 / cov.cell);
   em.comment('design outline');
   for (const loop of maskContours(perim, cov.w, cov.h)) {
     const pts = smoothContour(contourToMm(loop, cov), cov.cell);
@@ -444,7 +653,7 @@ function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
 
   // fill starts a line width in from the perimeter's centreline, overlapping it
   // by the same fraction the backing uses
-  const inner = erode(cov.mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
+  const inner = erode(mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
   const step = Math.max(1, Math.round(lw / cov.cell));
   const rows = maskRows(inner, cov.w, cov.h, step, vertical ? step / 2 : 0, vertical);
   if (rows.length) {
