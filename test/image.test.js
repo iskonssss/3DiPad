@@ -37,18 +37,90 @@ test('decodeBitmap round-trips the packed wire form', () => {
   assert.deepEqual([...got.ink], [...bm.ink]);
 });
 
+const MIN_FEATURE = cfg.build.imageMinFeatureMm ?? 0.5;
+
 test('a hairline stroke is thickened to a printable bead, not printed thin', () => {
-  // 0.06mm/px: a 1px line is 0.3mm, well under the 0.8mm a bead needs to survive
-  // as a ridge. Traced literally it prints as a whisker that snaps off.
+  // 0.06mm/px: a 1px line is 0.3mm, under the 0.5mm the printer will hold as a
+  // ridge. Traced literally it prints as a whisker that snaps off.
   const bbox = { w: 60, h: 60 };
   const H = 1000;
   const line = bitmap(1000, H, (_x, y) => Math.abs(y - H / 2) < 0.5); // one row
   const cov = imageCoverage(line, cfg, bbox, null, null, 0);
   assert.ok(cov, 'the line survived');
   const t = inkThicknessMm(cov, bbox);
-  const minW = cfg.build.penRange[0];
-  assert.ok(t >= minW - cov.cell,
-    `hairline came out ${t.toFixed(2)}mm wide, under the ${minW}mm minimum`);
+  assert.ok(t >= MIN_FEATURE - cov.cell,
+    `hairline came out ${t.toFixed(2)}mm wide, under the ${MIN_FEATURE}mm minimum`);
+});
+
+test('a line already thick enough is left alone, not bolded to the minimum', () => {
+  // The reason thickening is conditional rather than a blanket dilation: a
+  // drawing is mostly lines that are already fine, and growing every one of
+  // them merges the features a child meant to keep apart. A 2mm band must come
+  // off the plate 2mm, not 2mm plus the minimum.
+  const bbox = { w: 60, h: 60 };
+  const H = 1000, halfPx = (2 / 60) * 1000 / 2;   // a 2mm-wide band
+  const band = bitmap(1000, H, (_x, y) => Math.abs(y - H / 2) <= halfPx);
+  const cov = imageCoverage(band, cfg, bbox, null, null, 0);
+  assert.ok(cov);
+  const t = inkThicknessMm(cov, bbox);
+  assert.ok(Math.abs(t - 2) < 0.25, `a 2mm band came out ${t.toFixed(2)}mm — it was bolded`);
+});
+
+test('the printable floor holds when config.json carries no image settings', () => {
+  // The booth's config.json is NOT in git and is hand-edited, so it will not
+  // have the image keys until someone adds them. The floor has to come from the
+  // code, not from the config file — otherwise every booth silently runs with
+  // whatever the fallback happens to be.
+  const bare = { ...cfg, build: { ...cfg.build } };
+  delete bare.build.imageMinFeatureMm;
+  delete bare.build.imageSpeckMm;
+  delete bare.build.imageCloseMm;
+
+  const bbox = { w: 60, h: 60 };
+  const H = 1000;
+  const line = bitmap(1000, H, (_x, y) => Math.abs(y - H / 2) < 0.5);
+  const cov = imageCoverage(line, bare, bbox, null, null, 0);
+  assert.ok(cov, 'the line survived with no image config at all');
+  const t = inkThicknessMm(cov, bbox);
+  assert.ok(t >= 0.5 - cov.cell, `defaulted to ${t.toFixed(2)}mm, under the 0.5mm the printer holds`);
+  // and it must not have quietly fallen back to the 0.8 pen minimum
+  assert.ok(t < 0.8, `defaulted to ${t.toFixed(2)}mm — that is the penRange floor, not the printable one`);
+});
+
+test('a hairline is never lost between samples when the image outresolves the plate', () => {
+  // The failure this pins: sampling ONE source pixel per plate cell steps over
+  // whole rows of a drawing posted at higher resolution than the plate grid. A
+  // 1px line landing on a skipped row vanished completely — not thin, ABSENT —
+  // and nothing downstream could tell. Measured at two hairlines 0.6mm apart:
+  // both disappeared, and the keychain came out blank where the drawing was.
+  //
+  // Swept across offsets because whether it survived was pure alignment luck:
+  // the same line one pixel further down would print.
+  const bbox = { w: 60, h: 60 };
+  const H = 1000;
+  for (let off = 0; off < 8; off++) {
+    const row = Math.round(H / 2) + off;
+    const line = bitmap(1000, H, (_x, y) => y === row);   // exactly one pixel tall
+    const cov = imageCoverage(line, cfg, bbox, null, null, 0);
+    assert.ok(cov, `a 1px line at row ${row} disappeared entirely`);
+    const t = inkThicknessMm(cov, bbox);
+    assert.ok(t >= MIN_FEATURE - cov.cell,
+      `a 1px line at row ${row} came out ${t.toFixed(2)}mm, under the ${MIN_FEATURE}mm minimum`);
+  }
+});
+
+test('two close hairlines both survive and stay separate', () => {
+  // 0.8mm apart is the case the 0.5mm floor exists to serve: at a 0.8mm floor
+  // these merge into one blob, which is a face losing its eyes.
+  const bbox = { w: 60, h: 60 };
+  const H = 1000, pxPerMm = H / bbox.h, gap = 0.8 * pxPerMm;
+  const two = bitmap(1000, H, (_x, y) => y === Math.round(H / 2 - gap / 2) || y === Math.round(H / 2 + gap / 2));
+  const cov = imageCoverage(two, cfg, bbox, null, null, 0);
+  assert.ok(cov, 'both hairlines disappeared');
+  const ci = Math.round(bbox.w / 2 / cov.cell + cov.pad);
+  let runs = 0, prev = 0;
+  for (let j = 0; j < cov.h; j++) { const on = cov.mask[j * cov.w + ci]; if (on && !prev) runs++; prev = on; }
+  assert.equal(runs, 2, `${runs} line(s) printed — 0.8mm apart they should stay separate`);
 });
 
 test('a speck too small to survive is dropped', () => {

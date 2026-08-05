@@ -483,7 +483,7 @@ const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,c
   // in plate-grid cells, posted as {w,h,data} and turned into the same design
   // coverage the engine builds from strokes. When set, the hand-drawing tools
   // step aside — the two design sources are mutually exclusive.
-  image:null,imgArea:0};
+  imgArea:0};
 let lastGen=null;
 
 function bboxFor(shape){
@@ -528,7 +528,7 @@ function validate(step){
 }
 function goReview(){ // validation before review
   if(state.shape==='custom'&&!state.customOutline)return toast('Draw your custom shape outline first',true),false;
-  if(!state.strokes.length&&!state.image)return toast('Draw or upload your design first',true),false;
+  if(!state.strokes.length&&!imgInk)return toast('Draw or upload your design first',true),false;
   if(!state.hole)return toast('Place the keyring hole (tap “Tap to place”, then the plate)',true),false;
   return true;
 }
@@ -546,7 +546,7 @@ function selectShape(shape){
   // hole may become invalid on shape change
   if(state.hole&&!holeIsValid(state.hole,polyFor(),CFG))state.hole=null;
   if(!state.hole)defaultHole();
-  if(state.image)rebuildImage();   // the plate changed size; refit the drawing
+  if(imgInk)refreshImagePreview();   // the plate changed size; refit the drawing
   resizeCanvas();updateHoleState();updateBanner();syncClearBase();redraw();
 }
 
@@ -554,7 +554,7 @@ function selectShape(shape){
 function buildSwatches(){const wrap=$('#swatches');wrap.innerHTML='';
   for(const name of CFG.palette){const hex=COLOUR_HEX[name]||'#888';const el=document.createElement('button');el.className='swatch';el.style.background=hex;el.title=name;el.dataset.name=name;
     el.addEventListener('click',()=>{state.colours[state.activeLayer]=name;updateLayerDots();markSwatch();
-      if(state.image&&state.activeLayer==='layer2')rebuildImage();redraw();});wrap.appendChild(el);}
+      if(imgInk&&state.activeLayer==='layer2')refreshImagePreview();redraw();});wrap.appendChild(el);}
   $$('#layerpick button').forEach(b=>b.addEventListener('click',()=>{state.activeLayer=b.dataset.layer;
     $$('#layerpick button').forEach(x=>x.classList.toggle('sel',x===b));markSwatch();}));
   markSwatch();}
@@ -721,10 +721,13 @@ function wireHole(){$$('#holebtns button').forEach(b=>b.addEventListener('click'
   // tag whole. Without it the only way to have no hole was to never press
   // anything, which looks identical to not having noticed the control.
   if(h==='none'){state.hole=null;state.holePos='none';state.mode='design';
+    if(imgInk)refreshImagePreview();
     updateHoleButtons();updateHoleState();updateBanner();redraw();return;}
   const snapped=snapValidHole(presetHole(h,bboxFor(state.shape),CFG));
   if(!snapped){toast('This shape is too small for a keyring hole — try a bigger one',true);return;}
-  state.hole=snapped;state.holePos=h;state.mode='design';updateHoleButtons();updateHoleState();updateBanner();redraw();
+  state.hole=snapped;state.holePos=h;state.mode='design';
+  if(imgInk)refreshImagePreview();
+  updateHoleButtons();updateHoleState();updateBanner();redraw();
 }));}
 /** Nearest point to `p` where the ring still has a solid wall around it (or null). */
 function snapValidHole(p){
@@ -771,13 +774,13 @@ function defaultHole(){
    width and turns it into the design coverage. The threshold is a live control
    because a clean export and a phone photo of pencil need very different cuts,
    and the operator can see the result before it prints. */
-let imgSrcCanvas=null,imgThreshold=128,imgInvert=false,imgPreviewCanvas=null;
+let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=128,imgInvert=false,imgPreviewCanvas=null,imgPreviewRect=null;
 
 function wireImage(){
   $('#img-pick').addEventListener('click',()=>$('#img-file').click());
   $('#img-file').addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];if(f)onImageFile(f);e.target.value='';});
-  $('#img-threshold').addEventListener('input',e=>{imgThreshold=+e.target.value;rebuildImage();redraw();});
-  $('#img-invert').addEventListener('change',e=>{imgInvert=e.target.checked;rebuildImage();redraw();});
+  $('#img-threshold').addEventListener('input',e=>{imgThreshold=+e.target.value;rethreshold();schedulePreview();});
+  $('#img-invert').addEventListener('change',e=>{imgInvert=e.target.checked;rethreshold();schedulePreview();});
   $('#img-remove').addEventListener('click',clearImage);
 }
 /** Decode a file to a drawable image, however this browser can. Older iPad
@@ -804,8 +807,12 @@ async function onImageFile(file){
     const cap=1400,sc=Math.min(1,cap/Math.max(sw,sh));
     const w=Math.max(1,Math.round(sw*sc)),h=Math.max(1,Math.round(sh*sc));
     const c=document.createElement('canvas');c.width=w;c.height=h;
-    c.getContext('2d').drawImage(src,0,0,w,h);
+    const cg=c.getContext('2d',{willReadFrequently:true});
+    cg.drawImage(src,0,0,w,h);
     if(src.close)src.close();
+    // Keep the pixels: the threshold is re-applied to THESE, at the drawing's
+    // own resolution, every time the slider moves.
+    imgSrcPixels=cg.getImageData(0,0,w,h).data;
     imgSrcCanvas=c;imgThreshold=128;imgInvert=false;
     $('#img-threshold').value=128;$('#img-invert').checked=false;
     state.strokes=[];redoStack=[];   // image and strokes are mutually exclusive
@@ -814,7 +821,7 @@ async function onImageFile(file){
   }catch{ toast('Could not read that image — try a PNG or JPEG',true); }
 }
 function clearImage(){
-  imgSrcCanvas=null;imgPreviewCanvas=null;state.image=null;state.imgArea=0;lastGen=null;
+  imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;state.imgArea=0;lastGen=null;
   setImageUiActive(false);redraw();toast('Photo removed — draw your design by hand');
 }
 function setImageUiActive(on){
@@ -822,38 +829,101 @@ function setImageUiActive(on){
   $('#img-pick').textContent=on?'🖼️ Choose a different photo':'🖼️ Choose a photo';
   for(const id of ['#tool-ctl','#pen-ctl']){const el=$(id);if(el)el.style.display=on?'none':'';}
 }
-/** Re-fit the source into the current plate grid and re-threshold. Called on
-    upload, on every threshold/invert nudge, and whenever the plate changes. */
-function rebuildImage(){
-  if(!imgSrcCanvas){state.image=null;state.imgArea=0;imgPreviewCanvas=null;return;}
-  const bb=bboxFor(state.shape),cell=CFG.build.designCell||0.12;
-  const Wc=Math.max(4,Math.round(bb.w/cell)),Hc=Math.max(4,Math.round(bb.h/cell));
-  const c=document.createElement('canvas');c.width=Wc;c.height=Hc;
-  const g=c.getContext('2d',{willReadFrequently:true});
-  g.fillStyle='#fff';g.fillRect(0,0,Wc,Hc);
-  // contain-fit, preserving the drawing's aspect; the margin stays paper-white
-  const sAsp=imgSrcCanvas.width/imgSrcCanvas.height,pAsp=Wc/Hc;
-  let dw,dh;if(sAsp>pAsp){dw=Wc;dh=Wc/sAsp;}else{dh=Hc;dw=Hc*sAsp;}
-  g.drawImage(imgSrcCanvas,(Wc-dw)/2,(Hc-dh)/2,dw,dh);
-  const data=g.getImageData(0,0,Wc,Hc).data,n=Wc*Hc,ink=new Uint8Array(n);
-  let count=0;
+/**
+ * Re-threshold the drawing and rebuild the preview. Called on upload, on every
+ * threshold/invert nudge, and whenever the plate changes.
+ *
+ * The threshold is applied at the DRAWING'S OWN resolution, and the full-size
+ * binary mask is what gets posted. Thresholding a downscaled copy instead loses
+ * exactly the lines this feature exists to keep: scaling averages a one-pixel
+ * black line with the white paper around it, so it arrives as light grey and
+ * falls the wrong side of the cut. Measured on a 1400px line drawing with 1, 2,
+ * 3 and 5px strokes, thresholding after the downscale silently dropped the 1px
+ * line — it was simply not in the file. Downscaling the BINARY mask instead
+ * cannot lose it, because image.js unions the source pixels under each cell,
+ * and the minimum-width pass then grows it to something printable.
+ */
+function rebuildImage(){ rethreshold(); refreshImagePreview(); }
+
+/** Re-cut the drawing at the current threshold. ~15ms on a 1400px image. */
+function rethreshold(){
+  if(!imgSrcCanvas||!imgSrcPixels){imgInk=null;imgPacked=null;state.imgArea=0;imgPreviewCanvas=null;imgPreviewRect=null;return;}
+  const W=imgSrcCanvas.width,H=imgSrcCanvas.height,n=W*H;
+  const d=imgSrcPixels,ink=new Uint8Array(n);
   for(let i=0;i<n;i++){
-    const a=data[i*4+3];
-    const lum=a<8?255:0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2];
-    if(imgInvert?lum>imgThreshold:lum<imgThreshold){ink[i]=1;count++;}
+    const a=d[i*4+3];
+    // fully transparent reads as paper, not as black
+    const lum=a<8?255:0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
+    if(imgInvert?lum>imgThreshold:lum<imgThreshold)ink[i]=1;
   }
-  state.image={w:Wc,h:Hc,data:packBits(ink,n)};
-  state.imgArea=count*cell*cell;
-  buildImagePreview(ink,Wc,Hc);
+  imgInk={w:W,h:H,ink};
+  imgPacked=null;   // packed lazily; see imagePayload()
   lastGen=null;
 }
-function buildImagePreview(ink,Wc,Hc){
-  const c=document.createElement('canvas');c.width=Wc;c.height=Hc;
-  const g=c.getContext('2d'),img=g.createImageData(Wc,Hc);
+/** Rebuild just the preview — the plate, hole or colour moved, but the
+    threshold did not, so the drawing does not need re-cutting. */
+function refreshImagePreview(){
+  if(!imgInk){imgPreviewCanvas=null;imgPreviewRect=null;return;}
+  buildImagePreview(imgInk);
+  lastGen=null;
+}
+/**
+ * The preview is the true printed coverage, and that costs ~200ms on a plateful
+ * of drawing — far too slow to run on every event a dragged slider emits, which
+ * would queue up and leave the control feeling stuck. One update per frame
+ * instead: the slider stays live, the preview follows and always settles on the
+ * real answer.
+ */
+let imgPreviewPending=false;
+function schedulePreview(){
+  if(imgPreviewPending)return;
+  imgPreviewPending=true;
+  requestAnimationFrame(()=>{imgPreviewPending=false;refreshImagePreview();redraw();});
+}
+/**
+ * The posted bitmap, packed on demand. Packing 2 million bits costs ~55ms and
+ * the wire form is only ever needed when the design is actually submitted or
+ * generated — never while a slider is moving.
+ */
+function imagePayload(){
+  if(!imgInk)return null;
+  if(!imgPacked)imgPacked={w:imgInk.w,h:imgInk.h,data:packBits(imgInk.ink,imgInk.w*imgInk.h)};
+  return imgPacked;
+}
+/**
+ * The preview is the REAL coverage — the same imageCoverage() the g-code is
+ * built from, bundled into this page. So what the tablet shows is what the
+ * nozzle lays down: lines already thickened to the printable minimum, specks
+ * already dropped, everything clipped to the plate and around the hole. A
+ * preview of the raw threshold would promise detail the printer cannot hold.
+ */
+function buildImagePreview(bitmap){
+  const bb=bboxFor(state.shape);
+  const poly=(state.shape==='custom'&&!state.customOutline)?null:polyFor();
+  const hole=state.hole?{cx:state.hole.x,cy:state.hole.y,r:CFG.build.holeDiameter/2}:null;
+  let cov=null;
+  try{ cov=imageCoverage(bitmap,CFG,bb,poly,hole,CFG.build.designEdgeMargin); }catch{ cov=null; }
+  if(!cov){imgPreviewCanvas=null;imgPreviewRect=null;state.imgArea=0;return;}
+
+  const c=document.createElement('canvas');c.width=cov.w;c.height=cov.h;
+  const g=c.getContext('2d'),img=g.createImageData(cov.w,cov.h);
   const hex=COLOUR_HEX[state.colours.layer2]||'#e11';
   const r=parseInt(hex.slice(1,3),16)||225,gg=parseInt(hex.slice(3,5),16)||17,b=parseInt(hex.slice(5,7),16)||17;
-  for(let i=0;i<ink.length;i++)if(ink[i]){img.data[i*4]=r;img.data[i*4+1]=gg;img.data[i*4+2]=b;img.data[i*4+3]=255;}
-  g.putImageData(img,0,0);imgPreviewCanvas=c;
+  let count=0;
+  for(let j=0;j<cov.h;j++){
+    const dst=cov.h-1-j;                      // mask is y-up, a canvas is y-down
+    for(let i=0;i<cov.w;i++){
+      if(!cov.mask[j*cov.w+i])continue;
+      const k=(dst*cov.w+i)*4;
+      img.data[k]=r;img.data[k+1]=gg;img.data[k+2]=b;img.data[k+3]=255;count++;
+    }
+  }
+  g.putImageData(img,0,0);
+  imgPreviewCanvas=c;
+  // the mm rectangle this canvas covers, padding included
+  imgPreviewRect={x0:-cov.pad*cov.cell,y0:-cov.pad*cov.cell,
+                  x1:(cov.w-cov.pad)*cov.cell,y1:(cov.h-cov.pad)*cov.cell};
+  state.imgArea=count*cov.cell*cov.cell;      // printed area, for the fill meter
 }
 function packBits(ink,n){
   const bytes=new Uint8Array(Math.ceil(n/8));
@@ -861,14 +931,20 @@ function packBits(ink,n){
   let s='';for(const v of bytes)s+=String.fromCharCode(v);
   return btoa(s);
 }
-/** Paint the imported drawing onto a context, clipped to the plate polygon.
-    `dest` maps the plate rect to device pixels: {x,y,w,h}. */
-function paintImage(c,poly,px,dest){
-  if(!imgPreviewCanvas)return;
+/** Paint the imported drawing onto a context. `px` maps plate mm to device
+    pixels; the preview canvas carries its own mm rectangle, so it lands exactly
+    where it will print. Already clipped to the plate by imageCoverage. */
+function paintImage(c,px){
+  if(!imgPreviewCanvas||!imgPreviewRect)return;
+  const r=imgPreviewRect;
+  const [X0,Y0]=px({x:r.x0,y:r.y1});          // top-left on screen: min x, max y
+  const [X1,Y1]=px({x:r.x1,y:r.y0});
   c.save();
-  c.beginPath();poly.forEach((p,i)=>{const[X,Y]=px(p);i?c.lineTo(X,Y):c.moveTo(X,Y);});c.closePath();c.clip();
-  c.imageSmoothingEnabled=false;
-  c.drawImage(imgPreviewCanvas,dest.x,dest.y,dest.w,dest.h);
+  // smoothing ON: this is usually a downscale, and with it off a line one cell
+  // wide can drop out of the PICTURE while still printing — the preview would
+  // then be lying in the one direction that matters.
+  c.imageSmoothingEnabled=true;
+  c.drawImage(imgPreviewCanvas,X0,Y0,X1-X0,Y1-Y0);
   c.restore();
 }
 
@@ -881,7 +957,7 @@ function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:f
 $('#redo').addEventListener('click',redo);
   // Clear drawing: wipe the pen strokes, keep the base shape and hole.
   $('#clear-drawing').addEventListener('click',()=>{
-    if(state.image){clearImage();return;}
+    if(imgInk){clearImage();return;}
     if(!state.strokes.length)return toast('Nothing drawn yet');
     state.strokes=[];outsideWarned=false;redraw();toast('Drawing cleared');});
   // Clear base: only the Custom shape has a drawn base. Wiping it also clears
@@ -936,7 +1012,7 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
   // A photo is the design; the pen/fill/eraser step aside until it is removed.
-  if(state.image&&state.mode==='design'){toast('Remove the photo to draw by hand',true);return;}
+  if(imgInk&&state.mode==='design'){toast('Remove the photo to draw by hand',true);return;}
   if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
@@ -961,13 +1037,14 @@ function finishOutline(){
     openR:CFG.build.outlineOpenMm,smooth:CFG.build.outlineSmooth});
   if(healed.length<3){toast('That shape was too thin to print — try a rounder one',true);return;}
   state.customOutline=healed;state.mode='design';state.hole=null;outsideWarned=false;updateHoleState();
-  if(state.image)rebuildImage();
+  if(imgInk)refreshImagePreview();
   resizeCanvas();updateBanner();toast('Nice shape! Now draw your design and place the hole');}
 function placeHole(p){
   const snapped=snapValidHole(p);
   if(!snapped){toast('No room for a hole here — try a bigger shape',true);return;}
   const moved=Math.hypot(snapped.x-p.x,snapped.y-p.y);
   state.hole=snapped;state.holePos=null;state.mode='design';
+  if(imgInk)refreshImagePreview();   // the hole is carved out of the coverage
   updateHoleButtons();updateHoleState();updateBanner();redraw();
   toast(moved>1.5?'Moved it in a bit so the keyring has room 👍':'Hole placed 👍');}
 
@@ -990,7 +1067,7 @@ function redraw(){
   }
   // imported drawing sits where the strokes would — clipped to the plate, so
   // what shows is what prints (the hole guide draws over it, just below)
-  if(state.image&&imgPreviewCanvas)paintImage(ctx,polyFor(),px,{x:0,y:0,w:pad.width,h:pad.height});
+  if(imgInk&&imgPreviewCanvas)paintImage(ctx,px);
   // outline being drawn
   if(state.mode==='outline'&&outlinePts&&outlinePts.length){ctx.strokeStyle='#3a6fd8';ctx.lineWidth=3;ctx.lineJoin='round';ctx.lineCap='round';
     ctx.beginPath();outlinePts.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();}
@@ -1047,7 +1124,7 @@ function strokeLen(){let L=0;for(const s of state.strokes)for(let i=1;i<s.pts.le
  */
 function coveredLengthMm(){
   // An imported drawing has no strokes; its fill is the area of its ink.
-  if(state.image)return state.imgArea/CFG.build.lineWidth;
+  if(imgInk)return state.imgArea/CFG.build.lineWidth;
   if(!state.strokes.length)return 0;
   const g=fillGrid();
   let n=0; for(let i=0;i<g.ink.length;i++) if(g.ink[i]&&g.plate[i]) n++;
@@ -1056,7 +1133,7 @@ function coveredLengthMm(){
 function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
 
 /* ---- review ---- */
-function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:state.image||null};}
+function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:imagePayload()};}
 function enterReview(){drawPreview();lastGen=generate(designObj(),CFG);const m=lastGen.meta,c=state.colours;
   const chip=n=>`<span class="swatch-mini" style="background:${COLOUR_HEX[n]||'#888'}"></span>${n}`;
   const cls=m.overBudget?'over':m.nearBudget?'warn':'';const li=(k,v,x='')=>`<li class="${x}"><span>${k}</span><b>${v}</b></li>`;
@@ -1071,9 +1148,7 @@ function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H
   const c1=COLOUR_HEX[state.colours.layer1]||'#888',c2=COLOUR_HEX[state.colours.layer2]||'#e11';
   g.beginPath();poly.forEach((p,i)=>{const px=X(p.x),py=Y(p.y);i?g.lineTo(px,py):g.moveTo(px,py);});g.closePath();
   g.fillStyle=c1;g.shadowColor='#0008';g.shadowBlur=18;g.shadowOffsetY=6;g.fill();g.shadowBlur=0;g.shadowOffsetY=0;
-  if(state.image&&imgPreviewCanvas){
-    paintImage(g,poly,p=>[X(p.x),Y(p.y)],{x:X(0),y:Y(bbox.h),w:bbox.w*scale,h:bbox.h*scale});
-  }
+  if(imgInk&&imgPreviewCanvas)paintImage(g,p=>[X(p.x),Y(p.y)]);
   if(state.hole){g.fillStyle='#0a1020';g.beginPath();g.arc(X(state.hole.x),Y(state.hole.y),CFG.build.holeDiameter/2*scale,0,7);g.fill();}
   g.strokeStyle=c2;g.fillStyle=c2;g.lineJoin='round';g.lineCap='round';
   for(const st of state.strokes){g.lineWidth=Math.max(2,st.w*scale);
@@ -1297,7 +1372,7 @@ async function submit(){
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
 function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
   state.pen=1.6;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
-  imgSrcCanvas=null;imgPreviewCanvas=null;imgThreshold=128;imgInvert=false;state.image=null;state.imgArea=0;setImageUiActive(false);
+  imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
   $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape(DEFAULT_SHAPE);show('welcome');}
 

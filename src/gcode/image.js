@@ -11,16 +11,24 @@
 // cannot be trusted with, because it is where prints fall off the plate.
 //
 // A single extruded bead is ~0.45mm wide but stands 0.56mm tall (2 x 0.28
-// layers): a ridge taller than it is wide. Below about 0.8mm wide it snaps off
-// in a pocket, which is why build.penRange starts at 0.8 and not at the line
-// width. A 1000px drawing on a 60mm plate is 0.06mm/px, so a 5px pencil stroke
-// is 0.3mm — well under that minimum. Traced literally, most of a child's
-// drawing comes out as gaps, whiskers and specks that fall off the bed.
+// layers): a ridge taller than it is wide, which is what snaps off in a pocket.
+// A 1000px drawing on a 60mm plate is 0.06mm/px, so a 5px pencil stroke is
+// 0.3mm. Traced literally, most of a child's drawing comes out as gaps,
+// whiskers and specks that fall off the bed.
 //
 // So the trace enforces a minimum feature width: thicken anything thinner than
-// one bead rather than print it thin, and drop specks too small to survive.
-// That is exactly what erode/dilate in outline.js already do to heal a
-// hand-drawn outline, so the same morphology is reused here.
+// that rather than print it thin, and drop specks too small to survive. That is
+// exactly what erode/dilate in outline.js already do to heal a hand-drawn
+// outline, so the same morphology is reused here.
+//
+// IMAGE_MIN_FEATURE_MM is 0.5, not the 0.8 of build.penRange. Those two are
+// different questions and it is worth not confusing them again: penRange[0] is
+// the thinnest PEN a child is offered, chosen so a deliberate hand-drawn line
+// reads as a line. This is the thinnest bead the printer will hold at all, and
+// on this machine that is 0.5 — a shade over one line width. Line art scanned
+// from paper is full of detail between those two numbers, and rounding it all
+// up to 0.8 turns a face into a blot.
+const IMAGE_MIN_FEATURE_MM = 0.5;
 
 import { erode, dilate, fillPolygon } from './outline.js';
 import { clearDisc } from './fill.js';
@@ -65,23 +73,46 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   const offX = (bbox.w - drawW) / 2, offY = (bbox.h - drawH) / 2;
 
   let mask = new Uint8Array(w * h);
-  const inkAt = (px, py) => {
-    if (px < 0 || py < 0 || px >= bitmap.w || py >= bitmap.h) return 0;
-    return bitmap.ink[py * bitmap.w + px] ? 1 : 0;
-  };
+  // Sample by COVERAGE, not by point: a cell is ink if ANY source pixel under it
+  // is ink.
+  //
+  // Point-sampling one source pixel per cell looks equivalent and is not. A
+  // drawing posted at a higher resolution than the plate grid is being
+  // downscaled here, so point-sampling steps straight over whole rows of it: a
+  // one-pixel line that happens to fall on a skipped row is gone before the
+  // minimum-width pass below ever sees it, and the drawing quietly comes out
+  // missing a line. Measured on two hairlines 0.6mm apart, both vanished
+  // completely — nothing in the file, nothing to notice until the part is in a
+  // child's hand.
+  //
+  // Taking the union over the footprint cannot lose a line: whatever the scale,
+  // every source pixel belongs to some cell. Thin is then a thickening problem,
+  // which is solved below, rather than a disappearing one, which cannot be.
   for (let j = 0; j < h; j++) {
-    const my = (j - pad) * cell;                 // plate-local mm, y-up
-    if (my < offY || my > offY + drawH) continue;
+    const my = (j - pad) * cell;                 // plate-local mm, y-up (centre)
     // image y is DOWN, plate y is UP: the top of the drawing (row 0) belongs at
-    // the top of the plate (largest y).
-    const v = (my - offY) / drawH;               // 0 at bottom, 1 at top
-    const py = Math.min(bitmap.h - 1, Math.floor((1 - v) * bitmap.h));
+    // the top of the plate (largest y), so the v range flips into rows.
+    const v0 = (my - cell / 2 - offY) / drawH, v1 = (my + cell / 2 - offY) / drawH;
+    let py0 = Math.floor((1 - v1) * bitmap.h);
+    let py1 = Math.ceil((1 - v0) * bitmap.h) - 1;
+    // entirely off the drawing: letterbox margin, and it stays blank paper
+    if (py1 < 0 || py0 > bitmap.h - 1) continue;
+    if (py0 < 0) py0 = 0;
+    if (py1 > bitmap.h - 1) py1 = bitmap.h - 1;
     for (let i = 0; i < w; i++) {
       const mx = (i - pad) * cell;
-      if (mx < offX || mx > offX + drawW) continue;
-      const u = (mx - offX) / drawW;
-      const px = Math.min(bitmap.w - 1, Math.floor(u * bitmap.w));
-      if (inkAt(px, py)) mask[j * w + i] = 1;
+      const u0 = (mx - cell / 2 - offX) / drawW, u1 = (mx + cell / 2 - offX) / drawW;
+      let px0 = Math.floor(u0 * bitmap.w);
+      let px1 = Math.ceil(u1 * bitmap.w) - 1;
+      if (px1 < 0 || px0 > bitmap.w - 1) continue;
+      if (px0 < 0) px0 = 0;
+      if (px1 > bitmap.w - 1) px1 = bitmap.w - 1;
+      let on = 0;
+      for (let py = py0; py <= py1 && !on; py++) {
+        const row = py * bitmap.w;
+        for (let px = px0; px <= px1; px++) if (bitmap.ink[row + px]) { on = 1; break; }
+      }
+      if (on) mask[j * w + i] = 1;
     }
   }
 
@@ -96,7 +127,7 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   // By AREA, not by opening: opening deletes thin LINES too, and a line is the
   // one thing we must keep (and thicken). A speck is small every way; a pencil
   // line is narrow but long, so it clears the area threshold and stays.
-  const speckMm = b.imageSpeckMm ?? (b.penRange?.[0] ?? 0.8);
+  const speckMm = b.imageSpeckMm ?? IMAGE_MIN_FEATURE_MM;
   const minCells = Math.max(4, Math.round(Math.PI * (speckMm / 2) ** 2 / (cell * cell)));
   mask = dropSpecks(mask, w, h, minCells);
 
@@ -108,7 +139,7 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   // width and unioned back, so a thick blob is untouched while a hairline is
   // grown to a printable bead. A blanket dilation would instead bold everything
   // by the same amount and merge features a child meant to keep apart.
-  const minW = b.imageMinFeatureMm ?? (b.penRange?.[0] ?? 0.8);
+  const minW = b.imageMinFeatureMm ?? IMAGE_MIN_FEATURE_MM;
   const minR = (minW / 2) / cell;
   if (minR > 0) {
     const wide = dilate(erode(mask, w, h, minR), w, h, minR);   // opening: parts >= minW wide
