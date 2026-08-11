@@ -56,9 +56,8 @@ Hard-won facts, each bought with a real print:
 | `M620 S254A`, `M620.11 … I254`, no `T` | no cut. Falls through to the bare pause |
 | `M620 S1A`, `M620.11 … I1`, **no** `T` | no cut. Falls through to the bare pause |
 
-**The automatic cut is not reachable on a printer with no AMS. Stop spending
-prints on it.** The last three rows were each bought with one, and together they
-close the question:
+What those rows establish is narrower than it first looks, and the difference
+matters:
 
 - The cut is **not** performed by `M620.11`. The last row asked for it with the
   exact framing and index of the row that did cut, changing only whether a
@@ -68,17 +67,23 @@ close the question:
   abnormal", because it goes looking for hardware that is not attached.
 - `T254`, the external spool, loads correctly and its routine contains no cut.
 
-So the cut and the toolchange are one action, and the only toolchange that cuts
-is the one that cannot complete here. Fit an AMS Lite or accept the manual swap;
-there is no third answer in g-code. `mode: "purge"` is the setting to run — it
-retracts 8mm to pull the old colour clear of the melt zone before pausing, which
-is what makes the operator's unload quick.
+It is tempting to conclude from that trio that the automatic cut needs an AMS
+and is unreachable here. **That conclusion was written into this file and it was
+wrong.** Bambu Studio has an option for multi-colour printing from the external
+spool with no AMS, so the machine plainly can do it and some sequence exists
+that we have not hit.
 
-The one variant untried is a cut index of 1 with a load of 254 (`M620.11 … I1`
-with `T254`), which would need a `cutTool` knob separate from `tool`. Given that
-the `T` is what cuts, it is unlikely to work — and the whole feature saves an
-operator perhaps twenty seconds a print. It is not worth another print, let
-alone the code. The GHL webhook below is worth far more.
+Six prints have now gone into guessing that sequence one command at a time. Do
+not spend a seventh. **Slice a two-colour object in Bambu Studio with that
+option ticked, export it, and read the change block out of the file** — that is
+how every part of this that works was derived, and this file has already warned
+once that the resolved external-spool change "is a question only an exported
+two-colour file from Bambu Studio can answer. Nobody should guess at it a third
+time." Transcribe what the slicer emits; do not reason about what it ought to.
+
+Until that file has been read, run `mode: "purge"` — it retracts 8mm to pull the
+old colour clear of the melt zone before pausing, which is what makes the
+operator's twenty seconds at the filament menu quick.
 
 Two traps in reading any result here. The startup log prints the `mode` but NOT
 the framing or the slot, so it cannot tell you what was actually asked for —
@@ -114,15 +119,20 @@ knows what filament 2 *is*.
 
 ## Open items
 
-1. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
+1. **Read the colour change out of a real Bambu Studio export.** Bambu Studio
+   can print multi-colour from the external spool with no AMS, so the sequence
+   exists; six prints have gone into guessing it a command at a time and the
+   guessing has to stop. Slice a two-colour object with that option on, export,
+   and transcribe the change block. Costs no prints and settles it. Run
+   `mode: "purge"` meanwhile.
+2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
-   business value of anything on this list, and now the top of it — the colour
-   change is settled (manual, `mode: "purge"`) and no longer worth prints.
-2. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
+   business value of anything on this list.
+3. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
    configured IP is on a different subnet from the booth (`192.168.10.x` against
    the booth's `192.168.100.x`) and every connection times out before Developer
    Mode is ever reached. Fix the address first.
-3. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
+4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
    merged. The booth laptop is still on `main` and does not have it.
 
 ## Next feature: image import
