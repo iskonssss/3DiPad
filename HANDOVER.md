@@ -52,27 +52,40 @@ Hard-won facts, each bought with a real print:
 | `T255` | "no tool" — silently does nothing, prints one colour |
 | `T1` + `A` suffix | AMS slot 1 → "AMS Lite communication is abnormal", deadlock |
 | `T254`, no suffix | external spool — load prompts and works, but cut is skipped |
-| `M620 S1A` framing, `M620.11 … I1` | cut + eject work, load deadlocks |
-| `M620 S254A` framing, `M620.11 … I254` | **no cut.** Falls through to the bare pause; operator unloads by hand |
+| `M620 S1A`, `M620.11 … I1`, **with** `T1` | cut + eject work, load deadlocks |
+| `M620 S254A`, `M620.11 … I254`, no `T` | no cut. Falls through to the bare pause |
+| `M620 S1A`, `M620.11 … I1`, **no** `T` | no cut. Falls through to the bare pause |
 
-That last row is the `amsFraming: true` + `tool: 254` experiment, and it settles
-it: **AMS framing is not what makes the cut fire.** The file was checked before
-the print and did carry `M620 S254A` and `M620.11 S1 I254 E-18`, so the printer
-was genuinely asked and genuinely declined.
+**The automatic cut is not reachable on a printer with no AMS. Stop spending
+prints on it.** The last three rows were each bought with one, and together they
+close the question:
 
-Read the table down the `I` parameter instead and it lines up: `M620.11 S1 I<n>`
-cuts when `n` is an AMS slot and does nothing when it is 254. The framing moved
-and the behaviour did not; the slot moved and it did. So the next thing to try
-is the cut with an AMS index and **no toolchange at all** — `mode: "cut"`,
-`tool: 1`, `amsFraming: true`, which emits `M620 S1A` + `M620.11 S1 I1`. That is
-the row that already cut and ejected; the only reason it was abandoned was the
-load deadlocking, and `mode: "cut"` emits no `T` command for it to deadlock on.
-**One print decides it.**
+- The cut is **not** performed by `M620.11`. The last row asked for it with the
+  exact framing and index of the row that did cut, changing only whether a
+  toolchange followed, and nothing cut. The `M620.x` commands are setup;
+  `T<n>` is what drives Bambu's own cut-unload-reload routine.
+- `T<AMS slot>` does cut — and then deadlocks on "AMS Lite communication is
+  abnormal", because it goes looking for hardware that is not attached.
+- `T254`, the external spool, loads correctly and its routine contains no cut.
 
-Worth knowing before reading a result: the startup log prints the `mode` but
-NOT the framing or the slot, so it cannot tell you what was actually asked for.
-Check the generated `.gcode` for the `M620` lines before spending a print — a
-Notepad search of `engine.js` was what nearly recorded this run as invalid.
+So the cut and the toolchange are one action, and the only toolchange that cuts
+is the one that cannot complete here. Fit an AMS Lite or accept the manual swap;
+there is no third answer in g-code. `mode: "purge"` is the setting to run — it
+retracts 8mm to pull the old colour clear of the melt zone before pausing, which
+is what makes the operator's unload quick.
+
+The one variant untried is a cut index of 1 with a load of 254 (`M620.11 … I1`
+with `T254`), which would need a `cutTool` knob separate from `tool`. Given that
+the `T` is what cuts, it is unlikely to work — and the whole feature saves an
+operator perhaps twenty seconds a print. It is not worth another print, let
+alone the code. The GHL webhook below is worth far more.
+
+Two traps in reading any result here. The startup log prints the `mode` but NOT
+the framing or the slot, so it cannot tell you what was actually asked for —
+check the generated `.gcode` for its `M620` lines before spending a print. And
+Notepad's Find starts at the cursor rather than the top of the file: it reported
+`amsFraming` missing from `engine.js` when it was present, which nearly got a
+valid run written off as never having run.
 
 Two things that cost prints and must not be undone:
 
@@ -101,20 +114,15 @@ knows what filament 2 *is*.
 
 ## Open items
 
-1. **Try the cut with an AMS index and no toolchange** — `mode: "cut"`,
-   `tool: 1`, `amsFraming: true`. `amsFraming: true` with `tool: 254` has now
-   been run and does not cut (see the table). One print decides this one.
-   Until it lands, `mode: "purge"` is the mode to run: it retracts 8mm to pull
-   the old colour clear of the melt zone before pausing, which is what makes
-   the manual unload quick.
-2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
+1. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
-   business value of anything on this list.
-3. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
+   business value of anything on this list, and now the top of it — the colour
+   change is settled (manual, `mode: "purge"`) and no longer worth prints.
+2. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
    configured IP is on a different subnet from the booth (`192.168.10.x` against
    the booth's `192.168.100.x`) and every connection times out before Developer
    Mode is ever reached. Fix the address first.
-4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
+3. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
    merged. The booth laptop is still on `main` and does not have it.
 
 ## Next feature: image import
