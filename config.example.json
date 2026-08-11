@@ -104,11 +104,13 @@
     "mode": "purge",
     "_bambu_comment": "Only used when mode is \"bambu\". cutX is where the cutter lives — 180 is the right-hand edge of the A1 mini's 180mm bed and is taken from Bambu's own A1 mini profile. Do NOT copy an A1 (non-mini) value here; the bed is a different size and the head would be driven into the frame. cutRetractMm is Bambu's retraction_distances_when_cut. flushMmps defaults to speed.maxVolumetricMmps.",
     "cutX": 180,
-    "cutRetractMm": 18,
-    "_tool_comment": "Which filament slot the change targets. 254 is the EXTERNAL SPOOL and is what a booth with no AMS wants. 0-3 are AMS slots and get an A suffix; asking for one with no AMS attached gives an AMS Lite communication error and deadlocks the printer. 255 means no tool at all and does nothing.",
-    "_amsFraming_comment": "Whether M620/M621 carry the AMS \"A\" suffix. Measured: with it the cut and retract happen but the load deadlocks on a booth with no AMS; without it the load prompts correctly but the cut is skipped. Set true to keep the AMS framing the cut wants while `tool` stays on the external spool the load needs — that combination is untested.",
-    "amsFraming": false,
-    "tool": 254,
+    "_tool_comment": "Which filament the change switches INTO, as an index into this print's own filament list: 0 is the first colour, 1 is the second. Read out of a real Bambu Studio two-colour export for an A1 mini with NO AMS attached, which changes with \"M620 S1A\" / \"T1\". NOT 254 and NOT 255 — both were reasoned out rather than read, and cost six prints. 255 appears only in the end-of-print unload.",
+    "_amsFraming_comment": "Whether M620/M621 carry the \"A\" suffix. It is NOT AMS addressing, which is what we assumed for a long time: the no-AMS export writes S1A / S0A on every change. Leave it true. false only exists to reproduce the old behaviour when comparing against an earlier print.",
+    "_flush_comment": "flushTemp is the nozzle temperature the purge runs at. Bambu uses the HIGHEST of the two filaments rather than the printing temperature, so the old colour clears instead of leaving a plug behind. flushLenMm is the L parameter on M620.10 — the slicer computes it per change from its flush-volume matrix; 342 is what it used for a black-to-light change.",
+    "amsFraming": true,
+    "tool": 1,
+    "flushTemp": 240,
+    "flushLenMm": 342.471,
     "pauseGcode": [
       "M400 U1 ; ===== SWAP THE FILAMENT NOW, then press Resume on the printer ====="
     ],

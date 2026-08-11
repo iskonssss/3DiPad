@@ -45,52 +45,69 @@ The booth pauses mid-print to swap filament. Modes in `colourChange.mode`:
 - `bambu` — full sequence including the toolchange.
 - `pause` — bare `M400 U1`.
 
-Hard-won facts, each bought with a real print:
+Hard-won facts, each bought with a real print — and then overturned by a file
+that cost nothing:
 
 | what | result |
 |---|---|
 | `T255` | "no tool" — silently does nothing, prints one colour |
-| `T1` + `A` suffix | AMS slot 1 → "AMS Lite communication is abnormal", deadlock |
-| `T254`, no suffix | external spool — load prompts and works, but cut is skipped |
-| `M620 S1A`, `M620.11 … I1`, **with** `T1` | cut + eject work, load deadlocks |
-| `M620 S254A`, `M620.11 … I254`, no `T` | no cut. Falls through to the bare pause |
-| `M620 S1A`, `M620.11 … I1`, **no** `T` | no cut. Falls through to the bare pause |
+| `T254`, `M620 S254` | no cut. Load prompts and works |
+| `M620 S254A`, `M620.11 … I254` | no cut |
+| `M620 S1A`, `M620.11 … I1`, with `T1` | cut + eject happened once; load deadlocked |
+| `M620 S1A`, `M620.11 … I1`, no `T` | no cut |
 
-What those rows establish is narrower than it first looks, and the difference
-matters:
+**Every row above was measured with a command that does not exist.** We were
+sending `M620.11 S1 I<tool> E-18 F1200`, whose S value, `I` parameter and `E`
+retraction were all reasoned out from `retraction_distances_when_cut` in the
+machine profile. Six prints went into varying the arguments of a command whose
+real signature takes none of them, which is why the cut never fired and why the
+table above explains nothing.
 
-- The cut is **not** performed by `M620.11`. The last row asked for it with the
-  exact framing and index of the row that did cut, changing only whether a
-  toolchange followed, and nothing cut. The `M620.x` commands are setup;
-  `T<n>` is what drives Bambu's own cut-unload-reload routine.
-- `T<AMS slot>` does cut — and then deadlocks on "AMS Lite communication is
-  abnormal", because it goes looking for hardware that is not attached.
-- `T254`, the external spool, loads correctly and its routine contains no cut.
+A real Bambu Studio two-colour export for this exact machine — A1 mini,
+external spool, `extruder_ams_count = 1#0|4#0`, i.e. **no AMS of any size
+attached** — settles all of it:
 
-It is tempting to conclude from that trio that the automatic cut needs an AMS
-and is unreachable here. **That conclusion was written into this file and it was
-wrong.** Bambu Studio has an option for multi-colour printing from the external
-spool with no AMS, so the machine plainly can do it and some sequence exists
-that we have not hit.
+```
+G392 S0 / M1007 S0
+M620 S1A                 <- filament INDEX 1, and the A is there with no AMS
+M204 S9000 / G1 Z.. / M400 / M106 P1 S0 / M106 P2 S0 / M104 S220
+G1 X180 F18000           <- the cutter
+M620.11 S0               <- the cut. No I, no E, no F. Emitted TWICE.
+M400
+M620.1 E F299.339 T240   <- flush at the HIGHER temp, not the print temp
+M620.10 A0 F299.339
+T1                       <- the toolchange IS what drives cut-unload-reload
+M73 E1
+M620.1 E F299.339 T240
+M620.10 A1 F299.339 L342.471 H0.4 T240
+G1 Y90 F9000
+M620.11 S0               <- again, after the change
+M400 / G92 E0 / M628 S0
+   ... FLUSH / WIPE / FLUSH / WIPE ...
+M629
+   ... cool-down wipe, M622 cali block ...
+M621 S1A
+G392 S0 / M1007 S1
+```
 
-Six prints have now gone into guessing that sequence one command at a time. Do
-not spend a seventh. **Slice a two-colour object in Bambu Studio with that
-option ticked, export it, and read the change block out of the file** — that is
-how every part of this that works was derived, and this file has already warned
-once that the resolved external-spool change "is a question only an exported
-two-colour file from Bambu Studio can answer. Nobody should guess at it a third
-time." Transcribe what the slicer emits; do not reason about what it ought to.
+Three beliefs written into this file were wrong, and each cost prints:
 
-Until that file has been read, run `mode: "purge"` — it retracts 8mm to pull the
-old colour clear of the melt zone before pausing, which is what makes the
-operator's twenty seconds at the filament menu quick.
+1. **`254` is not "the external spool" and `255` is not "no tool".** `T<n>` takes
+   an index into the print's own filament list — 0 for the first colour, 1 for
+   the second. 255 appears once, in the end-of-print unload.
+2. **The `A` suffix is not AMS addressing.** The no-AMS export writes `S1A` and
+   `S0A` on every change.
+3. **`M620.11` does not perform the cut and takes no arguments.** `T<n>` drives
+   the routine.
 
-Two traps in reading any result here. The startup log prints the `mode` but NOT
-the framing or the slot, so it cannot tell you what was actually asked for —
-check the generated `.gcode` for its `M620` lines before spending a print. And
-Notepad's Find starts at the cursor rather than the top of the file: it reported
-`amsFraming` missing from `engine.js` when it was present, which nearly got a
-valid run written off as never having run.
+There is also **no pause anywhere in the real file** — `M400 U1` appears only as
+the `machine_pause_gcode` config value. The stop comes from
+`manual_color_change` in the print task, which we already send. Our pause is
+kept anyway, outside `M620…M621`, because a file that never stops is a
+one-colour keychain and that is the one failure nobody can see coming.
+
+`src/gcode/engine.js` now emits the sequence above verbatim. **It has not been
+run on hardware yet** — that is the next print, and it is worth babysitting.
 
 Two things that cost prints and must not be undone:
 
@@ -119,12 +136,11 @@ knows what filament 2 *is*.
 
 ## Open items
 
-1. **Read the colour change out of a real Bambu Studio export.** Bambu Studio
-   can print multi-colour from the external spool with no AMS, so the sequence
-   exists; six prints have gone into guessing it a command at a time and the
-   guessing has to stop. Slice a two-colour object with that option on, export,
-   and transcribe the change block. Costs no prints and settles it. Run
-   `mode: "purge"` meanwhile.
+1. **Run the transcribed colour change once, and watch it.** The block now
+   matches a real export line for line, but has never been sent to a printer.
+   `mode: "bambu"` for the full automatic change, `mode: "cut"` to stop before
+   the toolchange. Babysit it; `mode: "purge"` is the fallback that has always
+   worked.
 2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
    business value of anything on this list.

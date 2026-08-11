@@ -968,38 +968,35 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   const t = cfg.temp?.nozzle ?? 220;
   const up = +(atZ + (c.liftMm ?? 3)).toFixed(2);
   const cutX = c.cutX ?? 180;                       // A1 mini: the 180 mm edge
-  const cutRetract = c.cutRetractMm ?? 18;          // retraction_distances_when_cut
   // mm/min of 1.75 mm filament for a given volumetric rate — the slicer's own
   // conversion, and the reason its purge feedrates look like arbitrary numbers.
   const feed = Math.round(((c.flushMmps ?? cfg.speed?.maxVolumetricMmps ?? 12) / 2.4053) * 60);
   const purge = Math.max(0, c.purgeMm ?? 60);
-  // The filament slot to change into. 1, read out of a real Bambu Studio export
-  // for a manual external-spool change on this printer — NOT 255. 255 means "no
-  // next tool" and appears only in the end-of-print unload; asking for it takes
-  // the branch of Bambu's own template that does nothing, which is how a
-  // two-colour keychain came out in one colour.
-  // 254 is the EXTERNAL SPOOL. Not 1, which is AMS slot 1 — asking for that on
-  // a printer with no AMS attached produced "AMS Lite communication is
-  // abnormal" and a deadlock, which is the printer being clear that it went
-  // looking for hardware that is not there. And not 255, which means no tool at
-  // all and does nothing. The `A` suffix is AMS addressing too: Bambu's own
-  // end-of-print unload, on a machine with no AMS, is "M620 S255" with no A.
-  const tool = c.tool ?? 254;
-  // The "A" suffix on M620/M621 is AMS framing, and the two halves of this
-  // sequence want opposite things from it. Measured on the machine, one run each:
+  // The temperature the flush runs at. Bambu uses the HIGHEST of the two
+  // filaments rather than the printing temperature — "always use highest
+  // temperature to flush", in its own words — so the old colour clears out
+  // instead of leaving a plug of the stiffer one behind.
+  const flushT = c.flushTemp ?? 240;
+  // Which filament to change INTO, and it is an index into the print's own
+  // filament list — 0 is the first colour, 1 is the second. Not 254, not 255.
   //
-  //   M620 S1A   (AMS)       cut + retract happened     load deadlocked
-  //   M620 S254  (external)  cut skipped                load prompted and worked
-  //
-  // M620.11 is what performs the cut, and it only seems to act when the change
-  // was opened AMS-style. So framing and tool are separate knobs: amsFraming
-  // keeps the wrapper the cut wants while `tool` stays on the external spool the
-  // load needs. Whether the printer accepts that combination is the one thing
-  // left to find out, and it is one print to try.
-  const ams = (c.amsFraming ?? tool < 254) ? 'A' : '';
+  // We reached 254 by reasoning that it "means the external spool", and 255 by
+  // reasoning that it "means no tool". Both were wrong, and a real two-colour
+  // export from Bambu Studio for THIS printer — A1 mini, external spool,
+  // `extruder_ams_count = 1#0|4#0`, i.e. no AMS attached at all — settles it:
+  // it changes to the second colour with `M620 S1A` / `T1`, and back with
+  // `M620 S0A` / `T0`. 255 appears once, in the end-of-print unload.
+  const tool = c.tool ?? 1;
+  // The `A` suffix is NOT AMS addressing, which is what we had assumed and put
+  // in this file twice. The export above has no AMS and still writes S1A / S0A
+  // on every change. It is on unconditionally because that is what the machine
+  // is actually sent; `amsFraming: false` remains only to reproduce the old
+  // behaviour when comparing against an earlier print.
+  const ams = (c.amsFraming ?? true) ? 'A' : '';
 
   const out = [
-    '; ===== A1 mini filament change: cut, unload, reload =====',
+    '; ===== A1 mini filament change, transcribed from a real Bambu Studio =====',
+    '; ===== two-colour export for this printer with no AMS attached      =====',
     'G392 S0',
     'M1007 S0',
     `M620 S${tool}${ams}`,
@@ -1008,29 +1005,31 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
     'M400',
     'M106 P1 S0',
     'M106 P2 S0',
-    `M104 S${t} ; keep the old colour molten for the cut`,
+    `M104 S${t}`,
     `G1 X${cutX} F18000 ; to the cutter`,
-    `M620.11 S1 I${tool} E-${cutRetract} F1200 ; the long retraction that cuts it`,
+    // The cut.
+    //
+    // `M620.11 S0`, with no parameters at all — and it is emitted TWICE, once
+    // before the toolchange and once after. What this file used to send was
+    // `M620.11 S1 I<tool> E-18 F1200`, a form that does not appear anywhere in
+    // a real export: the S value, the I parameter and the E retraction were all
+    // invented, reasoning from `retraction_distances_when_cut` in the profile.
+    // Six prints were spent varying the arguments of a command whose real
+    // signature takes none, which is why none of them ever cut.
+    'M620.11 S0',
     'M400',
-    `M620.1 E F${feed} T${t}`,
+    `M620.1 E F${feed} T${flushT}`,
     `M620.10 A0 F${feed}`,
-    // The toolchange, and the one part of this that has not worked yet.
-    //
-    // On a real machine the cut and the pull-back both happened; T1 then left
-    // the printer sitting on "the filament is not inserted" with no way to feed
-    // the new colour in. The likely reason is that our 3mf declares one
-    // filament, so slot 1 is a slot the printer has no configuration for: it
-    // knows to ask, and does not know what it is being handed.
-    //
-    // mode "cut" leaves this line out. The cut and the unload are the fiddly
-    // half and they work; loading from the printer's own filament menu is
-    // twenty seconds an operator already knows how to do.
+    // The toolchange is what drives the cut-unload-reload routine; the M620.x
+    // lines above only set it up. mode "cut" leaves it out and pauses instead,
+    // which is the manual swap.
     ...(opts.load === false
       ? ['; no toolchange — load from the printer\'s filament menu at the pause below']
-      : [`T${tool} ; the printer stops and asks, because the print task was sent`,
-         '        ; with manual_color_change set']),
-    `M620.1 E F${feed} T${t}`,
+      : [`T${tool}`, 'M73 E1']),
+    `M620.1 E F${feed} T${flushT}`,
+    `M620.10 A1 F${feed} L${(c.flushLenMm ?? 342.471).toFixed(3)} H0.4 T${flushT}`,
     'G1 Y90 F9000',
+    'M620.11 S0',
     'M400',
     'G92 E0',
     'M628 S0',
