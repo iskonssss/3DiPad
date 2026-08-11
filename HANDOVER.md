@@ -52,11 +52,27 @@ Hard-won facts, each bought with a real print:
 | `T255` | "no tool" — silently does nothing, prints one colour |
 | `T1` + `A` suffix | AMS slot 1 → "AMS Lite communication is abnormal", deadlock |
 | `T254`, no suffix | external spool — load prompts and works, but cut is skipped |
-| `M620 S1A` framing | cut + eject work, load deadlocks |
+| `M620 S1A` framing, `M620.11 … I1` | cut + eject work, load deadlocks |
+| `M620 S254A` framing, `M620.11 … I254` | **no cut.** Falls through to the bare pause; operator unloads by hand |
 
-So framing and slot are separate knobs (`amsFraming`, `tool`). The untested
-combination is `amsFraming: true` with `tool: 254` — AMS framing for the cut,
-external slot for the load. **That is the immediate next experiment: one print.**
+That last row is the `amsFraming: true` + `tool: 254` experiment, and it settles
+it: **AMS framing is not what makes the cut fire.** The file was checked before
+the print and did carry `M620 S254A` and `M620.11 S1 I254 E-18`, so the printer
+was genuinely asked and genuinely declined.
+
+Read the table down the `I` parameter instead and it lines up: `M620.11 S1 I<n>`
+cuts when `n` is an AMS slot and does nothing when it is 254. The framing moved
+and the behaviour did not; the slot moved and it did. So the next thing to try
+is the cut with an AMS index and **no toolchange at all** — `mode: "cut"`,
+`tool: 1`, `amsFraming: true`, which emits `M620 S1A` + `M620.11 S1 I1`. That is
+the row that already cut and ejected; the only reason it was abandoned was the
+load deadlocking, and `mode: "cut"` emits no `T` command for it to deadlock on.
+**One print decides it.**
+
+Worth knowing before reading a result: the startup log prints the `mode` but
+NOT the framing or the slot, so it cannot tell you what was actually asked for.
+Check the generated `.gcode` for the `M620` lines before spending a print — a
+Notepad search of `engine.js` was what nearly recorded this run as invalid.
 
 Two things that cost prints and must not be undone:
 
@@ -85,13 +101,21 @@ knows what filament 2 *is*.
 
 ## Open items
 
-1. **Test `amsFraming: true`** — one print decides whether the change is
-   automatic or stays manual.
+1. **Try the cut with an AMS index and no toolchange** — `mode: "cut"`,
+   `tool: 1`, `amsFraming: true`. `amsFraming: true` with `tool: 254` has now
+   been run and does not cut (see the table). One print decides this one.
+   Until it lands, `mode: "purge"` is the mode to run: it retracts 8mm to pull
+   the old colour clear of the melt zone before pausing, which is what makes
+   the manual unload quick.
 2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
    business value of anything on this list.
-3. **Printer 2 needs Developer Mode** turned on.
-4. **PNG/JPEG import** — the next feature. See below.
+3. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
+   configured IP is on a different subnet from the booth (`192.168.10.x` against
+   the booth's `192.168.100.x`) and every connection times out before Developer
+   Mode is ever reached. Fix the address first.
+4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
+   merged. The booth laptop is still on `main` and does not have it.
 
 ## Next feature: image import
 
