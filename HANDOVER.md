@@ -45,18 +45,69 @@ The booth pauses mid-print to swap filament. Modes in `colourChange.mode`:
 - `bambu` — full sequence including the toolchange.
 - `pause` — bare `M400 U1`.
 
-Hard-won facts, each bought with a real print:
+Hard-won facts, each bought with a real print — and then overturned by a file
+that cost nothing:
 
 | what | result |
 |---|---|
 | `T255` | "no tool" — silently does nothing, prints one colour |
-| `T1` + `A` suffix | AMS slot 1 → "AMS Lite communication is abnormal", deadlock |
-| `T254`, no suffix | external spool — load prompts and works, but cut is skipped |
-| `M620 S1A` framing | cut + eject work, load deadlocks |
+| `T254`, `M620 S254` | no cut. Load prompts and works |
+| `M620 S254A`, `M620.11 … I254` | no cut |
+| `M620 S1A`, `M620.11 … I1`, with `T1` | cut + eject happened once; load deadlocked |
+| `M620 S1A`, `M620.11 … I1`, no `T` | no cut |
 
-So framing and slot are separate knobs (`amsFraming`, `tool`). The untested
-combination is `amsFraming: true` with `tool: 254` — AMS framing for the cut,
-external slot for the load. **That is the immediate next experiment: one print.**
+**Every row above was measured with a command that does not exist.** We were
+sending `M620.11 S1 I<tool> E-18 F1200`, whose S value, `I` parameter and `E`
+retraction were all reasoned out from `retraction_distances_when_cut` in the
+machine profile. Six prints went into varying the arguments of a command whose
+real signature takes none of them, which is why the cut never fired and why the
+table above explains nothing.
+
+A real Bambu Studio two-colour export for this exact machine — A1 mini,
+external spool, `extruder_ams_count = 1#0|4#0`, i.e. **no AMS of any size
+attached** — settles all of it:
+
+```
+G392 S0 / M1007 S0
+M620 S1A                 <- filament INDEX 1, and the A is there with no AMS
+M204 S9000 / G1 Z.. / M400 / M106 P1 S0 / M106 P2 S0 / M104 S220
+G1 X180 F18000           <- the cutter
+M620.11 S0               <- the cut. No I, no E, no F. Emitted TWICE.
+M400
+M620.1 E F299.339 T240   <- flush at the HIGHER temp, not the print temp
+M620.10 A0 F299.339
+T1                       <- the toolchange IS what drives cut-unload-reload
+M73 E1
+M620.1 E F299.339 T240
+M620.10 A1 F299.339 L342.471 H0.4 T240
+G1 Y90 F9000
+M620.11 S0               <- again, after the change
+M400 / G92 E0 / M628 S0
+   ... FLUSH / WIPE / FLUSH / WIPE ...
+M629
+   ... cool-down wipe, M622 cali block ...
+M621 S1A
+G392 S0 / M1007 S1
+```
+
+Three beliefs written into this file were wrong, and each cost prints:
+
+1. **`254` is not "the external spool" and `255` is not "no tool".** `T<n>` takes
+   an index into the print's own filament list — 0 for the first colour, 1 for
+   the second. 255 appears once, in the end-of-print unload.
+2. **The `A` suffix is not AMS addressing.** The no-AMS export writes `S1A` and
+   `S0A` on every change.
+3. **`M620.11` does not perform the cut and takes no arguments.** `T<n>` drives
+   the routine.
+
+There is also **no pause anywhere in the real file** — `M400 U1` appears only as
+the `machine_pause_gcode` config value. The stop comes from
+`manual_color_change` in the print task, which we already send. Our pause is
+kept anyway, outside `M620…M621`, because a file that never stops is a
+one-colour keychain and that is the one failure nobody can see coming.
+
+`src/gcode/engine.js` now emits the sequence above verbatim. **It has not been
+run on hardware yet** — that is the next print, and it is worth babysitting.
 
 Two things that cost prints and must not be undone:
 
@@ -82,16 +133,50 @@ knows what filament 2 *is*.
 - **Developer Mode** must be on per-printer or print commands are refused.
 - A Bambu never leaves `FAILED` on its own; the dashboard's "Bed cleared" button
   records the operator's word instead.
+- **A printer that reports nothing is not a printer doing nothing.** Bambu sends
+  DELTAS, and a delta need not mention `gcode_state` at all, so any code that
+  waits passively for a state to change can time out while the printer is
+  working perfectly. Anything that waits on printer state must ask for a
+  `pushall` part way through rather than only listening. This was diagnosed
+  once, in #54, and fixed in `clearIfStuck` — `confirmStart` had the same loop
+  ten lines away in another file and kept the bug for months, which is why "the
+  file is on the SD card but the printer did not start it" came back long after
+  it was supposedly settled. **When a fix like this lands, grep for the other
+  call sites before closing it.**
+- **A paused printer holds the machine exactly like a failed one.** The next
+  file uploads, the print command is accepted, and nothing starts. `PAUSE` is
+  deliberately NOT in `STUCK_STATES` — a pause mid-job is the colour change
+  doing its job — so it is cleared only in `clearBeforeSend`, where any pause
+  belongs to a job already finished with. A booth ends up here every time an
+  operator abandons a swap.
 
 ## Open items
 
-1. **Test `amsFraming: true`** — one print decides whether the change is
-   automatic or stays manual.
+1. **Run the transcribed colour change once, and watch it.** The block now
+   matches a real export line for line, but has never been sent to a printer.
+   `mode: "bambu"` for the full automatic change, `mode: "cut"` to stop before
+   the toolchange. Babysit it; `mode: "purge"` is the fallback that has always
+   worked.
 2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
    business value of anything on this list.
-3. **Printer 2 needs Developer Mode** turned on.
-4. **PNG/JPEG import** — the next feature. See below.
+3. **A `FAILED` printer needs its own screen, and nothing else reaches it.**
+   `stop` is accepted — the printer answers "success" — and `gcode_state` stays
+   `FAILED` anyway. The dashboard's reset sends that same `stop`, so it does not
+   help either. Someone has to dismiss the dead job on the touchscreen, or start
+   a file from it. Until then every upload lands on a printer that will not
+   start anything, and the booth reports "on the SD card but the printer did not
+   start it" over and over.
+   Worth an honest note about diagnosing this: an earlier version of this entry
+   said printer 2's IP was on the wrong subnet, reasoned from one log where the
+   laptop was on `192.168.100.x` and the printer on `192.168.10.x`. Running
+   `npm run test-printer` showed the printer reachable, logging in over FTPS,
+   and reporting `FAILED 0%`. The printers move between a home network and the
+   booth's; a timeout usually means the machine is elsewhere, not misconfigured.
+   **Run the tool before theorising about the network** — it answers in 30
+   seconds what a log will not.
+4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
+   merged. The booth laptop is still on `main` and does not have it.
 
 ## Next feature: image import
 

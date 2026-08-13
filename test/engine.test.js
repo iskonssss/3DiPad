@@ -549,22 +549,31 @@ test('the bambu colour change cuts, unloads and reloads, in that order', async (
   const lines = colourChangeBlock({ ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu' } }, 2.24);
   const at = (re) => lines.findIndex((l) => re.test(l));
 
-  // 255 is the external spool. An AMS slot number here would send the printer
-  // looking for a unit that is not attached.
-  // 254 = the external spool, with no AMS suffix. Slot 1 with an "A" is AMS
-  // addressing and produced "AMS Lite communication is abnormal" on a printer
-  // that has no AMS attached.
-  assert.ok(at(/^M620 S254$/) >= 0, 'the change must be opened against the external spool');
-  assert.ok(at(/^M621 S254$/) > at(/^M620 S254$/), 'and closed again');
+  // Every line below is transcribed from a real Bambu Studio two-colour export
+  // for this printer with NO AMS attached (`extruder_ams_count = 1#0|4#0`).
+  //
+  // What this test used to assert was `M620 S254`, `M620.11 S1 I254 E-18` and
+  // `T254` — a sequence that appears in no export anywhere, reasoned out from
+  // the profile rather than read from a file. It passed on every run and cost
+  // six prints, because a test that a fabricated command is present tells you
+  // only that you fabricated it consistently.
+  assert.ok(at(/^M620 S1A$/) >= 0, 'the change is opened against filament index 1, A suffix and all');
+  assert.ok(at(/^M621 S1A$/) > at(/^M620 S1A$/), 'and closed again');
 
-  // The cut is a move into the cutter followed by the long retraction. Either
-  // one alone does nothing useful, and the order is not interchangeable.
+  // The cut: a move to the cutter, then M620.11 S0 — no I, no E, no F. The
+  // slicer emits it twice, either side of the toolchange.
   const cut = at(/^G1 X180 F18000/);
-  const snip = at(/^M620\.11 S1 I254 E-18/);
-  const unload = at(/^T254\b/);
+  const snip = at(/^M620\.11 S0$/);
+  const unload = at(/^T1$/);
   assert.ok(cut >= 0, 'no move to the cutter');
-  assert.ok(snip > cut, 'the retraction that cuts must follow the move to the cutter');
-  assert.ok(unload > snip, 'the unload must come after the cut, or it pulls uncut filament back');
+  assert.ok(snip > cut, 'M620.11 must follow the move to the cutter');
+  assert.ok(unload > snip, 'the toolchange must come after the cut, or it pulls uncut filament back');
+  assert.equal(lines.filter((l) => /^M620\.11 S0$/.test(l)).length, 2,
+    'the export emits M620.11 S0 on both sides of the toolchange');
+  assert.ok(!lines.some((l) => /^M620\.11 S1 I/.test(l)),
+    'the parameterised M620.11 was invented and must not come back');
+  assert.ok(!lines.some((l) => /^T25[45]\b/.test(l)),
+    'T254/T255 are not filament indices — 255 is the end-of-print unload');
 
   // Purge and wipe belong after the new colour is in, never before.
   const purge = at(/^G1 E23\.70/);
@@ -625,7 +634,7 @@ test('an explicit gcode override beats every mode, and is not silently ignored',
   // …and with the override gone, the mode is honoured again.
   const { gcode, ...noOverride } = { ...base.colourChange, mode: 'bambu' };
   const back = colourChangeBlock({ ...base, colourChange: noOverride }, 2.24).join('\n');
-  assert.match(back, /^T254\b/m, 'removing the override should give the printer its own change back');
+  assert.match(back, /^T1$/m, 'removing the override should give the printer its own change back');
 });
 
 test('the booth says which swap is really in effect, including the override', () => {
@@ -741,19 +750,25 @@ test('the print task asks for a manual colour change, on an external spool', asy
   assert.equal(cmd.print.use_ams, false, 'an AMS would do the change itself');
 });
 
-test('the change asks for a real filament slot, never 255', async () => {
+test('the change asks for a filament index, never 254 or 255', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
   const base = loadConfig();
   const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu' } }, 2.24).join('\n');
 
-  // 255 means "no next tool" and appears only in an end-of-print unload. Asking
-  // for it takes the branch of Bambu's own template that does nothing, which is
-  // how a two-colour keychain came out in one colour.
-  assert.ok(!/\bT255\b/.test(block), '255 means no tool at all, and does nothing');
-  assert.ok(!/\bT1\b|S1A\b/.test(block), 'AMS slot 1 on a printer with no AMS is a communication error');
-  assert.match(block, /^T254\b/m, 'the external spool');
-  assert.match(block, /^M620 S254$/m, 'and no "A" — that suffix is AMS addressing');
+  // This test used to assert the exact opposite — that T254 was right and that
+  // "T1 or S1A is a communication error on a printer with no AMS". Both claims
+  // were reasoned out, never read, and both are wrong: a real Bambu Studio
+  // two-colour export for an A1 mini reporting `extruder_ams_count = 1#0|4#0`
+  // (no AMS of any size) changes with M620 S1A and T1, and writes the A suffix
+  // on every single change.
+  //
+  // The lesson is the test, not the value. An assertion written from a theory
+  // passes forever and proves only that the theory was applied consistently.
+  assert.ok(!/\bT255\b/.test(block), '255 is the end-of-print unload, not a change');
+  assert.ok(!/\bT254\b/.test(block), '254 is not a filament index — it was invented');
+  assert.match(block, /^T1$/m, 'the second colour is filament index 1');
+  assert.match(block, /^M620 S1A$/m, 'and the A suffix is present with no AMS attached');
 });
 
 /**
@@ -774,13 +789,13 @@ test('the "cut" mode cuts and unloads but leaves the loading to a person', async
   const has = (b, re) => b.some((l) => re.test(l));
   for (const [name, block] of [['cut', cut], ['bambu', full]]) {
     assert.ok(has(block, /^G1 X180 F18000/), `${name} should still go to the cutter`);
-    assert.ok(has(block, /^M620\.11 S1 I254 E-18/), `${name} should still cut`);
+    assert.ok(has(block, /^M620\.11 S0$/), `${name} should still cut`);
     assert.ok(has(block, /^M400 U1\b/), `${name} must stop`);
     assert.ok(has(block, /^G1 E23\.70/), `${name} should still purge the new colour`);
   }
   // The one difference, and the whole point of the mode.
   assert.ok(!has(cut, /^T\d/), '"cut" must not ask for a toolchange');
-  assert.ok(has(full, /^T254\b/), '"bambu" still does');
+  assert.ok(has(full, /^T1$/), '"bambu" still does — with the filament index, not 254');
 });
 
 /**

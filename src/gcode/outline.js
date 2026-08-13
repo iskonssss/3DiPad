@@ -220,7 +220,7 @@ export function fillPolygon(poly, w, h) {
 
 /* ---------------- morphology via chamfer distance transform ---------------- */
 
-function distanceTo(mask, w, h, target) {
+export function distanceTo(mask, w, h, target) {
   const INF = 1e9;
   const d = new Float32Array(w * h);
   for (let i = 0; i < d.length; i++) d[i] = mask[i] === target ? 0 : INF;
@@ -257,7 +257,7 @@ export function erode(mask, w, h, r) {
   for (let i = 0; i < out.length; i++) out[i] = d[i] > r ? 1 : 0;
   return out;
 }
-function dilate(mask, w, h, r) {
+export function dilate(mask, w, h, r) {
   if (r <= 0) return mask;
   const d = distanceTo(mask, w, h, 1); // distance to foreground
   const out = new Uint8Array(w * h);

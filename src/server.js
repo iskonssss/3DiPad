@@ -145,8 +145,8 @@ app.post('/api/submit', async (req, res) => {
   if (meta.overBudget) {
     return res.status(422).json({ ok: false, error: 'Design exceeds the print-time limit — simplify it.', meta });
   }
-  if (!meta.strokeCount) {
-    return res.status(422).json({ ok: false, error: 'Nothing to print — draw a design first.', meta });
+  if (!meta.hasDesign) {
+    return res.status(422).json({ ok: false, error: 'Nothing to print — draw or upload a design first.', meta });
   }
 
   const seq = queue.nextSeq();
@@ -425,12 +425,13 @@ function sanitizeDesign(body) {
   // the drawing area is bounded by the largest shape we allow
   const lim = Math.max(b.customMax[0], b.customMax[1], ...Object.values(b.shapeSizes).flat());
   const design = cleanStrokes(body?.design, lim);
+  const image = sanitizeImage(body?.image);
   const customOutline = shape === 'custom' ? cleanPoints(body?.customOutline, b.customMax[0], b.customMax[1]) : null;
   const holePos = ['left', 'right', 'top', 'none'].includes(body?.holePos) ? body.holePos : null;
   const hole = body?.hole && Number.isFinite(+body.hole.x) && Number.isFinite(+body.hole.y)
     ? { x: clamp(+body.hole.x, 0, lim), y: clamp(+body.hole.y, 0, lim) }
     : null;
-  return { shape, colours, design, customOutline, hole, holePos: holePos || 'top' };
+  return { shape, colours, design, image, customOutline, hole, holePos: holePos || 'top' };
 }
 
 function pickColour(name) {
@@ -467,6 +468,21 @@ function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
   }
   return out;
 }
+// An uploaded drawing arrives already decoded and thresholded by the browser:
+// { w, h, data } where data is base64 bit-packed ink (see image.js). Cap the
+// dimensions — a plate-resolution mask needs no more than about 850 cells on
+// its long side, and the point of the cap is to refuse a payload that would
+// blow the mask past what imageCoverage will raster.
+function sanitizeImage(img) {
+  if (!img || typeof img !== 'object') return null;
+  const w = img.w | 0, h = img.h | 0;
+  if (w < 1 || h < 1 || w > 2000 || h > 2000 || w * h > 3_000_000) return null;
+  if (typeof img.data !== 'string' || !img.data.length) return null;
+  // base64 of a bit-packed mask: about ceil(w*h/8) bytes, ~1.34x as base64.
+  if (img.data.length > Math.ceil((w * h) / 8) * 2 + 8) return null;
+  return { w, h, data: img.data };
+}
+
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
 
 /**
@@ -480,9 +496,23 @@ function confirmStart(printer) {
   const deadline = Date.now() + waitMs;
   const busy = (s) => s && (['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(s.state) || (s.percent ?? 0) > 0);
   return new Promise((resolve) => {
+    let asked = false;
     const poll = () => {
       if (busy(monitor.states()[printer.id])) return resolve(true);
       if (Date.now() >= deadline) return resolve(false);
+      // Ask for the whole picture once, half way through — the same lesson
+      // clearIfStuck already carries, and it applies here for the same reason.
+      //
+      // The printer reports in DELTAS, and a delta need not mention gcode_state
+      // at all. Waiting passively for one to say RUNNING can outlast this
+      // timeout while the print is running perfectly, and the booth then
+      // announces "on the SD card but the printer did not start it" about a job
+      // that is already laying its first layer. Whether that happens is pure
+      // timing, which is why it can behave for days and then not.
+      if (!asked && Date.now() > deadline - waitMs / 2) {
+        asked = true;
+        publishCommand(printer, { pushing: { sequence_id: '2', command: 'pushall' } }, cfg).catch(() => {});
+      }
       setTimeout(poll, 1000).unref?.();
     };
     poll();
@@ -525,9 +555,25 @@ function probeStart(printer) {
  * job that failed and refuses everything else. FINISH behaves the same way
  * until the plate is taken. Both are cleared with the same command the
  * printer's own screen sends.
+ *
+ * PAUSE is cleared here too, and ONLY here. A paused printer holds the machine
+ * exactly like a failed one: the next file uploads to the SD card, the print
+ * command is accepted, and nothing ever starts. It is the state a booth ends up
+ * in every time an operator abandons a colour change, which on a bad day is
+ * several times an hour.
+ *
+ * It must never go in STUCK_STATES itself. A pause in the middle of a job is
+ * the colour change doing its job, and anything that treats that as stuck would
+ * stop a print with a child's keychain half finished. Here, on the way to
+ * dispatching a NEW job, any pause belongs to a job we are already done with.
  */
 function clearBeforeSend(printer) {
-  return clearIfStuck(printer, cfg, () => monitor.states()[printer.id]);
+  const read = () => {
+    const s = monitor.states()[printer.id];
+    if (!s || String(s.state || '').toUpperCase() !== 'PAUSE') return s;
+    return { ...s, state: 'FAILED' };   // treat a leftover pause as stuck, here only
+  };
+  return clearIfStuck(printer, cfg, read);
 }
 
 const dispatcher = createDispatcher({
@@ -556,6 +602,16 @@ const dispatcher = createDispatcher({
     else if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
     else if (e.type === 'failed') console.error(`[${e.printer.id}] send failed at ${e.stage}: ${e.error} — ${e.job.filename} back in the queue`);
     else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
+    else if (e.type === 'blocked') {
+      // Said plainly, and naming the one action that works. Nothing the booth
+      // can send moves a printer out of this — `stop` is accepted and ignored.
+      console.error('');
+      console.error(`[${e.printer.id}] NOT SENT — ${e.printer.name} is holding a ${e.state} job.`);
+      console.error('           Clear it on the PRINTER\'S OWN SCREEN (dismiss the finished/failed');
+      console.error('           job, and take the plate off), then press Send on the dashboard.');
+      console.error(`           ${e.job.filename} stays assigned to it and will go as soon as it is clear.`);
+      console.error('');
+    }
     else if (e.type === 'notstarted') {
       console.error(`[${e.printer.id}] ${e.job.filename} is on the SD card but the printer did not start it.`);
       // The start command and the status stream travel the same MQTT topics, so
