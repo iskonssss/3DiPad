@@ -160,10 +160,21 @@ knows what filament 2 *is*.
 2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
    business value of anything on this list.
-3. **Printer 2 is unreachable, and Developer Mode is not the whole story.** Its
-   configured IP is on a different subnet from the booth (`192.168.10.x` against
-   the booth's `192.168.100.x`) and every connection times out before Developer
-   Mode is ever reached. Fix the address first.
+3. **A `FAILED` printer needs its own screen, and nothing else reaches it.**
+   `stop` is accepted — the printer answers "success" — and `gcode_state` stays
+   `FAILED` anyway. The dashboard's reset sends that same `stop`, so it does not
+   help either. Someone has to dismiss the dead job on the touchscreen, or start
+   a file from it. Until then every upload lands on a printer that will not
+   start anything, and the booth reports "on the SD card but the printer did not
+   start it" over and over.
+   Worth an honest note about diagnosing this: an earlier version of this entry
+   said printer 2's IP was on the wrong subnet, reasoned from one log where the
+   laptop was on `192.168.100.x` and the printer on `192.168.10.x`. Running
+   `npm run test-printer` showed the printer reachable, logging in over FTPS,
+   and reporting `FAILED 0%`. The printers move between a home network and the
+   booth's; a timeout usually means the machine is elsewhere, not misconfigured.
+   **Run the tool before theorising about the network** — it answers in 30
+   seconds what a log will not.
 4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
    merged. The booth laptop is still on `main` and does not have it.
 
