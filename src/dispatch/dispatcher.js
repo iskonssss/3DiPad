@@ -57,6 +57,27 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
       try {
         const r = await beforeSend(printer, job);
         if (r?.needed) onEvent({ type: 'cleared', job, printer, ok: !!r.cleared, state: r.state });
+        // A printer that would not let go is not going to print this either.
+        //
+        // We used to upload and send the start command anyway, on the theory
+        // that a lingering FAILED might only be the printer's record of the last
+        // job rather than a lock on the next one. Sometimes it is. When it is
+        // not, the file lands on the SD card, the start is ignored, and the
+        // booth says so two minutes later — so the operator presses Send again,
+        // and again, with nothing in the message naming the one thing that
+        // actually has to happen: someone clearing the job on the printer's own
+        // screen. An afternoon went that way.
+        //
+        // The job stays assigned to this printer, so pressing Send once the
+        // screen is clear picks it straight back up.
+        if (r?.needed && !r.cleared) {
+          queue.setStatus(job.id, 'assigned', {
+            printerId: printer.id,
+            dispatch: { ok: false, uploaded: false, blocked: r.state, error: `printer is holding a ${r.state} job` },
+          });
+          onEvent({ type: 'blocked', job, printer, state: r.state });
+          return;
+        }
       } catch (e) { console.error('pre-send check failed', e); }
     }
     // probeStart lets the transport find out which start command this firmware

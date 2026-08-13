@@ -602,6 +602,16 @@ const dispatcher = createDispatcher({
     else if (e.type === 'sent') console.log(`[${e.printer.id}] started ${e.job.filename} for ${e.job.contact?.name}`);
     else if (e.type === 'failed') console.error(`[${e.printer.id}] send failed at ${e.stage}: ${e.error} — ${e.job.filename} back in the queue`);
     else if (e.type === 'manual') console.log(`[${e.printer.id}] ${e.job.filename} needs a manual load (${e.reason})`);
+    else if (e.type === 'blocked') {
+      // Said plainly, and naming the one action that works. Nothing the booth
+      // can send moves a printer out of this — `stop` is accepted and ignored.
+      console.error('');
+      console.error(`[${e.printer.id}] NOT SENT — ${e.printer.name} is holding a ${e.state} job.`);
+      console.error('           Clear it on the PRINTER\'S OWN SCREEN (dismiss the finished/failed');
+      console.error('           job, and take the plate off), then press Send on the dashboard.');
+      console.error(`           ${e.job.filename} stays assigned to it and will go as soon as it is clear.`);
+      console.error('');
+    }
     else if (e.type === 'notstarted') {
       console.error(`[${e.printer.id}] ${e.job.filename} is on the SD card but the printer did not start it.`);
       // The start command and the status stream travel the same MQTT topics, so

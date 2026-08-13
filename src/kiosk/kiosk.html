@@ -149,6 +149,7 @@
   .layerpick button.sel { border-color: var(--accent); }
   .dot { width: 15px; height: 15px; border-radius: 4px; border: 1px solid #ffffff40; }
   .penrow { display: flex; align-items: center; gap: 10px; }
+  .wide { width: 100%; margin-top: 8px; }
   .imgopt { display: flex; gap: 6px; align-items: center; margin-top: 8px; cursor: pointer; }
   .imgnote { margin: 8px 0 0; line-height: 1.35; }
   .penrow input[type=range] { flex: 1; accent-color: var(--accent); }
@@ -298,42 +299,35 @@
 
   <section class="screen studio" data-screen="studio">
     <div class="studio-bar">
-      <h2>Design your keychain</h2>
+      <h2 id="step-title">Design your keychain</h2>
       <div class="meter" title="How full the print is"><i id="fill-bar"></i></div>
     </div>
 
     <div class="studio-grid">
       <aside class="side">
-        <div class="ctl">
-          <h4>Base shape</h4>
+        <!-- One step at a time. The old panel showed shape, hole, tool, pen and
+             both colours at once — eleven controls before a child has drawn a
+             line, and an adult has to be talked through which one to touch
+             first. Each step now shows only what that step needs. -->
+        <div class="ctl" data-step="base">
+          <h4>Pick a shape</h4>
           <div class="chips" id="shape-chips"></div>
+          <button class="btn ghost sm wide" id="clear-base">Clear base</button>
         </div>
 
-        <div class="ctl">
-          <h4>Keyring hole <span id="hole-state" class="mini">not placed</span></h4>
-          <div class="holebtns" id="holebtns">
-            <button data-hole="left">Left</button>
-            <button data-hole="top">Top</button>
-            <button data-hole="right">Right</button>
-            <button data-hole="none">None</button>
-            <button data-hole="tap" id="tap-btn">📍 Tap</button>
-          </div>
-        </div>
-
-        <div class="ctl" id="image-ctl">
-          <h4>Upload a drawing</h4>
+        <div class="ctl" data-step="base" id="image-ctl">
+          <h4>…or upload a drawing</h4>
           <input id="img-file" type="file" accept="image/png,image/jpeg" style="display:none" />
-          <button class="btn ghost sm" id="img-pick" style="width:100%">🖼️ Choose a photo</button>
+          <button class="btn ghost sm wide" id="img-pick">🖼️ Choose a photo</button>
           <div id="img-controls" style="display:none">
             <div class="penrow"><span class="mini">Threshold</span>
               <input id="img-threshold" type="range" min="20" max="240" step="1" value="128" /></div>
             <label class="mini imgopt"><input id="img-invert" type="checkbox" /> Light drawing on a dark background</label>
-            <button class="btn ghost sm" id="img-remove" style="width:100%;margin-top:8px">Remove photo, draw instead</button>
-            <p class="mini imgnote">Thin lines are thickened so they print; specks too small to survive are dropped.</p>
+            <button class="btn ghost sm wide" id="img-remove">Remove photo, draw instead</button>
           </div>
         </div>
 
-        <div class="ctl" id="tool-ctl">
+        <div class="ctl" data-step="draw" id="tool-ctl">
           <h4>Tool</h4>
           <div class="seg" id="tool-seg">
             <button data-tool="pen" class="sel">✏️ Draw</button>
@@ -347,33 +341,35 @@
           </div>
         </div>
 
-        <div class="ctl" id="pen-ctl">
-          <h4>Pen tip <span id="pen-mm" class="mini">1.6 mm</span></h4>
+        <div class="ctl" data-step="draw" id="pen-ctl">
+          <h4>Pen tip <span id="pen-mm" class="mini">0.8 mm</span></h4>
           <div class="seg" id="pen-seg">
-            <button data-pen="1.0">Fine</button>
-            <button data-pen="1.6" class="sel">Medium</button>
+            <button data-pen="0.8" class="sel">Fine</button>
+            <button data-pen="1.6">Medium</button>
             <button data-pen="2.4">Thick</button>
           </div>
           <div class="penrow">
             <span class="pendot" id="pendot"></span>
-            <input id="pen-range" type="range" min="0.8" max="2.6" step="0.1" value="1.6" />
+            <input id="pen-range" type="range" min="0.8" max="2.6" step="0.1" value="0.8" />
           </div>
+          <button class="btn ghost sm wide" id="clear-drawing">Clear drawing</button>
         </div>
 
-        <div class="ctl">
-          <h4>Colours</h4>
-          <div class="layerpick" id="layerpick">
-            <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
-            <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
+        <div class="ctl" data-step="hole">
+          <h4>Where should the keyring go?</h4>
+          <div class="holebtns" id="holebtns">
+            <button data-hole="left">Left</button>
+            <button data-hole="top">Top</button>
+            <button data-hole="right">Right</button>
+            <button data-hole="tap" id="tap-btn">📍 Tap</button>
+            <button data-hole="none">No hole</button>
           </div>
-          <div class="swatches" id="swatches"></div>
+          <p class="mini" id="hole-state">not placed</p>
         </div>
 
         <div class="side-actions">
-          <button class="btn ghost sm" id="clear-drawing">Clear drawing</button>
-          <button class="btn ghost sm" id="clear-base">Clear base</button>
-          <button class="btn ghost sm" data-go="contact">Back</button>
-          <button class="btn sm go" data-go="review">Preview →</button>
+          <button class="btn ghost sm" id="step-back">← Back</button>
+          <button class="btn sm go" id="step-next">Next →</button>
         </div>
       </aside>
 
@@ -397,6 +393,18 @@
     <p class="sub">Here's your keychain. Happy with it?</p>
     <div class="card">
       <canvas id="preview" width="1000" height="640"></canvas>
+      <!-- Colours live HERE, not on the drawing board. Choosing them while
+           drawing means choosing against a blank plate and a pen that is not
+           the colour it will print; here every tap redraws the keychain as it
+           will actually come out. -->
+      <div class="ctl">
+        <h4>Colours</h4>
+        <div class="layerpick" id="layerpick">
+          <button data-layer="layer1" class="sel"><span class="dot" id="dot1"></span>Base</button>
+          <button data-layer="layer2"><span class="dot" id="dot2"></span>Drawing</button>
+        </div>
+        <div class="swatches" id="swatches"></div>
+      </div>
       <ul class="summary" id="summary"></ul>
     </div>
     <div class="nav">
@@ -478,12 +486,12 @@ const COUNTRIES=[
 const DEFAULT_CC='65';
 
 const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
-  pen:1.6,tool:'pen',eraser:6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/,
+  pen:0.8,tool:'pen',eraser:6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/,
   // An uploaded drawing is an alternative to the strokes: a thresholded bitmap
   // in plate-grid cells, posted as {w,h,data} and turned into the same design
   // coverage the engine builds from strokes. When set, the hand-drawing tools
   // step aside — the two design sources are mutually exclusive.
-  imgArea:0};
+  imgArea:0,step:'base'};
 let lastGen=null;
 
 function bboxFor(shape){
@@ -533,6 +541,53 @@ function goReview(){ // validation before review
   return true;
 }
 
+/* ---- steps ----
+   Four things in order: shape, drawing, hole, then colours on the preview.
+   The old board put all of them on screen together, which is a lot of choices
+   to hold at once when you only want to draw a cat. */
+const STEPS = [
+  { id:'base', title:'1. Pick your shape',   banner:'Pick a shape, or draw your own' },
+  { id:'draw', title:'2. Draw your design',  banner:'✏️ Draw on the plate' },
+  { id:'hole', title:'3. Add the keyring hole', banner:'Choose where the keyring goes' },
+];
+function stepIndex(){ return Math.max(0, STEPS.findIndex(s=>s.id===state.step)); }
+function setStep(id){
+  state.step = id;
+  for (const el of $$('[data-step]')) el.style.display = el.dataset.step===id ? '' : 'none';
+  const st = STEPS[stepIndex()];
+  $('#step-title').textContent = st.title;
+  $('#step-next').textContent = id==='hole' ? 'Preview →' : 'Next →';
+  // Drawing is only possible on the drawing step; the outline mode owns the
+  // base step when a custom shape has not been drawn yet.
+  if (id==='base') state.mode = (state.shape==='custom' && !state.customOutline) ? 'outline' : 'design';
+  else if (id==='draw') state.mode = 'design';
+  else if (id==='hole') state.mode = 'design';
+  updateBanner(); updateHoleButtons(); updateHoleState(); redraw();
+}
+function stepNext(){
+  const i = stepIndex();
+  if (state.step==='base'){
+    if (state.shape==='custom' && !state.customOutline) return toast('Draw your shape outline first',true);
+    return setStep('draw');
+  }
+  if (state.step==='draw'){
+    if (!state.strokes.length && !imgInk) return toast('Draw or upload your design first',true);
+    return setStep('hole');
+  }
+  // hole -> preview
+  if (!state.hole && state.holePos!=='none') return toast('Pick where the keyring goes, or choose "No hole"',true);
+  if (goReview()) show('review');
+}
+function stepBack(){
+  const i = stepIndex();
+  if (i===0) return show('contact');
+  setStep(STEPS[i-1].id);
+}
+function wireSteps(){
+  $('#step-next').addEventListener('click', stepNext);
+  $('#step-back').addEventListener('click', stepBack);
+}
+
 /* ---- shape chips ---- */
 function buildShapeChips(){const wrap=$('#shape-chips');wrap.innerHTML='';
   for(const [key,label] of SHAPES){const el=document.createElement('button');el.className='chip';el.dataset.shape=key;
@@ -554,7 +609,8 @@ function selectShape(shape){
 function buildSwatches(){const wrap=$('#swatches');wrap.innerHTML='';
   for(const name of CFG.palette){const hex=COLOUR_HEX[name]||'#888';const el=document.createElement('button');el.className='swatch';el.style.background=hex;el.title=name;el.dataset.name=name;
     el.addEventListener('click',()=>{state.colours[state.activeLayer]=name;updateLayerDots();markSwatch();
-      if(imgInk&&state.activeLayer==='layer2')refreshImagePreview();redraw();});wrap.appendChild(el);}
+      if(imgInk&&state.activeLayer==='layer2')refreshImagePreview();
+      redraw(); if($('[data-screen="review"]').classList.contains('active'))drawPreview();});wrap.appendChild(el);}
   $$('#layerpick button').forEach(b=>b.addEventListener('click',()=>{state.activeLayer=b.dataset.layer;
     $$('#layerpick button').forEach(x=>x.classList.toggle('sel',x===b));markSwatch();}));
   markSwatch();}
@@ -567,7 +623,7 @@ function wirePen(){
   $('#pen-range').addEventListener('input',e=>setPen(+e.target.value,true));
   $$('#tool-seg button').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
   $('#eraser-range').addEventListener('input',e=>setEraser(e.target.value));
-  setPen(1.6);setEraser(6);setTool('pen');
+  setPen(0.8);setEraser(6);setTool('pen');
 }
 function setTool(t){
   state.tool=t;
@@ -1013,6 +1069,9 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   if(state.mode==='hole'){placeHole(p);return;}
   // A photo is the design; the pen/fill/eraser step aside until it is removed.
   if(imgInk&&state.mode==='design'){toast('Remove the photo to draw by hand',true);return;}
+  // Only the drawing step draws. A stray finger on the shape or hole step used
+  // to leave a mark nobody meant to make.
+  if(state.step!=='draw'&&state.mode!=='outline'){return;}
   if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
@@ -1049,11 +1108,14 @@ function placeHole(p){
   toast(moved>1.5?'Moved it in a bit so the keyring has room 👍':'Hole placed 👍');}
 
 function updateBanner(){const b=$('#banner');
-  if(state.shape==='custom'&&state.mode==='outline'){b.style.display='';b.textContent='✏️ Draw the outline of your shape';}
-  else if(state.mode==='hole'){b.style.display='';b.textContent='📍 Tap where the keyring hole goes';}
-  else if(state.tool==='fill'){b.style.display='';b.textContent='🪣 Tap inside a shape you drew to colour it in';}
-  else if(state.tool==='eraser'){b.style.display='';b.textContent='🧽 Rub over your drawing to erase';}
-  else b.style.display='none';}
+  const say=(t)=>{b.style.display='';b.textContent=t;};
+  if(state.shape==='custom'&&state.mode==='outline')return say('✏️ Draw the outline of your shape');
+  if(state.mode==='hole')return say('📍 Tap where the keyring hole goes');
+  if(state.step==='draw'&&state.tool==='fill')return say('🪣 Tap inside a shape you drew to colour it in');
+  if(state.step==='draw'&&state.tool==='eraser')return say('🧽 Rub over your drawing to erase');
+  if(state.step==='base')return say(STEPS[0].banner);
+  if(state.step==='hole')return say(STEPS[2].banner);
+  b.style.display='none';}
 
 function canvasPx(){const bb=bboxFor(state.shape);const sx=pad.width/bb.w,sy=pad.height/bb.h;return {bb,px:p=>[p.x*sx,pad.height-p.y*sy],sx,sy};}
 function redraw(){
@@ -1371,10 +1433,10 @@ async function submit(){
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
 function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
-  state.pen=1.6;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
+  state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
-  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(1.6);selectShape(DEFAULT_SHAPE);show('welcome');}
+  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(0.8);selectShape(DEFAULT_SHAPE);setStep('base');show('welcome');}
 
 /* ---- utils ---- */
 function nextSeq(){let n=0;try{n=(parseInt(localStorage.getItem('3dipad_seq')||'0',10)||0)+1;localStorage.setItem('3dipad_seq',String(n));}catch{n=1;}return n;}
@@ -1386,9 +1448,9 @@ const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 
 /* ---- boot (after all declarations) ---- */
 if(CFG.eventName)$('#tagline').textContent=CFG.eventName;
-setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();wireImage();admInit();
+setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();wireImage();wireSteps();admInit();
 $('#submit').addEventListener('click',submit);
-updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);updateUndo();
+updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);setStep('base');updateUndo();
 
 addEventListener('resize',()=>{fitCanvas();redraw();});
 addEventListener('orientationchange',()=>setTimeout(()=>{fitCanvas();redraw();},250));
