@@ -133,6 +133,22 @@ knows what filament 2 *is*.
 - **Developer Mode** must be on per-printer or print commands are refused.
 - A Bambu never leaves `FAILED` on its own; the dashboard's "Bed cleared" button
   records the operator's word instead.
+- **A printer that reports nothing is not a printer doing nothing.** Bambu sends
+  DELTAS, and a delta need not mention `gcode_state` at all, so any code that
+  waits passively for a state to change can time out while the printer is
+  working perfectly. Anything that waits on printer state must ask for a
+  `pushall` part way through rather than only listening. This was diagnosed
+  once, in #54, and fixed in `clearIfStuck` — `confirmStart` had the same loop
+  ten lines away in another file and kept the bug for months, which is why "the
+  file is on the SD card but the printer did not start it" came back long after
+  it was supposedly settled. **When a fix like this lands, grep for the other
+  call sites before closing it.**
+- **A paused printer holds the machine exactly like a failed one.** The next
+  file uploads, the print command is accepted, and nothing starts. `PAUSE` is
+  deliberately NOT in `STUCK_STATES` — a pause mid-job is the colour change
+  doing its job — so it is cleared only in `clearBeforeSend`, where any pause
+  belongs to a job already finished with. A booth ends up here every time an
+  operator abandons a swap.
 
 ## Open items
 
