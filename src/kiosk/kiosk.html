@@ -537,7 +537,10 @@ function validate(step){
 function goReview(){ // validation before review
   if(state.shape==='custom'&&!state.customOutline)return toast('Draw your custom shape outline first',true),false;
   if(!state.strokes.length&&!imgInk)return toast('Draw or upload your design first',true),false;
-  if(!state.hole)return toast('Place the keyring hole (tap “Tap to place”, then the plate)',true),false;
+  // "No hole" is a choice, not the absence of one. Checking only for a placed
+  // hole made the No-hole button look broken: it did what it said and then the
+  // next screen refused to open.
+  if(!state.hole&&state.holePos!=='none')return toast('Pick where the keyring goes, or choose “No hole”',true),false;
   return true;
 }
 
@@ -1096,6 +1099,9 @@ function finishOutline(){
     openR:CFG.build.outlineOpenMm,smooth:CFG.build.outlineSmooth});
   if(healed.length<3){toast('That shape was too thin to print — try a rounder one',true);return;}
   state.customOutline=healed;state.mode='design';state.hole=null;outsideWarned=false;updateHoleState();
+  // The base is done the moment the loop closes, so go to the drawing step
+  // rather than leaving them on a finished step wondering what Next is for.
+  if(state.step==='base')setTimeout(()=>setStep('draw'),0);
   if(imgInk)refreshImagePreview();
   resizeCanvas();updateBanner();toast('Nice shape! Now draw your design and place the hole');}
 function placeHole(p){
