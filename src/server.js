@@ -496,9 +496,23 @@ function confirmStart(printer) {
   const deadline = Date.now() + waitMs;
   const busy = (s) => s && (['RUNNING', 'PREPARE', 'PAUSE', 'SLICING'].includes(s.state) || (s.percent ?? 0) > 0);
   return new Promise((resolve) => {
+    let asked = false;
     const poll = () => {
       if (busy(monitor.states()[printer.id])) return resolve(true);
       if (Date.now() >= deadline) return resolve(false);
+      // Ask for the whole picture once, half way through — the same lesson
+      // clearIfStuck already carries, and it applies here for the same reason.
+      //
+      // The printer reports in DELTAS, and a delta need not mention gcode_state
+      // at all. Waiting passively for one to say RUNNING can outlast this
+      // timeout while the print is running perfectly, and the booth then
+      // announces "on the SD card but the printer did not start it" about a job
+      // that is already laying its first layer. Whether that happens is pure
+      // timing, which is why it can behave for days and then not.
+      if (!asked && Date.now() > deadline - waitMs / 2) {
+        asked = true;
+        publishCommand(printer, { pushing: { sequence_id: '2', command: 'pushall' } }, cfg).catch(() => {});
+      }
       setTimeout(poll, 1000).unref?.();
     };
     poll();
@@ -541,9 +555,25 @@ function probeStart(printer) {
  * job that failed and refuses everything else. FINISH behaves the same way
  * until the plate is taken. Both are cleared with the same command the
  * printer's own screen sends.
+ *
+ * PAUSE is cleared here too, and ONLY here. A paused printer holds the machine
+ * exactly like a failed one: the next file uploads to the SD card, the print
+ * command is accepted, and nothing ever starts. It is the state a booth ends up
+ * in every time an operator abandons a colour change, which on a bad day is
+ * several times an hour.
+ *
+ * It must never go in STUCK_STATES itself. A pause in the middle of a job is
+ * the colour change doing its job, and anything that treats that as stuck would
+ * stop a print with a child's keychain half finished. Here, on the way to
+ * dispatching a NEW job, any pause belongs to a job we are already done with.
  */
 function clearBeforeSend(printer) {
-  return clearIfStuck(printer, cfg, () => monitor.states()[printer.id]);
+  const read = () => {
+    const s = monitor.states()[printer.id];
+    if (!s || String(s.state || '').toUpperCase() !== 'PAUSE') return s;
+    return { ...s, state: 'FAILED' };   // treat a leftover pause as stuck, here only
+  };
+  return clearIfStuck(printer, cfg, read);
 }
 
 const dispatcher = createDispatcher({
