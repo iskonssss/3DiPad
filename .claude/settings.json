@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git add -A >/dev/null 2>&1; git commit -q -m \"wip: auto-saved by Claude Code\" >/dev/null 2>&1; git push -q origin HEAD >/dev/null 2>&1; exit 0",
+            "timeout": 120,
+            "statusMessage": "Saving to GitHub..."
+          }
+        ]
+      }
+    ]
+  }
+}
