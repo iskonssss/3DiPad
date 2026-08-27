@@ -6,7 +6,7 @@
     --accent: #ffd23f; --accent2: #34d399; --pop: #ff5fa2; --danger: #ff6b6b;
     --r: 16px; --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--font);
     -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior: none; }
   body { background: radial-gradient(130% 90% at 50% -10%, #1b2748 0%, var(--bg) 62%);
@@ -1513,5 +1513,13 @@ updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAP
 
 addEventListener('resize',()=>{fitCanvas();redraw();});
 addEventListener('orientationchange',()=>setTimeout(()=>{fitCanvas();redraw();},250));
+// iPad: a quick double tap on a button or label zoomed the whole kiosk. The
+// viewport meta forbids scaling and Safari ignores it for double-tap; the
+// touch-action rule above handles most cases, and this catches the rest, plus
+// pinch. The canvas keeps its own touch-action: none for drawing.
+let lastTouchEnd=0;
+document.addEventListener('touchend',e=>{const now=Date.now();if(now-lastTouchEnd<350&&e.touches.length===0&&!e.target.closest('input,select,textarea')){e.preventDefault();}lastTouchEnd=now;},{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
+document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
