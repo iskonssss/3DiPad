@@ -712,7 +712,8 @@ test('a file that would never stop is refused rather than written', async () => 
 });
 
 /**
- * The A1 mini's start tune, note-for-note out of a Bambu Studio export.
+ * The A1 mini plays a fanfare (John Cena's "My Time Is Now") before it moves,
+ * and the "Witch Doctor" tune when it finishes — both on the stepper motors.
  *
  * Not decoration at a booth. A child who has just handed over their drawing has
  * no other way to know their print is the one that started, and the sound
@@ -741,6 +742,24 @@ test('the printer plays its start tune, before it starts moving', async () => {
   // M17 energises the motors the tune is played on; without it there is silence.
   assert.ok(gcode.indexOf('M17') < gcode.indexOf('M1006 S1'), 'motors must be on before the tune');
   assert.ok(gcode.indexOf('M1006 W') < gcode.indexOf('G28'), 'it should play while the printer is still still');
+});
+
+test('and a tune when it finishes, after it stops moving', async () => {
+  const { generate } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const { gcode } = generate({
+    shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: null,
+    design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
+  }, loadConfig({ exampleOnly: true }));
+  // A second M1006 block, in the end template, after the print is done.
+  const opens = [...gcode.matchAll(/^M1006 S1$/gm)];
+  assert.equal(opens.length, 2, 'a tune to start and a tune to finish');
+  const endTune = opens[1].index;
+  assert.ok(endTune > gcode.indexOf('; EXECUTABLE_BLOCK_END') - 1 || endTune > gcode.lastIndexOf('M104 S0'), 'the finish tune comes after the printing');
+  // it too is energised and closed
+  const tail = gcode.slice(endTune);
+  assert.match(tail, /^M1006 W$/m, 'the finish tune is closed or it never sounds');
+  assert.ok(gcode.lastIndexOf('M17') < endTune ? true : gcode.slice(0, endTune).includes('M17'), 'motors on for the finish tune');
 });
 
 /**
