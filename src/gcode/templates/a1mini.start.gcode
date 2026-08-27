@@ -108,10 +108,13 @@ M104 S{nozzleFirst}
 M109 S{nozzleFirst} ; wait for full print temp before any extrusion
 M106 S0 ; part fan off for the first layer
 G1 Z5 F1200
-M412 S1 ; filament runout detection on (Bambu start)
-M400 P10
-M620.3 W1 ; filament tangle detection on (Bambu start)
-M400 S2
+; Filament sensors deliberately NOT enabled. The Bambu start these were copied
+; from turns on runout (M412) and TANGLE detection (M620.3) — but tangle is an
+; AMS odometer feature, and on a bare external spool it can false-trigger and
+; CANCEL a print at a random point (HMS 0300_400C). Job 82 cancelled at 11% and
+; then, re-sent, at 33% — same file, different point, while its siblings printed
+; fine: the signature of an intermittent sensor trip, not a bad line. A booth
+; operator is watching the spools anyway. Do not re-add these without a reason.
 ; --- prime line ---
 G1 E-0.8 F2100
 G1 X10 Y3 F12000

@@ -160,6 +160,18 @@ knows what filament 2 *is*.
 
 ## Traps that have bitten before
 
+- **Do not turn on tangle detection on an external spool.** The transcribed
+  Bambu start enabled `M412 S1` (runout) and `M620.3 W1` (tangle). Tangle
+  detection is an AMS odometer feature; on a bare external spool it can
+  false-trigger and CANCEL the print (HMS 0300_400C) at a random point — the
+  same file cancelled at 11% then 33% while its siblings printed clean, which
+  is a sensor trip, not a bad g-code line. Both lines were removed from
+  `a1mini.start.gcode`. A cancel reports `gcode_state FINISH` with a
+  `print_error`, not FAILED, so `isPrintComplete()` in bambu.js gates the
+  "ready" transition on no error and near-100%, or a cancelled print fires the
+  pickup WhatsApp as done.
+
+
 - **`colourChange.gcode` overrides `mode` entirely.** A booth ran for weeks on a
   bare `M400 U1` while we discussed a block it was ignoring. The startup log now
   prints which swap is actually in effect — trust that, not the config file.
