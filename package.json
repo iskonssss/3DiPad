@@ -14,7 +14,8 @@
     "probe-start": "node tools/probe-start.mjs",
     "probe-commands": "node tools/probe-commands.mjs",
     "clear-printer": "node tools/clear-printer.mjs",
-    "pretest": "npm run build"
+    "pretest": "npm run build",
+    "clear-data": "node tools/clear-test-data.mjs"
   },
   "engines": {
     "node": ">=20"
