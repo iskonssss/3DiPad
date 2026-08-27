@@ -350,6 +350,14 @@ app.post('/api/jobs/:id/dispatch', async (req, res) => {
     : queue.freePrinter(printers);
   if (!printer) return res.status(409).json({ ok: false, error: wanted ? 'no such printer' : 'every printer is busy' });
 
+  // A second start command sent to a printer that is already printing cancels
+  // the running job (HMS 0300_400C). A quick double-tap of Send did exactly
+  // that. Refuse rather than interrupt a print in progress.
+  const busy = String(monitor.states()[printer.id]?.state || '').toUpperCase();
+  if (['RUNNING', 'PREPARE', 'SLICING', 'PAUSE'].includes(busy)) {
+    return res.status(409).json({ ok: false, error: `${printer.name} is already ${busy === 'PAUSE' ? 'mid-print (paused for a swap)' : busy.toLowerCase()} — wait for it to finish before sending another` });
+  }
+
   // an operator asking for it explicitly clears the give-up counter
   queue.setStatus(job.id, 'assigned', { printerId: printer.id, dispatchAttempts: 0 });
   const r = (await dispatcher.send(job, printer)) || { ok: false, sent: false, error: 'not sent' };

@@ -498,6 +498,20 @@ export function readStatus(msg) {
 }
 
 /**
+ * Did the print actually finish, or just stop? A Bambu reports gcode_state
+ * FINISH after a cancel or a stop too — with a print_error set and the percent
+ * stuck wherever it halted (0300_400C at 33%, the day a stray second Send
+ * cancelled a live job). Only a clean run — FINISH, no error, near 100% —
+ * counts as done, so a cancelled print is never notified as ready.
+ */
+export function isPrintComplete(status) {
+  if (!status || status.state !== 'FINISH') return false;
+  if (status.errorCode) return false;
+  if (typeof status.percent === 'number' && status.percent < 50) return false;
+  return true;
+}
+
+/**
  * A reply to a command we sent, as opposed to a routine status push. Exported
  * for testing.
  */
@@ -561,6 +575,11 @@ export function errorCodeHint(code) {
       'commands from the same connection succeed. That is third-party print control being switched ' +
       'off rather than anything wrong with the request. Look for Developer Mode / "LAN Mode developer" ' +
       'in the printer\'s network settings or in Bambu Handy, and turn it on.',
+    // Cancelled — the printer reports FINISH with this code and the percent
+    // stuck where it halted. A stray second start command sent to a printer
+    // that is already printing cancels the running job exactly this way.
+    '0x0300400C': 'the print was cancelled, not completed — a stop on the printer, a filament ' +
+      'runout, the tangle sensor, or a second print command arriving while one was already running.',
   }[hex] || null;
 }
 

@@ -10,7 +10,7 @@
 // happy path. Jobs are matched to a printer by printerId, so a job must be
 // assigned/dispatched before its status can be tracked.
 
-import { watchPrinter } from '../integrations/bambu.js';
+import { watchPrinter, isPrintComplete, errorCodeText } from '../integrations/bambu.js';
 
 export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   const printers = cfg.integrations?.printers || [];
@@ -44,7 +44,7 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
   function failureReason(printer, handle) {
     const bits = [];
     const s = states[printer.id] || {};
-    if (s.errorCode) bits.push(`error code ${s.errorCode} (look it up on the printer screen)`);
+    if (s.errorCode) bits.push(`${errorCodeText(s.errorCode)} — look it up on the printer screen`);
     const c = handle?.health?.().lastCommand;
     if (c && String(c.result || '').toUpperCase() !== 'SUCCESS') {
       bits.push(`it answered "${c.command}" with ${c.result || '?'}${c.reason ? ` — ${c.reason}` : ''}`);
@@ -65,20 +65,26 @@ export function startMonitor(cfg, queue, onReady, onPrinterFree = () => {}) {
       .find((j) => j.printerId === printer.id && ['assigned', 'printing', 'colour_change'].includes(j.status));
     if (!job) return;
 
-    if (state === 'RUNNING' && job.status !== 'printing') {
-      queue.setStatus(job.id, 'printing');
+    if (state === 'RUNNING' || state === 'PREPARE') {
+      // A fresh run: forget any error code the last job left behind, or the new
+      // job's own clean FINISH would be read as that old job's cancel.
+      if (states[printer.id]) delete states[printer.id].errorCode;
+      if (state === 'RUNNING' && job.status !== 'printing') queue.setStatus(job.id, 'printing');
     } else if (state === 'PAUSE' && job.status !== 'colour_change') {
       queue.setStatus(job.id, 'colour_change');
       console.log(`[${printer.id}] paused — swap to ${job.colours?.layer2} for ${job.contact?.name}`);
-    } else if (state === 'FINISH') {
+    } else if (state === 'FINISH' && isPrintComplete(states[printer.id])) {
       queue.setStatus(job.id, 'ready');
       console.log(`[${printer.id}] finished ${job.filename} — notifying ${job.contact?.name}`);
       Promise.resolve(onReady(job)).catch((e) => console.error('ready notify failed', e));
       freed();
-    } else if (state === 'FAILED') {
-      const why = failureReason(printer, handle);
+    } else if (state === 'FAILED' || state === 'FINISH') {
+      // FINISH here means it reported done without completing — a cancel or a
+      // stop, which carries an error code and halts short of 100%. Marked
+      // failed, NOT ready, so no pickup message goes out for a partial print.
+      const why = failureReason(printer, handle) || (state === 'FINISH' ? 'ended before finishing — cancelled or stopped on the printer' : null);
       queue.setStatus(job.id, 'failed', { failure: why || null });
-      console.error(`[${printer.id}] print FAILED for ${job.filename}${why ? ` — ${why}` : ''}`);
+      console.error(`[${printer.id}] print ${state === 'FINISH' ? 'was cancelled' : 'FAILED'} for ${job.filename}${why ? ` — ${why}` : ''}`);
       console.error(`           The g-code is still on the SD card. "Print again" in History re-queues it.`);
       freed();
     }

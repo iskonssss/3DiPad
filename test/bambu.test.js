@@ -4,7 +4,7 @@ import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
   readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent, readPattern,
-  buildStopCommand, buildLightCommand, withBedLevel, needsClearing, clearIfStuck, errorCodeHint,
+  buildStopCommand, buildLightCommand, withBedLevel, needsClearing, clearIfStuck, errorCodeHint, isPrintComplete,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -134,7 +134,7 @@ test('monitor transitions a job and fires ready exactly once', async () => {
   const apply = (state) => {
     if (state === 'RUNNING' && job.status !== 'printing') queue.setStatus(job.id, 'printing');
     else if (state === 'PAUSE' && job.status !== 'colour_change') queue.setStatus(job.id, 'colour_change');
-    else if (state === 'FINISH') { queue.setStatus(job.id, 'ready'); readyCalls.push(job.id); }
+    else if (state === 'FINISH') { queue.setStatus(job.id, 'ready'); readyCalls.push(job.id); }  // clean finish only (see isPrintComplete test)
     else if (state === 'FAILED') queue.setStatus(job.id, 'failed');
   };
 
@@ -485,4 +485,19 @@ test('clearing asks for a full status rather than waiting on a delta', async () 
   assert.equal(r.cleared, false);
   assert.equal(r.accepted.result, 'success', 'the reply is carried back, not discarded');
   assert.equal(r.state, 'FAILED');
+});
+
+test('a cancelled print reports FINISH but is not a completion', () => {
+  // The A1 mini reports gcode_state FINISH after a cancel too, with an error
+  // code and the percent stuck where it halted (0300_400C at 33%). Only a
+  // clean run is a completion — otherwise a stopped print fires the pickup
+  // WhatsApp as if the keychain were done.
+  assert.equal(isPrintComplete({ state: 'FINISH', percent: 100 }), true);
+  assert.equal(isPrintComplete({ state: 'FINISH', percent: 33, errorCode: 50348044 }), false, 'cancelled at 33% with 0300_400C');
+  assert.equal(isPrintComplete({ state: 'FINISH', errorCode: 50348044 }), false, 'an error code alone is enough');
+  assert.equal(isPrintComplete({ state: 'FINISH', percent: 20 }), false, 'stopped well short of the end');
+  assert.equal(isPrintComplete({ state: 'RUNNING', percent: 100 }), false, 'still printing');
+  assert.equal(isPrintComplete(null), false);
+  // the operator gets a searchable code, not raw decimal
+  assert.match(errorCodeHint(50348044), /cancelled/i);
 });
