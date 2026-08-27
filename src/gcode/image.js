@@ -78,6 +78,28 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   const offX = (bbox.w - drawW) / 2, offY = (bbox.h - drawH) / 2;
 
   let mask = new Uint8Array(w * h);
+  // How many source pixels fall under one cell. Below 1 the drawing is being
+  // UPSCALED — a small logo on a big plate — and the union below would just
+  // copy each source pixel's hard edge onto the plate as a step. Sampling the
+  // source as a continuous field instead (bilinear between pixel centres,
+  // cut at half) turns a diagonal of pixel steps into a straight edge, which
+  // is what the drawing meant. Downscaling keeps the union: there, the risk is
+  // losing a line, not a step.
+  const pxPerCell = Math.min(bitmap.w / (drawW / cell), bitmap.h / (drawH / cell));
+  if (pxPerCell < 1) {
+    for (let j = 0; j < h; j++) {
+      const my = (j - pad) * cell;
+      const v = 1 - (my - offY) / drawH;                 // image v, y-down
+      const fy = v * bitmap.h - 0.5;
+      if (fy < -0.5 || fy > bitmap.h - 0.5) continue;
+      for (let i = 0; i < w; i++) {
+        const mx = (i - pad) * cell;
+        const fx = ((mx - offX) / drawW) * bitmap.w - 0.5;
+        if (fx < -0.5 || fx > bitmap.w - 0.5) continue;
+        if (bilinear(bitmap, fx, fy) >= 0.5) mask[j * w + i] = 1;
+      }
+    }
+  }
   // Sample by COVERAGE, not by point: a cell is ink if ANY source pixel under it
   // is ink.
   //
@@ -93,7 +115,7 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   // Taking the union over the footprint cannot lose a line: whatever the scale,
   // every source pixel belongs to some cell. Thin is then a thickening problem,
   // which is solved below, rather than a disappearing one, which cannot be.
-  for (let j = 0; j < h; j++) {
+  for (let j = 0; pxPerCell >= 1 && j < h; j++) {
     const my = (j - pad) * cell;                 // plate-local mm, y-up (centre)
     // image y is DOWN, plate y is UP: the top of the drawing (row 0) belongs at
     // the top of the plate (largest y), so the v range flips into rows.
@@ -156,7 +178,14 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
     let anyThin = false;
     for (let i = 0; i < mask.length; i++) if (mask[i] && !wide[i]) { thin[i] = 1; anyThin = true; }
     if (anyThin) {
-      const grown = dilate(thin, w, h, minR);
+      // Not everything the opening drops is a line. The tip of every sharp
+      // corner on a THICK shape is thinner than minW too, and growing those
+      // put a round knob on every corner of a logo. A line is long; a corner
+      // crumb is not. Only pieces at least a few line-widths long are grown;
+      // the crumbs stay exactly as drawn (they are still in `mask`).
+      const longEnough = (2 * minW) / cell;
+      const lines = keepLongComponents(thin, w, h, longEnough);
+      const grown = dilate(lines, w, h, minR);
       for (let i = 0; i < mask.length; i++) if (grown[i]) mask[i] = 1;
     }
   }
@@ -180,6 +209,43 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   if (!any) return null;
 
   return { mask, w, h, cell, pad, toMm: (c) => ({ x: (c.x - pad) * cell, y: (c.y - pad) * cell }) };
+}
+
+/** Ink value at a fractional pixel position, interpolated between pixel centres. */
+function bilinear(bitmap, fx, fy) {
+  const { w, h, ink } = bitmap;
+  const x0 = Math.max(0, Math.min(w - 1, Math.floor(fx))), y0 = Math.max(0, Math.min(h - 1, Math.floor(fy)));
+  const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1);
+  const tx = Math.max(0, Math.min(1, fx - x0)), ty = Math.max(0, Math.min(1, fy - y0));
+  const a = ink[y0 * w + x0], b = ink[y0 * w + x1], c = ink[y1 * w + x0], d = ink[y1 * w + x1];
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+/** Keep only 8-connected components whose bounding box spans at least `minSpan` cells. */
+function keepLongComponents(mask, w, h, minSpan) {
+  const seen = new Uint8Array(w * h);
+  const out = new Uint8Array(w * h);
+  const stack = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    const cells = [];
+    let minX = w, maxX = -1, minY = h, maxY = -1;
+    stack.push(start); seen[start] = 1;
+    while (stack.length) {
+      const c = stack.pop(); cells.push(c);
+      const x = c % w, y = (c - x) / w;
+      if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const n = ny * w + nx;
+        if (mask[n] && !seen[n]) { seen[n] = 1; stack.push(n); }
+      }
+    }
+    if (Math.max(maxX - minX, maxY - minY) + 1 >= minSpan) for (const c of cells) out[c] = 1;
+  }
+  return out;
 }
 
 /** Keep only connected components of at least `minCells` cells (4-connected). */

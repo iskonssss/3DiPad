@@ -250,3 +250,37 @@ test('strokes drawn over an imported image print too', async () => {
   assert.ok(both.meta.estGrams > strokeOnly.meta.estGrams, 'the image adds to the stroke');
   assert.match(both.gcode, /imported image \+ 1 strokes/);
 });
+
+test('a thick shape keeps its corners — no knob grown on each one', () => {
+  // The thin-rescue used to shave every sharp corner off (thinner than the
+  // minimum), call it a line, and grow it back as a round bump.
+  const bbox = { w: 60, h: 60 };
+  const square = bitmap(400, 400, (x, y) => x >= 100 && x < 300 && y >= 100 && y < 300);
+  const cov = imageCoverage(square, cfg, bbox, null, null, 0);
+  let maxX = -Infinity, maxY = -Infinity, minX = Infinity, minY = Infinity;
+  for (let j = 0; j < cov.h; j++) for (let i = 0; i < cov.w; i++) if (cov.mask[j * cov.w + i]) {
+    const p = cov.toMm({ x: i, y: j });
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  // 200/400 of a 60mm fit = 30mm square; a knob would push the extent past it
+  assert.ok(maxX - minX < 30.6 && maxY - minY < 30.6, `extent ${(maxX - minX).toFixed(2)} x ${(maxY - minY).toFixed(2)} — corners grew`);
+  // and the corners are square: the cell at each extreme corner is ink
+  const at = (x, y) => cov.mask[Math.round(y / cov.cell + cov.pad) * cov.w + Math.round(x / cov.cell + cov.pad)];
+  assert.ok(at(minX + 0.2, minY + 0.2) && at(maxX - 0.2, maxY - 0.2), 'the corner cells are filled, not rounded off');
+});
+
+test('a small logo on a big plate gets straight diagonals, not pixel steps', () => {
+  // 40px source onto a 60mm plate: 1.5mm per pixel. Sampled as hard pixels, a
+  // 45-degree edge is a staircase with 1.5mm treads; interpolated, it is a line.
+  const bbox = { w: 60, h: 60 };
+  const tri = bitmap(40, 40, (x, y) => x + y < 40);
+  const cov = imageCoverage(tri, cfg, bbox, null, null, 0);
+  // walk the hypotenuse: the rightmost ink cell per row. On a straight line the
+  // step between rows is about one cell; on a staircase it is 0 for a dozen
+  // rows and then a dozen at once.
+  const rightmost = [];
+  for (let j = 0; j < cov.h; j++) { let r = -1; for (let i = 0; i < cov.w; i++) if (cov.mask[j * cov.w + i]) r = i; if (r >= 0) rightmost.push(r); }
+  const mid = rightmost.slice(Math.floor(rightmost.length * 0.3), Math.floor(rightmost.length * 0.7));
+  const biggestJump = Math.max(...mid.slice(1).map((r, k) => Math.abs(r - mid[k])));
+  assert.ok(biggestJump <= 3, `hypotenuse jumps ${biggestJump} cells at once — a staircase`);
+});
