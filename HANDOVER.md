@@ -165,6 +165,17 @@ knows what filament 2 *is*.
   prints which swap is actually in effect — trust that, not the config file.
 - **Config is read once at startup.** Editing `config.json` needs a restart.
 - **`config.json` is not in git** — it lives on the booth laptop only.
+- **Printers move between networks, and their IP moves with them.** The same
+  A1 mini is 192.168.100.64 at home and 192.168.10.105 at the studio. With
+  the stale address the file still uploads (over whatever link is left) and
+  the start goes nowhere: "printer did not start", twenty minutes lost. The
+  booth now listens for the printers' own SSDP announcements (UDP 2021 — the
+  serial is the identity) and follows a configured serial to its new address
+  by itself; the setup page shows where each printer was last seen and offers
+  unclaimed printers for empty slots. If a printer still goes quiet after a
+  move, **↻ Reconnect** on its setup card drops and reopens the connection —
+  the first session after an address change was once seen to carry status but
+  swallow commands, and a second connection fixed it.
 - The A1 mini accepts **one MQTT client**. Diagnostic tools steal it from the
   booth; `tools/booth-running.mjs` refuses to run while the server is up.
 - Printers never send PUBACK — QoS 1 always times out, QoS 0 is correct.

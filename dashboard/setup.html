@@ -77,6 +77,7 @@
       async function load() {
         const r = await (await fetch('../api/printers')).json();
         const main = $('main');
+        renderDiscovered(r.discovered || []);
         for (const p of r.printers) {
           const known = cards.get(p.slot);
           if (known) refresh(known, p);
@@ -84,8 +85,15 @@
         }
       }
 
+      function seenLine(p) {
+        if (!p.seen) return p.configured ? 'Not announcing itself on this network right now' : '';
+        const moved = p.ip && p.ip !== p.seen.ip;
+        return `Seen on this network at ${p.seen.ip}${p.seen.name ? ` as “${p.seen.name}”` : ''}${moved ? ' — the booth follows it automatically' : ''}`;
+      }
+
       function refresh(el, p) {
         el.classList.toggle('ready', p.configured);
+        $('.seen', el).textContent = seenLine(p);
         const live = p.live?.state ? `${p.live.state}${p.live.percent != null ? ' · ' + p.live.percent + '%' : ''}` : null;
         $('.state', el).textContent = p.configured
           ? (live ? '● ' + live : 'Set up — waiting for status')
@@ -107,6 +115,7 @@
         el.innerHTML = `
           <h2>${esc(p.name)} <span style="color:var(--muted);font-weight:400;font-size:13px">${esc(p.id)}</span></h2>
           <p class="state">${p.configured ? (live ? '● ' + esc(live) : 'Set up — waiting for status') : 'Not set up yet'}</p>
+          <p class="note seen" style="margin:-8px 0 10px">${esc(seenLine(p))}</p>
           <label>IP address</label>
           <input class="ip" inputmode="decimal" placeholder="192.168.10.105" value="${esc(p.ip)}" />
           <label>Serial number</label>
@@ -119,6 +128,7 @@
           </div>
           <div class="row">
             <button class="ghost light">💡 Hold to blink the light</button>
+            <button class="ghost reconnect">↻ Reconnect</button>
           </div>
           <div class="out"></div>`;
 
@@ -148,6 +158,15 @@
         });
 
         $('.test', el).addEventListener('click', runTest);
+        // Drops and reopens the booth's connection to every printer, then re-tests
+        // this one. The fix for "printer did not start" after a network change.
+        $('.reconnect', el).addEventListener('click', async () => {
+          out.innerHTML = '<p class="busy">Reconnecting…</p>';
+          await post('../api/printers/reconnect');
+          await new Promise((r) => setTimeout(r, 6000));   // give the new session a moment to hear the printer
+          await load();
+          await runTest();
+        });
 
         // The light is the one command you can see land from across the booth.
         // It is in the system namespace, so it works with Developer Mode off —
@@ -186,6 +205,24 @@
 
         return el;
       }
+
+      /** Printers announcing themselves here that no slot names. One tap fills a slot. */
+      function renderDiscovered(found) {
+        let box = $('#found');
+        if (!found.length) { if (box) box.remove(); return; }
+        if (!box) { box = document.createElement('div'); box.id = 'found'; box.className = 'intro'; $('main').insertBefore(box, $('main').children[1] || null); }
+        box.innerHTML = '<b>Also on this network:</b> ' + found.map((d) =>
+          `<span style="display:inline-block;margin:4px 8px 0 0">${esc(d.name || d.model || d.serial)} · ${esc(d.ip)} · ${esc(d.serial)}
+           <button class="ghost" style="padding:4px 8px;margin-left:4px" onclick="claim('${esc(d.ip)}','${esc(d.serial)}')">use for an empty slot</button></span>`).join('');
+      }
+      window.claim = (ip, serial) => {
+        const empty = [...cards.values()].find((el) => !$('.ip', el).value.trim() && !$('.serial', el).value.trim());
+        if (!empty) return alert('Every slot is taken — clear one first');
+        $('.ip', empty).value = ip; $('.serial', empty).value = serial;
+        $('.ip', empty).dataset.dirty = '1'; $('.serial', empty).dataset.dirty = '1';
+        $('.code', empty).focus();
+        empty.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
 
       function list(findings) {
         return '<ul class="findings">' + findings.map((f) => {

@@ -17,6 +17,7 @@ import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
 import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
+import { startDiscovery } from './discovery.js';
 import { lastCommandSent, clearIfStuck, needsClearing, publishCommand, buildStopCommand, buildLightCommand } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -363,12 +364,27 @@ app.post('/api/jobs/:id/dispatch', async (req, res) => {
 
 app.get('/api/printers', (_req, res) => {
   const live = monitor.states();
+  const seen = discovery.seen();
+  const bySerial = Object.fromEntries(seen.map((d) => [d.serial, d]));
+  const printers = publicPrinters(cfg).map((p) => ({ ...p, live: live[p.id] || null, seen: bySerial[String(p.serial || '').toUpperCase()] || null }));
+  const claimed = new Set(printers.map((p) => String(p.serial || '').toUpperCase()));
   res.json({
     lan: !!cfg.integrations?.lan?.enabled,
-    printers: publicPrinters(cfg).map((p) => ({ ...p, live: live[p.id] || null })),
+    printers,
+    // printers announcing themselves on this network that no slot names yet
+    discovered: seen.filter((d) => !claimed.has(d.serial)),
   });
 });
 
+// Drop and reopen every printer connection. The fix for a printer that went
+// quiet after changing networks was "press Save again" — this is that, named.
+app.post('/api/printers/reconnect', (_req, res) => {
+  restartMonitor();
+  dispatcher.pump();
+  console.log('[booth] printer connections reopened from the setup page');
+  res.json({ ok: true });
+});
+// (before /:slot, or Express reads "reconnect" as a slot number)
 app.post('/api/printers/:slot', (req, res) => {
   try {
     const saved = savePrinter(cfg, {
@@ -757,6 +773,30 @@ async function onPrintReady(job) {
   queue.setStatus(job.id, 'ready', { notify: r });
 }
 
+/**
+ * Follow a printer that moved. The serial is the identity; the address in
+ * config.json is only where it was last time. When an announcement puts a
+ * configured serial at a different address, take the new one and reopen the
+ * connection — the access code is unchanged unless LAN Mode was toggled, and
+ * if it was, the setup page's Test will say so.
+ */
+const discovery = startDiscovery((p) => {
+  const list = cfg.integrations?.printers || [];
+  const slot = list.findIndex((c) => String(c.serial || '').toUpperCase() === p.serial);
+  if (slot < 0) return;
+  const printer = list[slot];
+  if (printer.ip === p.ip) return;
+  const from = printer.ip || '(none)';
+  try {
+    savePrinter(cfg, { slot: slot + 1, ip: p.ip, serial: printer.serial, accessCode: '', name: printer.name });
+    console.log(`[${printer.id}] is on this network at ${p.ip} (config said ${from}) — following it`);
+    restartMonitor();
+    dispatcher.pump();
+  } catch (e) {
+    console.error(`[${printer.id}] seen at ${p.ip} but could not update the config: ${e.message}`);
+  }
+});
+
 /** Reopen the printer connections after the setup page changes them. */
 function restartMonitor() {
   try { monitor.stop(); } catch (e) { console.error('monitor stop failed', e); }
@@ -878,5 +918,5 @@ for (const kind of ['unhandledRejection', 'uncaughtException']) {
 }
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => { monitor.stop(); server.close(() => process.exit(0)); });
+  process.on(sig, () => { monitor.stop(); discovery.stop(); server.close(() => process.exit(0)); });
 }
