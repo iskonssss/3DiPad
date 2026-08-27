@@ -17,24 +17,27 @@
 ; Format, worked out from Bambu's own start tune in an exported A1 mini file:
 ; three voices, each a pitch/duration/volume triple — A,B,L then C,D,M then E,F,N.
 ; Pitch is a MIDI note number and 0 is a rest; the melody plays on all three
-; voices for volume. Duration 10 is a beat, 20 a lift, 40 a long hold. The notes
-; are played by the STEPPER MOTORS, not a speaker, so it is the tune, not the
-; orchestra — but it carries. The pitches are the MIDI file's own (56-70), which
+; voices for volume. Each B/D/F is proportional to the MIDI's real note length
+; (the ms is in each line's comment), so the rhythm matches the song; the long
+; held notes are capped so a single tone does not drone for three seconds. The
+; notes are played by the STEPPER MOTORS, not a speaker, so it is the tune, not
+; the orchestra — but it carries. Pitches are the MIDI file's own (56-70), which
 ; already sit in the register this hardware plays.
 M17
 M400 S1
 M1006 S1
-M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
-M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
-M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
-M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
-M1006 A70 B20 L100 C70 D20 M100 E70 F20 N100  ; Bb (lift)
-M1006 A69 B40 L100 C69 D40 M100 E69 F40 N100  ; A  (hold)
-M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
-M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
-M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
-M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
-M1006 A56 B40 L100 C56 D40 M100 E56 F40 N100  ; G# (low hold)
+;===== duration is proportional to the MIDI's real note lengths (ms in comments)
+M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (109ms)
+M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
+M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (111ms)
+M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
+M1006 A70 B37 L100 C70 D37 M100 E70 F37 N100  ; Bb (332ms)
+M1006 A69 B72 L100 C69 D72 M100 E69 F72 N100  ; A  (2665ms, held; capped at 72)
+M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (109ms)
+M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
+M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (111ms)
+M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
+M1006 A56 B72 L100 C56 D72 M100 E56 F72 N100  ; G# (2999ms, held; capped at 72)
 M1006 W
 M18
 
