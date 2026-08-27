@@ -160,16 +160,25 @@ knows what filament 2 *is*.
 
 ## Traps that have bitten before
 
-- **Do not turn on tangle detection on an external spool.** The transcribed
-  Bambu start enabled `M412 S1` (runout) and `M620.3 W1` (tangle). Tangle
-  detection is an AMS odometer feature; on a bare external spool it can
-  false-trigger and CANCEL the print (HMS 0300_400C) at a random point — the
-  same file cancelled at 11% then 33% while its siblings printed clean, which
-  is a sensor trip, not a bad g-code line. Both lines were removed from
-  `a1mini.start.gcode`. A cancel reports `gcode_state FINISH` with a
-  `print_error`, not FAILED, so `isPrintComplete()` in bambu.js gates the
-  "ready" transition on no error and near-100%, or a cancelled print fires the
-  pickup WhatsApp as done.
+- **A print cancelling at a random point (HMS 0300_400C) was a bad SD card —
+  reformatting it fixed it.** The same file cancelled at 11%, then re-sent at
+  33%, while its siblings printed clean: random stop points are SD read
+  failures at random offsets, not a bad g-code line. `0300_400C` is just
+  "print cancelled" and never names the cause; the forum answer (SD / file /
+  firmware) was the right one. Format the card on the printer before chasing
+  anything subtler.
+  Two things were changed while diagnosing this, and only the SD card was the
+  actual fix — noted so neither is mistaken for the cure:
+    - `M412 S1` (runout) and `M620.3 W1` (tangle) were removed from
+      `a1mini.start.gcode` on the theory that tangle detection false-triggers
+      on a bare external spool. That was a guess, and the SD card was the real
+      cause; the lines stay out because a booth operator watches the spools
+      anyway, but re-adding runout detection is reasonable if you want a
+      running-out spool to pause rather than under-extrude.
+    - `isPrintComplete()` in bambu.js — this one stands on its own regardless
+      of cause. A cancel reports `gcode_state FINISH` with a `print_error`,
+      not FAILED, so without it a cancelled print fires the pickup WhatsApp as
+      "done". It gates the "ready" transition on no error and near-100%.
 
 
 - **`colourChange.gcode` overrides `mode` entirely.** A booth ran for weeks on a
