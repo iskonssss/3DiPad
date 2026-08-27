@@ -1,6 +1,9 @@
 // Open the dashboard once the booth server is actually listening.
 //
-//   node tools/open-when-ready.mjs [port] [path]
+//   node tools/open-when-ready.mjs [port] [path ...]
+//
+// Every path given opens in its own tab once the port answers — the dashboard
+// and the kiosk together, so the laptop can be the third tablet.
 //
 // The launchers used to open the browser on the line before `npm start`, so it
 // always raced the server and usually won: the operator got "localhost refused
@@ -16,8 +19,8 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 
 const port = Number(process.argv[2]) || 3000;
-const urlPath = process.argv[3] || '/dashboard/';
-const url = `http://localhost:${port}${urlPath}`;
+const urlPaths = process.argv.slice(3).length ? process.argv.slice(3) : ['/dashboard/'];
+const urls = urlPaths.map((p) => `http://localhost:${port}${p}`);
 const timeoutMs = Number(process.env.OPEN_TIMEOUT_MS) || 60000;
 
 /** Resolves once something accepts a connection on the port, or false on timeout. */
@@ -57,6 +60,6 @@ export function openBrowser(target, platform = process.platform) {
 // Only act when run directly, so the two functions above stay testable.
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop())) {
   const ready = await waitForPort(port, Date.now() + timeoutMs);
-  if (ready) openBrowser(url);
-  else console.error(`The booth server did not come up on port ${port}. Open ${url} once it does.`);
+  if (ready) for (const url of urls) openBrowser(url);
+  else console.error(`The booth server did not come up on port ${port}. Open ${urls.join(' and ')} once it does.`);
 }

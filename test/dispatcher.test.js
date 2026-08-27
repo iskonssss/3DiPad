@@ -46,6 +46,73 @@ function harness(printers = PRINTERS, sendImpl) {
   return { root, queue, cfg, dispatcher, sends };
 }
 
+test('a send refused because the printer is holding a failed job still returns a result', async () => {
+  // The dashboard awaits send() and reads .sent off the answer. The blocked
+  // branch returned nothing, and "Cannot read properties of undefined" took
+  // the booth server down the first time an operator pressed Send at a
+  // printer that had just failed a colour change.
+  const { root, queue, dispatcher, sends } = harness([PRINTERS[0]]);
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    queue, outDir: '/tmp',
+    transport: async () => { sends.push('should not happen'); return { ok: true, sent: true }; },
+    beforeSend: async () => ({ needed: true, cleared: false, state: 'FAILED' }),
+  });
+  const job = addJob(queue, 'Ada');
+  queue.setStatus(job.id, 'assigned', { printerId: 'A1-1' });
+  const r = await d2.send(job, PRINTERS[0]);
+  assert.ok(r, 'a result comes back');
+  assert.equal(r.sent, false);
+  assert.equal(r.blocked, 'FAILED');
+  assert.match(r.error, /clear it on the printer/);
+  assert.equal(sends.length, 0, 'nothing was uploaded');
+  assert.equal(queue.get(job.id).status, 'assigned', 'the job waits on that printer');
+  void dispatcher;
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a printer that has FINISHED its last print is sent the next one, not refused', async () => {
+  // "Last send failed: printer is holding a FINISH job" — on a tile that said
+  // READY. A finished printer takes a new file; only FAILED refuses.
+  const { root, queue, sends } = harness([PRINTERS[0]]);
+  const d2 = createDispatcher({
+    cfg: { integrations: { lan: { enabled: true }, printers: [PRINTERS[0]] } },
+    queue, outDir: '/tmp',
+    transport: async () => { sends.push('sent'); return { ok: true, sent: true, remotePath: '/sdcard/x.gcode' }; },
+    beforeSend: async () => ({ needed: true, cleared: false, state: 'FINISH' }),
+  });
+  const job = addJob(queue, 'Ada');
+  queue.setStatus(job.id, 'assigned', { printerId: 'A1-1' });
+  const r = await d2.send(job, PRINTERS[0]);
+  assert.equal(r.sent, true);
+  assert.deepEqual(sends, ['sent']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a bed level armed from the dashboard rides on exactly one send, then switches itself off', async () => {
+  const { root, queue, dispatcher, sends } = harness([PRINTERS[0]], (_p, opts) => {
+    sends[sends.length - 1].bedLevel = !!opts.bedLevel;
+    return { ok: true, sent: true, remotePath: '/sdcard/x.gcode' };
+  });
+  assert.equal(dispatcher.levelNext('A1-1'), false, 'off by default');
+  dispatcher.setLevelNext('A1-1', true);
+  assert.equal(dispatcher.levelNext('A1-1'), true);
+
+  const first = addJob(queue, 'Ada');
+  dispatcher.submit(first);
+  await settle();
+  assert.equal(sends[0].bedLevel, true, 'the armed print levels');
+  assert.equal(dispatcher.levelNext('A1-1'), false, 'and consumed the flag');
+
+  // free the printer, send another: no level this time
+  queue.setStatus(first.id, 'ready');
+  const second = addJob(queue, 'Bo');
+  dispatcher.submit(second);
+  await settle();
+  assert.equal(sends[1].bedLevel, false, 'the next print does not');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('a job submitted while every printer is busy waits instead of vanishing', async () => {
   const { queue, dispatcher, sends } = harness([PRINTERS[0]]);
   const first = addJob(queue, 'Ada');

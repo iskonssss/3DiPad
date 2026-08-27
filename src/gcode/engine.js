@@ -141,6 +141,9 @@ export function generate(design, cfg) {
   });
 
   // ---- colour change ----
+  // Filament laid so far is colour 1's share; everything after, including the
+  // change's own flush, is colour 2's. The header quotes them separately.
+  const mmColour1 = em.meta().filamentMm;
   em.comment(`===== COLOUR CHANGE: load ${design.colours?.layer2 ?? 'colour 2'}, then Resume =====`);
   const swap = colourChangeBlock(cfg, backingZs[nBack - 1]);
   // A two-colour keychain whose file never stops is not a keychain — it is a
@@ -167,7 +170,9 @@ export function generate(design, cfg) {
   // same coverage mask a drawing does, so everything below is shared; only the
   // source of the mask differs.
   const bitmap = design.image ? decodeBitmap(design.image) : null;
-  const strokes = bitmap ? [] : prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
+  // Strokes are kept alongside an image: a studio uploads a drawing and the
+  // child adds their name on top. Both become the same mask, OR'd together.
+  const strokes = prepareStrokes(design.design || [], poly, cfg, hole, b.designEdgeMargin);
   // Design height is counted in layers, not mm — 2 layers reads as a raised
   // line you can feel without looking like a slab on top of the plate.
   const nDesign = Math.max(1, b.designLayers ?? Math.round((b.designThickness ?? 0.56) / b.layerHeight));
@@ -183,10 +188,11 @@ export function generate(design, cfg) {
   // one lays a full bead over the last — the same spot gets material four or
   // five times and melts into a blob. From a mask, the toolpath is the same
   // whether the kid used one stroke or a hundred.
-  const cov = bitmap
-    ? imageCoverage(bitmap, cfg, bbox, poly, hole, b.designEdgeMargin)
-    : buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin);
-  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${bitmap ? 'imported image' : `${strokes.length} strokes`} =====`);
+  const cov = unionCoverage(
+    bitmap ? imageCoverage(bitmap, cfg, bbox, poly, hole, b.designEdgeMargin) : null,
+    strokes.length ? buildCoverage(strokes, cfg, bbox, poly, hole, b.designEdgeMargin) : null,
+  );
+  em.comment(`===== DESIGN (colour 2) — ${designZs.length} layers, ${[bitmap && 'imported image', strokes.length && `${strokes.length} strokes`].filter(Boolean).join(' + ') || 'nothing drawn'} =====`);
   designZs.forEach((z, k) => {
     marks.push({ at: em.lines.length, t: em.timeNow() });
     em.setZ(z);
@@ -226,6 +232,7 @@ export function generate(design, cfg) {
     gcode: bambuBlocks(lines, {
       layers: nBack + designZs.length,
       filamentMm: raw.filamentMm,
+      filamentMmByColour: [mmColour1, Math.max(0, raw.filamentMm - mmColour1)],
       grams,
       minutes: estMinutes,
       maxZ,
@@ -790,24 +797,51 @@ function makeEmitter(cfg, crossSection) {
  *
  * These are comments, so they cost nothing if a firmware ignores them.
  */
+/**
+ * OR two coverage masks on the same grid — an imported drawing and the strokes
+ * drawn over it. Both builders lay the grid out identically from bbox and
+ * cell, so the masks line up cell for cell; if they ever did not, the larger
+ * source wins rather than misaligning the drawing.
+ */
+export function unionCoverage(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.w !== b.w || a.h !== b.h) return a.w * a.h >= b.w * b.h ? a : b;
+  const mask = new Uint8Array(a.w * a.h);
+  for (let i = 0; i < mask.length; i++) mask[i] = a.mask[i] | b.mask[i];
+  return { ...a, mask };
+}
+
 export function bambuBlocks(lines, info) {
   const mins = Math.floor(info.minutes);
   const secs = Math.round((info.minutes - mins) * 60);
   const time = `${mins}m ${secs}s`;
-  const volumeCm3 = (info.filamentMm * Math.PI * (info.diameter / 2) ** 2) / 1000;
+  // Per filament, the way Bambu Studio writes a two-colour file:
+  //   ; total filament length [mm] : 8806.30,4676.21
+  //   ; filament: 1,2
+  // Ours said "; filament: 1" with single values, and the printer's own task
+  // record for our file came back manual_color_change: false — while the same
+  // flag was true for Studio's — so the printer decides how many filaments a
+  // print uses from the file, not from the print command. A file declaring one
+  // filament has no reason to treat T1 as a manual change on the external spool.
+  const byColour = info.filamentMmByColour || [info.filamentMm];
+  const perMm = byColour.map((mm) => mm.toFixed(2)).join(',');
+  const perCm3 = byColour.map((mm) => ((mm * Math.PI * (info.diameter / 2) ** 2) / 1000).toFixed(2)).join(',');
+  const perG = byColour.map((mm) => (info.grams * (info.filamentMm ? mm / info.filamentMm : 1)).toFixed(2)).join(',');
+  const ids = byColour.map((_, i) => i + 1).join(',');
 
   const header = [
     '; HEADER_BLOCK_START',
     '; 3DiPad booth generator',
     `; model printing time: ${time}; total estimated time: ${time}`,
     `; total layer number: ${info.layers}`,
-    `; total filament length [mm] : ${info.filamentMm.toFixed(2)}`,
-    `; total filament volume [cm^3] : ${volumeCm3.toFixed(2)}`,
-    `; total filament weight [g] : ${info.grams.toFixed(2)}`,
-    `; filament_density: ${info.density}`,
-    `; filament_diameter: ${info.diameter}`,
+    `; total filament length [mm] : ${perMm}`,
+    `; total filament volume [cm^3] : ${perCm3}`,
+    `; total filament weight [g] : ${perG}`,
+    `; filament_density: ${byColour.map(() => info.density).join(',')}`,
+    `; filament_diameter: ${byColour.map(() => info.diameter).join(',')}`,
     `; max_z_height: ${info.maxZ.toFixed(2)}`,
-    '; filament: 1',
+    `; filament: ${ids}`,
     '; HEADER_BLOCK_END',
     '',
   ];
@@ -881,7 +915,25 @@ export function colourChangeBlock(cfg, atZ = 0) {
     'G92 E0',
     `G1 E-${(c.retractMm ?? 8).toFixed(1)} F1200 ; back the old colour out of the melt zone`,
     'M400',
+    // mode "manual": cut and unload with moves, and NO toolchange — the T1 is
+    // what sent the firmware looking for an AMS. The cut itself is the one part
+    // that cannot be a plain move: X180 IS the end of travel, so the cutter is
+    // driven by Bambu's own M620.11 S0 (a cut command, not a tool command;
+    // configurable in cutGcode if a print shows otherwise). Then a long retract
+    // pulls the cut end out of the hotend so the operator only has to feed the
+    // new colour in at the pause — no Unload on the screen.
+    ...(c.mode === 'manual' ? [
+      '; --- cut and unload, no toolchange ---',
+      ...asLines(c.cutGcode ?? [`G1 X${c.cutX ?? 180} F18000 ; to the cutter`, 'M620.11 S0 ; cut', 'M400']),
+      `G1 X${c.parkX ?? 180} Y${c.parkY ?? 90} F18000 ; back to the park spot`,
+      'G92 E0',
+      `G1 E-${(c.unloadMm ?? 80).toFixed(1)} F1200 ; pull the cut end out of the hotend`,
+      'M400',
+    ] : []),
     ...pause,
+    // re-park: the screen's load routine moves the head during the pause
+    `G1 Z${lift} F1200`,
+    `G1 X${c.parkX ?? 180} Y${c.parkY ?? 90} F18000 ; re-park before the purge`,
     `M109 S${t} ; back to temperature after the swap`,
     'G92 E0',
     'M106 P1 S60 ; gentle fan so the purge does not weld to the nozzle',
@@ -1065,6 +1117,12 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   // above it. If the change worked, this is one redundant press and a purge
   // that costs a few centimetres. If it did not, it is the whole swap.
   const tail = [...pauseLines(c)];
+  // Back to the park spot before purging. The printer's own load routine (and
+  // the operator, via the screen) moves the head during the pause, and Resume
+  // carried straight on from wherever it was left — which put a purge blob on
+  // the top-left corner of a keychain.
+  const wipes = Math.max(0, Math.round(c.wipes ?? 4));
+  if (purge > 0 || wipes > 0) tail.push(`G1 Z${up} F1200`, `G1 X${c.parkX ?? 180} Y${c.parkY ?? 90} F18000 ; re-park before the purge`);
 
   if (purge > 0) {
     // The slicer's shape: one long push to pack the melt zone, then short slow
@@ -1082,7 +1140,6 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
     tail.push('G1 E-1.5 F1800', 'G1 E1.5 F300');
   }
 
-  const wipes = Math.max(0, Math.round(c.wipes ?? 4));
   if (wipes > 0) {
     tail.push('; --- wipe on the brush ---', 'M400', 'M106 P1 S178', 'M400 S3');
     for (let i = 0; i < wipes; i++) tail.push('G1 X-3.5 F18000', 'G1 X-13.5 F3000');

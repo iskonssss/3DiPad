@@ -322,8 +322,10 @@
           <div id="img-controls" style="display:none">
             <div class="penrow"><span class="mini">Threshold</span>
               <input id="img-threshold" type="range" min="20" max="240" step="1" value="128" /></div>
+            <div class="penrow"><span class="mini">Size</span>
+              <input id="img-scale" type="range" min="30" max="100" step="1" value="100" /></div>
             <label class="mini imgopt"><input id="img-invert" type="checkbox" /> Light drawing on a dark background</label>
-            <button class="btn ghost sm wide" id="img-remove">Remove photo, draw instead</button>
+            <button class="btn ghost sm wide" id="img-remove">Remove photo</button>
           </div>
         </div>
 
@@ -833,13 +835,15 @@ function defaultHole(){
    width and turns it into the design coverage. The threshold is a live control
    because a clean export and a phone photo of pencil need very different cuts,
    and the operator can see the result before it prints. */
-let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=128,imgInvert=false,imgPreviewCanvas=null,imgPreviewRect=null;
+let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=128,imgInvert=false,imgScale=100,imgPreviewCanvas=null,imgPreviewRect=null;
 
 function wireImage(){
   $('#img-pick').addEventListener('click',()=>$('#img-file').click());
   $('#img-file').addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];if(f)onImageFile(f);e.target.value='';});
   $('#img-threshold').addEventListener('input',e=>{imgThreshold=+e.target.value;rethreshold();schedulePreview();});
   $('#img-invert').addEventListener('change',e=>{imgInvert=e.target.checked;rethreshold();schedulePreview();});
+  // size only moves the fit, not the cut — no re-threshold, just a new preview
+  $('#img-scale').addEventListener('input',e=>{imgScale=+e.target.value;if(imgInk)imgInk.scale=imgScale/100;imgPacked=null;lastGen=null;schedulePreview();});
   $('#img-remove').addEventListener('click',clearImage);
 }
 /** Decode a file to a drawable image, however this browser can. Older iPad
@@ -873,20 +877,19 @@ async function onImageFile(file){
     // own resolution, every time the slider moves.
     imgSrcPixels=cg.getImageData(0,0,w,h).data;
     imgSrcCanvas=c;imgThreshold=128;imgInvert=false;
-    $('#img-threshold').value=128;$('#img-invert').checked=false;
-    state.strokes=[];redoStack=[];   // image and strokes are mutually exclusive
+    $('#img-threshold').value=128;$('#img-invert').checked=false;imgScale=100;$('#img-scale').value=100;
     setImageUiActive(true);rebuildImage();updateUndo();redraw();
-    toast('Photo added — slide Threshold until your drawing shows clearly');
+    toast('Photo added — set Threshold and Size, then draw on top if you like');
   }catch{ toast('Could not read that image — try a PNG or JPEG',true); }
 }
 function clearImage(){
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;state.imgArea=0;lastGen=null;
-  setImageUiActive(false);redraw();toast('Photo removed — draw your design by hand');
+  setImageUiActive(false);redraw();toast('Photo removed');
 }
 function setImageUiActive(on){
   $('#img-controls').style.display=on?'':'none';
   $('#img-pick').textContent=on?'🖼️ Choose a different photo':'🖼️ Choose a photo';
-  for(const id of ['#tool-ctl','#pen-ctl']){const el=$(id);if(el)el.style.display=on?'none':'';}
+  // the pen stays: a name gets written over an uploaded drawing
 }
 /**
  * Re-threshold the drawing and rebuild the preview. Called on upload, on every
@@ -915,7 +918,7 @@ function rethreshold(){
     const lum=a<8?255:0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
     if(imgInvert?lum>imgThreshold:lum<imgThreshold)ink[i]=1;
   }
-  imgInk={w:W,h:H,ink};
+  imgInk={w:W,h:H,ink,scale:imgScale/100};
   imgPacked=null;   // packed lazily; see imagePayload()
   lastGen=null;
 }
@@ -946,7 +949,7 @@ function schedulePreview(){
  */
 function imagePayload(){
   if(!imgInk)return null;
-  if(!imgPacked)imgPacked={w:imgInk.w,h:imgInk.h,data:packBits(imgInk.ink,imgInk.w*imgInk.h)};
+  if(!imgPacked)imgPacked={w:imgInk.w,h:imgInk.h,scale:imgScale/100,data:packBits(imgInk.ink,imgInk.w*imgInk.h)};
   return imgPacked;
 }
 /**
@@ -1071,7 +1074,6 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
   // A photo is the design; the pen/fill/eraser step aside until it is removed.
-  if(imgInk&&state.mode==='design'){toast('Remove the photo to draw by hand',true);return;}
   // Only the drawing step draws. A stray finger on the shape or hole step used
   // to leave a mark nobody meant to make.
   if(state.step!=='draw'&&state.mode!=='outline'){return;}
@@ -1148,7 +1150,10 @@ function redraw(){
   const hasShape=!(state.shape==='custom'&&!state.customOutline);
   const paintStrokes=()=>{
     ctx.lineJoin='round';ctx.lineCap='round';
-    const hex=COLOUR_HEX[state.colours.layer2]||'#e11';ctx.strokeStyle=hex;ctx.fillStyle=hex;
+    // Plain ink while drawing: the colours are chosen on the preview page, and
+    // a pink pen here made kids think the colour had already been decided.
+    const drawing=STEPS.some(s=>s.id===state.step);
+    const hex=drawing?'#1b1b1b':(COLOUR_HEX[state.colours.layer2]||'#e11');ctx.strokeStyle=hex;ctx.fillStyle=hex;
     for(const st of state.strokes){
       const lw=Math.max(3,st.w*((pad.width/bb.w+pad.height/bb.h)/2));ctx.lineWidth=lw;
       if(st.pts.length===1){const[cx,cy]=px(st.pts[0]);ctx.beginPath();ctx.arc(cx,cy,lw/2,0,7);ctx.fill();continue;}
@@ -1207,7 +1212,19 @@ function enterReview(){drawPreview();lastGen=generate(designObj(),CFG);const m=l
   const cls=m.overBudget?'over':m.nearBudget?'warn':'';const li=(k,v,x='')=>`<li class="${x}"><span>${k}</span><b>${v}</b></li>`;
   $('#summary').innerHTML=li('Name',esc(state.contact.name))+li('Shape',cap(state.shape))+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))
     +li('Print time',`~${m.estMinutes} min`,cls)+li('Material',`~${m.estGrams} g`);
-  $('#submit').disabled=!!m.overBudget;if(m.overBudget)toast('That design is a bit big — simplify it to fit under 15 min',true);}
+  state.approved=false;
+  $('#submit').disabled=!!m.overBudget;
+  if(m.overBudget){
+    toast('That design is a bit big — simplify it to fit under '+CFG.limits.maxPrintMinutes+' min',true);
+    // The way past it is for an operator, so it is a hold, not a button: hold
+    // the print-time row. Nothing on the page says so — the operator knows.
+    if(window.__BOOTH_SERVER__){const row=$('#summary li.over');if(row){row.classList.add('adm-hold');admHold(row,()=>admRequire(approveOverBudget));}}
+  }}
+function approveOverBudget(){
+  state.approved=true;
+  $('#submit').disabled=false;
+  toast('Approved by the operator — it will take ~'+(lastGen?.meta.estMinutes)+' min');
+}
 function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
   const {poly,bbox}=shapePolygon(state.shape,CFG,state.customOutline);const pad2=44;
   const scale=Math.min((W-pad2*2)/bbox.w,(H-pad2*2)/bbox.h);const ox=(W-bbox.w*scale)/2,oy=H-(H-bbox.h*scale)/2;
@@ -1244,11 +1261,11 @@ function admInit(){
 /** Hold, do not tap. A tap is what a curious child does, and every button
     behind this one starts a real print on a real machine. The button fills as
     it is held — without that, a hold and a broken button look identical. */
-function admHold(el){
+function admHold(el, onDone = admOpen){
   const start = (e) => {
     e.preventDefault();
     el.classList.add('holding');
-    admTimer = setTimeout(() => { cancel(); admOpen(); }, ADM_HOLD_MS);
+    admTimer = setTimeout(() => { cancel(); onDone(); }, ADM_HOLD_MS);
   };
   const cancel = () => { clearTimeout(admTimer); admTimer = null; el.classList.remove('holding'); };
   el.addEventListener('touchstart', start, {passive:false});
@@ -1266,9 +1283,23 @@ function admHold(el){
    stays unlocked for a while afterwards, because an operator placing a queue of
    jobs should not type it once per child. */
 let admUnlockedUntil = 0, admPinBuf = '', admLockMin = 10;
+// The PIN that last unlocked, kept while the unlock lasts: an operator approving
+// an over-budget design sends it with the design, and the server checks it.
+let admLastPin = '', admOnUnlock = null;
+
+/** Run cb once an operator has unlocked — straight away if they already have. */
+function admRequire(cb){
+  admOnUnlock = cb;
+  return admOpen();
+}
+function admUnlocked(){
+  const cb = admOnUnlock; admOnUnlock = null;
+  if(cb) return cb();
+  return admShow();
+}
 
 async function admOpen(){
-  if(Date.now() < admUnlockedUntil) return admShow();
+  if(Date.now() < admUnlockedUntil) return admUnlocked();
   // Ask the server whether it wants a PIN at all. An empty attempt answers that
   // without being counted as a guess, and means the tablet never has to be told
   // in advance — so there is nothing about the PIN baked into the page.
@@ -1276,7 +1307,7 @@ async function admOpen(){
   try{ d = await admUnlock(''); }
   catch{ return admLockOpen('No connection to the booth server'); }
   admLockMin = d.lockMinutes ?? 10;
-  if(d.ok){ admUnlockedUntil = Date.now() + admLockMin * 60000; return admShow(); }
+  if(d.ok){ admUnlockedUntil = Date.now() + admLockMin * 60000; admLastPin = ''; return admUnlocked(); }
   admLockOpen();
 }
 
@@ -1333,8 +1364,10 @@ async function admPinKey(k){
 
   if(d.ok){
     admUnlockedUntil = Date.now() + (d.lockMinutes ?? admLockMin) * 60000;
+    admLastPin = tried;
     why.textContent = '';
-    return admShow();
+    $('#adm-lock').classList.remove('open');
+    return admUnlocked();
   }
   admPinDraw();
   $('#adm-pin').classList.add('wrong');
@@ -1355,6 +1388,7 @@ function admPrinterState(p, jobs){
   // long after someone scraped the plate.
   if(p.live?.acknowledged) return {cls:'free', label:'ready', send:'can'};
   if(st==='FAILED') return {cls:'soon', label:'failed — clear bed', send:'warn'};
+  if(st==='FINISH') return {cls:'soon', label:'done — take the print off', send:'can'};
   if(['RUNNING','PREPARE','SLICING'].includes(st)) return {cls:'busy', label:'printing', send:null};
   if(holding) return {cls:'busy', label:'starting', send:null};
   return {cls:'free', label:'ready', send:'can'};
@@ -1407,13 +1441,13 @@ async function admSend(jobId, printerId){
 async function submit(){
   if(!lastGen)lastGen=generate(designObj(),CFG);
   const {gcode,meta}=lastGen;
-  if(meta.overBudget)return toast('Design too big to print in time — simplify it',true);
+  if(meta.overBudget&&!state.approved)return toast('Design too big to print in time — simplify it',true);
   const first=state.contact.name.split(' ')[0]||'there';
   if(window.__BOOTH_SERVER__){
     $('#submit').disabled=true;
     try{
       const r=await fetch('api/submit',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({contact:state.contact,...designObj()})});
+        body:JSON.stringify({contact:state.contact,...designObj(),...(state.approved?{override:{pin:admLastPin}}:{})})});
       const data=await r.json();
       if(!r.ok||!data.ok){toast(data.error||'Something went wrong — please try again',true);$('#submit').disabled=false;return;}
       // Jobs wait for an operator to put them on a printer with the right

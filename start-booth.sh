@@ -33,7 +33,7 @@ echo " Running from: $PWD"
 git log -1 --format=' Version:      %h  %s' 2>/dev/null || true
 echo
 
-node tools/open-when-ready.mjs 3000 /dashboard/ &
+node tools/open-when-ready.mjs 3000 /dashboard/ / &
 
 echo
 echo "Leave this window open. Press Ctrl-C to stop the booth."

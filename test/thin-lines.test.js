@@ -11,7 +11,7 @@ import { imageCoverage } from '../src/gcode/image.js';
 import { shapePolygon } from '../src/gcode/geometry.js';
 import { skeletonize, skeletonPaths, pruneSpurs } from '../src/gcode/fill.js';
 
-const cfg = loadConfig();
+const cfg = loadConfig({ exampleOnly: true });
 const XS = Math.PI * (cfg.build.filamentDiameter / 2) ** 2;
 const N = 1000;
 

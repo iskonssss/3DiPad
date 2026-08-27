@@ -59,7 +59,8 @@ function designSvg(design, job, cfg) {
   // An uploaded drawing has no strokes; its visual record is the printed
   // silhouette itself — the same coverage the g-code was built from, traced to
   // filled contours so the record shows exactly what came off the plate.
-  const design2 = design.image ? imageContours(design, poly, cfg) : strokePaths(design.design, X, Y, cfg);
+  // both can be present: a drawing uploaded and a name written over it
+  const design2 = (design.image ? imageContours(design, poly, cfg) : '') + strokePaths(design.design || [], X, Y, cfg);
 
   const label = `${job.filename} — ${job.contact.name} ${job.contact.phone}${design.image ? ' (imported image)' : ''}`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW * 4}" height="${svgH * 4}">

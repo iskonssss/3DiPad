@@ -5,7 +5,7 @@ import { generate } from '../src/gcode/engine.js';
 import { buildCoverage, maskContours, maskRows } from '../src/gcode/fill.js';
 import { shapePolygon } from '../src/gcode/geometry.js';
 
-const cfg = loadConfig();
+const cfg = loadConfig({ exampleOnly: true });
 
 /** Filament volume and path length laid down in the design section only. */
 function designUsage(gcode) {
@@ -185,7 +185,7 @@ test('the outline of a drawing is smooth, not a staircase of the grid it was ras
   const { shapePolygon } = await import('../src/gcode/geometry.js');
   const { erode, smooth, decimate } = await import('../src/gcode/outline.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const { poly, bbox } = shapePolygon('square', cfg);
 
   // A straight diagonal: any staircase stands out against it unmistakably.
@@ -217,7 +217,7 @@ test('smoothing the outline does not move it off the drawing', async () => {
   const { shapePolygon } = await import('../src/gcode/geometry.js');
   const { erode, smooth, decimate } = await import('../src/gcode/outline.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const { poly, bbox } = shapePolygon('square', cfg);
 
   // A squiggle with real curvature — the case where over-smoothing would show,

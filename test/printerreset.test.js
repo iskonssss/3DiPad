@@ -103,6 +103,14 @@ test('any new word from the printer drops the operator dismissal', () => {
   const cb = src.slice(src.indexOf('const h = watchPrinter('), src.indexOf('handles.push(h)'));
   assert.match(cb, /status\.state !== prev\.state/, 'the drop must hang off a real state change');
   assert.match(cb, /delete states\[printer\.id\]\.acknowledged/, 'a state change must clear the dismissal');
+
+  // And the pre-send check must honour it. The tile said READY on the
+  // operator's word while the send refused on the printer's, and "NOT SENT —
+  // holding a FAILED job" came back after every Bed-cleared press.
+  const srv = fs.readFileSync(path.join(root, 'src/server.js'), 'utf8');
+  const from = srv.indexOf('function clearBeforeSend');
+  const body = srv.slice(from, srv.indexOf('const dispatcher = createDispatcher', from));
+  assert.match(body, /acknowledged\)\s*return \{ needed: false/, 'an acknowledged printer is not cleared or blocked');
   // and it must happen before the transition is acted on, so nothing downstream
   // sees a stale acknowledgement
   assert.ok(cb.indexOf('delete states') < cb.indexOf('applyTransition'), 'clear it before acting on the change');

@@ -27,6 +27,11 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
   const maxAttempts = cfg.integrations?.lan?.maxDispatchAttempts ?? 3;
   // off by default — see the note at the top of this file
   const auto = () => cfg.integrations?.lan?.autoDispatch === true;
+  // Printers whose NEXT print should run a bed level. One-shot: set from the
+  // dashboard, consumed by the send that carries it. The config's bedLevel is
+  // every print or none, and needs a restart either way — no good for "this
+  // one is printing badly, level it once".
+  const levelNext = new Set();
 
   /** Oldest queued job first — whoever has been waiting longest goes next. */
   function nextQueued() {
@@ -70,25 +75,32 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
         //
         // The job stays assigned to this printer, so pressing Send once the
         // screen is clear picks it straight back up.
-        if (r?.needed && !r.cleared) {
+        // FINISH is not a lock. A printer that has just completed a print takes
+        // the next one; it only needs the plate cleared, which the operator
+        // does by hand and the booth cannot see. FAILED is the one that refuses.
+        if (r?.needed && !r.cleared && String(r.state || '').toUpperCase() !== 'FINISH') {
           queue.setStatus(job.id, 'assigned', {
             printerId: printer.id,
             dispatch: { ok: false, uploaded: false, blocked: r.state, error: `printer is holding a ${r.state} job` },
           });
           onEvent({ type: 'blocked', job, printer, state: r.state });
-          return;
+          // Returned, not dropped: the dashboard's Send awaits this and read
+          // `.sent` off undefined, which took the server down mid-booth.
+          return { ok: false, sent: false, blocked: r.state, error: `${printer.name} is holding a ${r.state} job — clear it on the printer's screen, then Send again` };
         }
       } catch (e) { console.error('pre-send check failed', e); }
     }
     // probeStart lets the transport find out which start command this firmware
     // obeys, by watching whether the printer moved after each one. It is a short
     // wait (a few seconds each) and only happens while the shape is unknown.
-    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart, meta: job.meta }))
+    const bedLevel = levelNext.has(printer.id);
+    const r = await Promise.resolve(transport(printer, filePath, cfg, { sequenceId: job.seq, confirmStarted: probeStart, meta: job.meta, bedLevel }))
       .catch((e) => ({ ok: false, stage: 'send', error: String(e.message || e) }));
 
     if (r.variant) onEvent({ type: 'variant', job, printer, variant: r.variant, confirmed: !!r.confirmed });
 
     if (r.sent) {
+      if (bedLevel) { levelNext.delete(printer.id); onEvent({ type: 'levelled', job, printer }); }
       queue.setStatus(job.id, 'printing', { printerId: printer.id, dispatchAttempts: 0, dispatch: { ok: true, remotePath: r.remotePath } });
       onEvent({ type: 'sent', job, printer });
       // The transport only says the command went out — the printer sends no
@@ -168,5 +180,8 @@ export function createDispatcher({ cfg, queue, outDir, onEvent = () => {}, trans
       return printer;
     },
     autoDispatch: auto,
+    /** Arm (or disarm) a bed level for the next print sent to this printer. */
+    setLevelNext(printerId, on) { if (on) levelNext.add(printerId); else levelNext.delete(printerId); return levelNext.has(printerId); },
+    levelNext(printerId) { return levelNext.has(printerId); },
   };
 }

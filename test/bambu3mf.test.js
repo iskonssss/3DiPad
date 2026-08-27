@@ -120,6 +120,16 @@ test('a 3mf is started as a project, with no shape to guess at', () => {
   // the calibration skips the booth asked for, as print-task parameters
   assert.equal(cmd.print.bed_leveling, false);
   assert.equal(cmd.print.flow_cali, false);
+  // Captured from Bambu Studio's own command for a two-colour external-spool
+  // print on this printer. ams_id 255 is the external spool, once per filament.
+  // Our old [254, 254] with no ams_mapping2 sent T1 to an AMS slot.
+  assert.deepEqual(cmd.print.ams_mapping, [-1, -1]);
+  assert.deepEqual(cmd.print.ams_mapping2, [{ ams_id: 255, slot_id: 0 }, { ams_id: 255, slot_id: 0 }]);
+  assert.equal(cmd.print.use_ams, false);
+  assert.equal(cmd.print.bed_type, 'textured_plate');
+  // Bisected on the printer: this one field is what makes the task record say
+  // manual_color_change true for our file. Nothing else did.
+  assert.equal(cmd.print.cfg, '1');
 });
 
 test('extra parts can be added, for bisecting what the firmware requires', () => {
@@ -184,7 +194,7 @@ test('the 3mf carries a filament profile for both colours', async () => {
   const { build3mf, zipMember, zipNames, isBambuStudio3mf } = await import('../src/integrations/bambu3mf.js');
   const { generate } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const colours = { layer1: 'BLACK', layer2: 'PINK' };
   const { gcode, meta } = generate({
     shape: 'rectangle', colours, hole: null,
@@ -211,7 +221,7 @@ test('the 3mf says which layers each colour covers', async () => {
   const { build3mf, zipMember } = await import('../src/integrations/bambu3mf.js');
   const { generate } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const colours = { layer1: 'BLACK', layer2: 'PINK' };
   const { gcode, meta } = generate({
     shape: 'rectangle', colours, hole: null,

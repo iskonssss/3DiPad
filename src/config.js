@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export function loadConfig() {
+export function loadConfig({ exampleOnly = false } = {}) {
   const examplePath = path.join(root, 'config.example.json');
   const userPath = path.join(root, 'config.json');
   const defaults = readJson(examplePath);
-  const hasUser = fs.existsSync(userPath);
+  // exampleOnly: the shipped defaults, ignoring the booth's own config.json.
+  // For tests — the booth's live tuning (purge off, bed 55...) must not be
+  // able to fail a test that is about the code.
+  const hasUser = !exampleOnly && fs.existsSync(userPath);
   const user = hasUser ? readJson(userPath) : null;
 
   const cfg = hasUser ? mergeDefaults(defaults, user) : defaults;

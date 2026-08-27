@@ -70,6 +70,11 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   let drawW, drawH;
   if (imgAspect > plateAspect) { drawW = bbox.w; drawH = bbox.w / imgAspect; }
   else { drawH = bbox.h; drawW = bbox.h * imgAspect; }
+  // The size slider: a fraction of the contain-fit, shrunk about the centre of
+  // the plate, so a drawing can sit smaller than the base rather than always
+  // touching two edges of it.
+  const scale = Number.isFinite(bitmap.scale) ? Math.max(0.2, Math.min(1, bitmap.scale)) : 1;
+  drawW *= scale; drawH *= scale;
   const offX = (bbox.w - drawW) / 2, offY = (bbox.h - drawH) / 2;
 
   let mask = new Uint8Array(w * h);
@@ -223,5 +228,7 @@ export function decodeBitmap(image) {
   if (bytes.length < Math.ceil(n / 8)) return null;
   const ink = new Uint8Array(n);
   for (let i = 0; i < n; i++) ink[i] = (bytes[i >> 3] >> (7 - (i & 7))) & 1;
-  return { w, h, ink };
+  const out = { w, h, ink };
+  if (Number.isFinite(image.scale)) out.scale = image.scale;
+  return out;
 }

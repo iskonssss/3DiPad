@@ -116,6 +116,10 @@
             <button class="save">Save</button>
             <button class="ghost test">Test</button>
           </div>
+          <div class="row">
+            <button class="ghost light" data-on="1">💡 Light on</button>
+            <button class="ghost light" data-on="0">Light off</button>
+          </div>
           <div class="out"></div>`;
 
         const out = $('.out', el);
@@ -144,6 +148,26 @@
         });
 
         $('.test', el).addEventListener('click', runTest);
+
+        // The light is the one command you can see land from across the booth.
+        // It is in the system namespace, so it works with Developer Mode off —
+        // a light that obeys and a Test that fails on print commands is exactly
+        // that switch.
+        for (const b of el.querySelectorAll('.light')) {
+          b.addEventListener('click', async () => {
+            const on = b.dataset.on === '1';
+            out.innerHTML = `<p class="busy">Turning the light ${on ? 'on' : 'off'}…</p>`;
+            const r = await post(`../api/printers/${p.slot}/light`, { on });
+            out.innerHTML = list([
+              r.ok
+                ? { ok: true, msg: `Printer answered: light ${on ? 'on' : 'off'} — look at it` }
+                : r.sent
+                  ? { ok: null, msg: r.reply ? `Printer answered "${r.reply.result}"${r.reply.reason ? ` — ${r.reply.reason}` : ''}` : 'Command sent, no answer within 4s',
+                      hint: 'If the light moved anyway, the command works and only the reply was missed. If it did not, re-check the access code and that LAN Mode is on.' }
+                  : { ok: false, msg: r.error || 'Could not send' },
+            ]);
+          });
+        }
 
         async function runTest() {
           out.innerHTML = '<p class="busy">Checking…</p>';
