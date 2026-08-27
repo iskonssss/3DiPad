@@ -27,17 +27,17 @@ M17
 M400 S1
 M1006 S1
 ;===== duration is proportional to the MIDI's real note lengths (ms in comments)
-M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (109ms)
-M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
-M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (111ms)
-M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
-M1006 A70 B37 L100 C70 D37 M100 E70 F37 N100  ; Bb (332ms)
-M1006 A69 B72 L100 C69 D72 M100 E69 F72 N100  ; A  (2665ms, held; capped at 72)
-M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (109ms)
-M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
-M1006 A62 B12 L100 C62 D12 M100 E62 F12 N100  ; D  (111ms)
-M1006 A65 B12 L100 C65 D12 M100 E65 F12 N100  ; F  (109ms)
-M1006 A56 B72 L100 C56 D72 M100 E56 F72 N100  ; G# (2999ms, held; capped at 72)
+M1006 A62 B13 L100 C62 D13 M100 E62 F13 N100  ; D  (109ms)
+M1006 A65 B13 L100 C65 D13 M100 E65 F13 N100  ; F  (109ms)
+M1006 A62 B14 L100 C62 D14 M100 E62 F14 N100  ; D  (111ms)
+M1006 A65 B13 L100 C65 D13 M100 E65 F13 N100  ; F  (109ms)
+M1006 A70 B41 L100 C70 D41 M100 E70 F41 N100  ; Bb (332ms)
+M1006 A69 B80 L100 C69 D80 M100 E69 F80 N100  ; A  (2665ms, held; capped at 80)
+M1006 A62 B13 L100 C62 D13 M100 E62 F13 N100  ; D  (109ms)
+M1006 A65 B13 L100 C65 D13 M100 E65 F13 N100  ; F  (109ms)
+M1006 A62 B14 L100 C62 D14 M100 E62 F14 N100  ; D  (111ms)
+M1006 A65 B13 L100 C65 D13 M100 E65 F13 N100  ; F  (109ms)
+M1006 A56 B80 L100 C56 D80 M100 E56 F80 N100  ; G# (2999ms, held; capped at 80)
 M1006 W
 M18
 
@@ -104,13 +104,12 @@ M104 S{nozzleFirst}
 M109 S{nozzleFirst} ; wait for full print temp before any extrusion
 M106 S0 ; part fan off for the first layer
 G1 Z5 F1200
-; Filament sensors deliberately NOT enabled. The Bambu start these were copied
-; from turns on runout (M412) and TANGLE detection (M620.3) — but tangle is an
-; AMS odometer feature, and on a bare external spool it can false-trigger and
-; CANCEL a print at a random point (HMS 0300_400C). Job 82 cancelled at 11% and
-; then, re-sent, at 33% — same file, different point, while its siblings printed
-; fine: the signature of an intermittent sensor trip, not a bad line. A booth
-; operator is watching the spools anyway. Do not re-add these without a reason.
+; Filament sensors NOT enabled. The Bambu start these were copied from turns on
+; runout (M412) and tangle detection (M620.3). They were removed while chasing
+; a print that cancelled at random points (HMS 0300_400C) — but the real cause
+; turned out to be a bad SD card, fixed by reformatting (see HANDOVER). They
+; stay out because a booth operator watches the spools anyway; re-adding runout
+; detection is reasonable if you want a running-out spool to pause.
 ; --- prime line ---
 G1 E-0.8 F2100
 G1 X10 Y3 F12000
