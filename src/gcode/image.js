@@ -75,7 +75,11 @@ export function imageCoverage(bitmap, cfg, bbox, clipPoly, hole, edgeMargin) {
   // touching two edges of it.
   const scale = Number.isFinite(bitmap.scale) ? Math.max(0.2, Math.min(1, bitmap.scale)) : 1;
   drawW *= scale; drawH *= scale;
-  const offX = (bbox.w - drawW) / 2, offY = (bbox.h - drawH) / 2;
+  // Dragged into place: an offset from centred, in plate mm. Whatever ends up
+  // off the plate is clipped below, same as a stroke drawn over the edge.
+  const ox = Number.isFinite(bitmap.offset?.x) ? bitmap.offset.x : 0;
+  const oy = Number.isFinite(bitmap.offset?.y) ? bitmap.offset.y : 0;
+  const offX = (bbox.w - drawW) / 2 + ox, offY = (bbox.h - drawH) / 2 + oy;
 
   let mask = new Uint8Array(w * h);
   // How many source pixels fall under one cell. Below 1 the drawing is being
@@ -296,5 +300,6 @@ export function decodeBitmap(image) {
   for (let i = 0; i < n; i++) ink[i] = (bytes[i >> 3] >> (7 - (i & 7))) & 1;
   const out = { w, h, ink };
   if (Number.isFinite(image.scale)) out.scale = image.scale;
+  if (image.offset && Number.isFinite(image.offset.x) && Number.isFinite(image.offset.y)) out.offset = { x: image.offset.x, y: image.offset.y };
   return out;
 }

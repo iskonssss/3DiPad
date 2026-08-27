@@ -284,3 +284,13 @@ test('a small logo on a big plate gets straight diagonals, not pixel steps', () 
   const biggestJump = Math.max(...mid.slice(1).map((r, k) => Math.abs(r - mid[k])));
   assert.ok(biggestJump <= 3, `hypotenuse jumps ${biggestJump} cells at once — a staircase`);
 });
+
+test('a dragged image lands where it was dragged', () => {
+  const bbox = { w: 100, h: 40 };
+  const disc = bitmap(100, 100, (x, y) => (x - 50) ** 2 + (y - 50) ** 2 < 30 ** 2);
+  const centre = (cov) => { let sx = 0, sy = 0, n = 0; for (let j = 0; j < cov.h; j++) for (let i = 0; i < cov.w; i++) if (cov.mask[j * cov.w + i]) { const p = cov.toMm({ x: i, y: j }); sx += p.x; sy += p.y; n++; } return { x: sx / n, y: sy / n }; };
+  const home = centre(imageCoverage({ ...disc, scale: 0.5 }, cfg, bbox, null, null, 0));
+  const moved = centre(imageCoverage({ ...disc, scale: 0.5, offset: { x: 20, y: -5 } }, cfg, bbox, null, null, 0));
+  assert.ok(Math.abs(moved.x - home.x - 20) < 0.5 && Math.abs(moved.y - home.y + 5) < 0.5, `moved by ${(moved.x - home.x).toFixed(1)}, ${(moved.y - home.y).toFixed(1)}`);
+  assert.deepEqual(decodeBitmap({ ...pack(disc), offset: { x: 20, y: -5 } }).offset, { x: 20, y: -5 });
+});

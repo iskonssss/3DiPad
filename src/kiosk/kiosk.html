@@ -325,6 +325,8 @@
             <div class="penrow"><span class="mini">Size</span>
               <input id="img-scale" type="range" min="30" max="100" step="1" value="100" /></div>
             <label class="mini imgopt"><input id="img-invert" type="checkbox" /> Light drawing on a dark background</label>
+            <p class="mini" style="margin:6px 0 0">Drag the picture on the plate to move it</p>
+            <button class="btn ghost sm wide" id="img-centre">Centre the picture</button>
             <button class="btn ghost sm wide" id="img-remove">Remove photo</button>
           </div>
         </div>
@@ -836,6 +838,8 @@ function defaultHole(){
    because a clean export and a phone photo of pencil need very different cuts,
    and the operator can see the result before it prints. */
 let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=128,imgInvert=false,imgScale=100,imgPreviewCanvas=null,imgPreviewRect=null;
+// where the image sits, plate mm from centred; set by dragging on the shape step
+let imgOffset={x:0,y:0},imgDrag=null,imgPreviewTint='';
 
 function wireImage(){
   $('#img-pick').addEventListener('click',()=>$('#img-file').click());
@@ -845,6 +849,7 @@ function wireImage(){
   // size only moves the fit, not the cut — no re-threshold, just a new preview
   $('#img-scale').addEventListener('input',e=>{imgScale=+e.target.value;if(imgInk)imgInk.scale=imgScale/100;imgPacked=null;lastGen=null;schedulePreview();});
   $('#img-remove').addEventListener('click',clearImage);
+  $('#img-centre').addEventListener('click',()=>{setImageOffset({x:0,y:0});});
 }
 /** Decode a file to a drawable image, however this browser can. Older iPad
     Safari has no createImageBitmap for a File, so fall back to an <img>. */
@@ -878,6 +883,7 @@ async function onImageFile(file){
     imgSrcPixels=cg.getImageData(0,0,w,h).data;
     imgSrcCanvas=c;imgThreshold=128;imgInvert=false;
     $('#img-threshold').value=128;$('#img-invert').checked=false;imgScale=100;$('#img-scale').value=100;
+    imgOffset={x:0,y:0};
     setImageUiActive(true);rebuildImage();updateUndo();redraw();
     toast('Photo added — set Threshold and Size, then draw on top if you like');
   }catch{ toast('Could not read that image — try a PNG or JPEG',true); }
@@ -918,9 +924,14 @@ function rethreshold(){
     const lum=a<8?255:0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2];
     if(imgInvert?lum>imgThreshold:lum<imgThreshold)ink[i]=1;
   }
-  imgInk={w:W,h:H,ink,scale:imgScale/100};
+  imgInk={w:W,h:H,ink,scale:imgScale/100,offset:{...imgOffset}};
   imgPacked=null;   // packed lazily; see imagePayload()
   lastGen=null;
+}
+function setImageOffset(o){
+  imgOffset={x:+o.x.toFixed(2),y:+o.y.toFixed(2)};
+  if(imgInk)imgInk.offset={...imgOffset};
+  imgPacked=null;lastGen=null;schedulePreview();
 }
 /** Rebuild just the preview — the plate, hole or colour moved, but the
     threshold did not, so the drawing does not need re-cutting. */
@@ -949,7 +960,7 @@ function schedulePreview(){
  */
 function imagePayload(){
   if(!imgInk)return null;
-  if(!imgPacked)imgPacked={w:imgInk.w,h:imgInk.h,scale:imgScale/100,data:packBits(imgInk.ink,imgInk.w*imgInk.h)};
+  if(!imgPacked)imgPacked={w:imgInk.w,h:imgInk.h,scale:imgScale/100,offset:{...imgOffset},data:packBits(imgInk.ink,imgInk.w*imgInk.h)};
   return imgPacked;
 }
 /**
@@ -969,7 +980,9 @@ function buildImagePreview(bitmap){
 
   const c=document.createElement('canvas');c.width=cov.w;c.height=cov.h;
   const g=c.getContext('2d'),img=g.createImageData(cov.w,cov.h);
-  const hex=COLOUR_HEX[state.colours.layer2]||'#e11';
+  // Plain ink while the design is being made, the real colour on the preview
+  // page — the same rule as the strokes, so the two never disagree.
+  const hex=imgPreviewTint=STEPS.some(x=>x.id===state.step)?'#1b1b1b':(COLOUR_HEX[state.colours.layer2]||'#e11');
   const r=parseInt(hex.slice(1,3),16)||225,gg=parseInt(hex.slice(3,5),16)||17,b=parseInt(hex.slice(5,7),16)||17;
   let count=0;
   for(let j=0;j<cov.h;j++){
@@ -998,7 +1011,8 @@ function packBits(ink,n){
     where it will print. Already clipped to the plate by imageCoverage. */
 function paintImage(c,px){
   if(!imgPreviewCanvas||!imgPreviewRect)return;
-  const r=imgPreviewRect;
+  const d=imgDrag?imgDrag.delta:{x:0,y:0};
+  const r={x0:imgPreviewRect.x0+d.x,x1:imgPreviewRect.x1+d.x,y0:imgPreviewRect.y0+d.y,y1:imgPreviewRect.y1+d.y};
   const [X0,Y0]=px({x:r.x0,y:r.y1});          // top-left on screen: min x, max y
   const [X1,Y1]=px({x:r.x1,y:r.y0});
   c.save();
@@ -1073,7 +1087,9 @@ function toMM(ev){const rect=pad.getBoundingClientRect();const bb=bboxFor(state.
 function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;if(penSeen&&ev.pointerType==='touch')return;
   const p=toMM(ev);
   if(state.mode==='hole'){placeHole(p);return;}
-  // A photo is the design; the pen/fill/eraser step aside until it is removed.
+  // On the shape step a loaded picture is dragged into place: the cached
+  // preview slides under the finger, and the real trace is rebuilt on release.
+  if(state.step==='base'&&imgInk&&state.mode!=='outline'){imgDrag={id:ev.pointerId,from:p,delta:{x:0,y:0}};activeId=ev.pointerId;drawing=true;return;}
   // Only the drawing step draws. A stray finger on the shape or hole step used
   // to leave a mark nobody meant to make.
   if(state.step!=='draw'&&state.mode!=='outline'){return;}
@@ -1084,12 +1100,14 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   else { state.strokes.push({w:state.pen,pts:[p]}); pushUndoable(); }
   redraw();}
 function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefault();
+  if(imgDrag){const p=toMM(ev);imgDrag.delta={x:p.x-imgDrag.from.x,y:p.y-imgDrag.from.y};redraw();return;}
   const evs=ev.getCoalescedEvents?ev.getCoalescedEvents():[ev];
   if(state.tool==='eraser'&&state.mode!=='outline'){for(const e of evs)eraseAt(toMM(e));redraw();return;}
   if(state.mode==='outline'){for(const e of evs)outlinePts.push(toMM(e));}
   else{const st=state.strokes[state.strokes.length-1];for(const e of evs)st.pts.push(toMM(e));}
   redraw();}
 function onUp(ev){if(ev.pointerId!==activeId)return;drawing=false;activeId=null;
+  if(imgDrag){const d=imgDrag.delta;imgDrag=null;setImageOffset({x:imgOffset.x+d.x,y:imgOffset.y+d.y});return;}
   if(state.mode==='outline'&&outlinePts){finishOutline();}
   redraw();}
 function finishOutline(){
@@ -1137,6 +1155,7 @@ function redraw(){
   }
   // imported drawing sits where the strokes would — clipped to the plate, so
   // what shows is what prints (the hole guide draws over it, just below)
+  if(imgInk&&imgPreviewCanvas&&imgPreviewTint!=='#1b1b1b'&&STEPS.some(x=>x.id===state.step))refreshImagePreview();
   if(imgInk&&imgPreviewCanvas)paintImage(ctx,px);
   // outline being drawn
   if(state.mode==='outline'&&outlinePts&&outlinePts.length){ctx.strokeStyle='#3a6fd8';ctx.lineWidth=3;ctx.lineJoin='round';ctx.lineCap='round';
@@ -1207,7 +1226,7 @@ function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/CFG.limits.maxSt
 
 /* ---- review ---- */
 function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:imagePayload()};}
-function enterReview(){drawPreview();lastGen=generate(designObj(),CFG);const m=lastGen.meta,c=state.colours;
+function enterReview(){if(imgInk)refreshImagePreview();drawPreview();lastGen=generate(designObj(),CFG);const m=lastGen.meta,c=state.colours;
   const chip=n=>`<span class="swatch-mini" style="background:${COLOUR_HEX[n]||'#888'}"></span>${n}`;
   const cls=m.overBudget?'over':m.nearBudget?'warn':'';const li=(k,v,x='')=>`<li class="${x}"><span>${k}</span><b>${v}</b></li>`;
   $('#summary').innerHTML=li('Name',esc(state.contact.name))+li('Shape',cap(state.shape))+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))

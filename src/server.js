@@ -583,6 +583,9 @@ function sanitizeImage(img) {
   // the size slider, as a fraction of the contain-fit; anything odd means 1
   const scale = Number(img.scale);
   if (Number.isFinite(scale) && scale > 0 && scale <= 1) out.scale = scale;
+  // dragged position, plate mm from centred; bounded so nothing silly is stored
+  const ox = Number(img.offset?.x), oy = Number(img.offset?.y);
+  if (Number.isFinite(ox) && Number.isFinite(oy) && Math.abs(ox) <= 300 && Math.abs(oy) <= 300) out.offset = { x: ox, y: oy };
   return out;
 }
 
