@@ -489,7 +489,7 @@ const COUNTRIES=[
 ];
 const DEFAULT_CC='65';
 
-const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'BLACK',layer2:'PINK'},
+const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'WHITE',layer2:'BLACK'},
   pen:0.8,tool:'pen',eraser:6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/,
   // An uploaded drawing is an alternative to the strokes: a thresholded bitmap
   // in plate-grid cells, posted as {w,h,data} and turned into the same design
@@ -1491,7 +1491,7 @@ async function submit(){
   $('#done-msg').textContent=`Your keychain file (${filename}) is ready — about ${meta.estMinutes} minutes to print.`;
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
-function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'BLACK',layer2:'PINK'};
+function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'WHITE',layer2:'BLACK'};
   state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
