@@ -15,7 +15,7 @@ import { root } from './config.js';
 
 const FTP_PORT = 990;
 const MQTT_PORT = 8883;
-const SLOTS = 3;
+const SLOTS = 4;
 
 export const configPath = () => path.join(root, 'config.json');
 

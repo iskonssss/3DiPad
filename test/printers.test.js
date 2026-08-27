@@ -20,11 +20,11 @@ test('access codes are never handed back out', () => {
   assert.equal(shown[0].configured, true);
 });
 
-test('empty slots are still listed, so all three can be set up', () => {
+test('empty slots are still listed, so all four can be set up', () => {
   const shown = publicPrinters({ integrations: { printers: [] } });
-  assert.equal(shown.length, 3);
-  assert.deepEqual(shown.map((p) => p.id), ['A1-1', 'A1-2', 'A1-3']);
-  assert.deepEqual(shown.map((p) => p.configured), [false, false, false]);
+  assert.equal(shown.length, 4);
+  assert.deepEqual(shown.map((p) => p.id), ['A1-1', 'A1-2', 'A1-3', 'A1-4']);
+  assert.deepEqual(shown.map((p) => p.configured), [false, false, false, false]);
 });
 
 // --- saving, against a real config.json in a scratch copy of the repo ---

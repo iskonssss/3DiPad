@@ -31,6 +31,7 @@
                padding:11px 10px; border-radius:10px; background:var(--accent); color:#201a05; }
       button.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); }
       button:disabled { opacity:.5; cursor:default; }
+      button.light.held { background:var(--accent); color:#201a05; }
       .findings { margin:13px 0 0; padding:0; list-style:none; font-size:13px; line-height:1.5; }
       .findings li { display:flex; gap:8px; padding:5px 0; border-top:1px solid #ffffff0d; }
       .findings li:first-child { border-top:0; }
@@ -117,8 +118,7 @@
             <button class="ghost test">Test</button>
           </div>
           <div class="row">
-            <button class="ghost light" data-on="1">💡 Light on</button>
-            <button class="ghost light" data-on="0">Light off</button>
+            <button class="ghost light">💡 Hold to blink the light</button>
           </div>
           <div class="out"></div>`;
 
@@ -152,22 +152,30 @@
         // The light is the one command you can see land from across the booth.
         // It is in the system namespace, so it works with Developer Mode off —
         // a light that obeys and a Test that fails on print commands is exactly
-        // that switch.
-        for (const b of el.querySelectorAll('.light')) {
-          b.addEventListener('click', async () => {
-            const on = b.dataset.on === '1';
-            out.innerHTML = `<p class="busy">Turning the light ${on ? 'on' : 'off'}…</p>`;
-            const r = await post(`../api/printers/${p.slot}/light`, { on });
-            out.innerHTML = list([
-              r.ok
-                ? { ok: true, msg: `Printer answered: light ${on ? 'on' : 'off'} — look at it` }
-                : r.sent
-                  ? { ok: null, msg: r.reply ? `Printer answered "${r.reply.result}"${r.reply.reason ? ` — ${r.reply.reason}` : ''}` : 'Command sent, no answer within 4s',
-                      hint: 'If the light moved anyway, the command works and only the reply was missed. If it did not, re-check the access code and that LAN Mode is on.' }
-                  : { ok: false, msg: r.error || 'Could not send' },
-            ]);
-          });
-        }
+        // that switch. Momentary: press turns it off, release turns it back on,
+        // so the printer is always left lit.
+        const light = $('.light', el);
+        let lightBusy = null;
+        const setLight = async (on) => {
+          const r = await post(`../api/printers/${p.slot}/light`, { on });
+          out.innerHTML = list([
+            r.ok
+              ? { ok: true, msg: `Printer answered: light ${on ? 'on' : 'off'} — look at it` }
+              : r.sent
+                ? { ok: null, msg: r.reply ? `Printer answered "${r.reply.result}"${r.reply.reason ? ` — ${r.reply.reason}` : ''}` : 'Command sent, no answer within 4s',
+                    hint: 'If the light moved anyway, the command works and only the reply was missed. If it did not, re-check the access code and that LAN Mode is on.' }
+                : { ok: false, msg: r.error || 'Could not send', hint: 'The booth has no connection to this printer right now — is it on, and on the Wi-Fi?' },
+          ]);
+        };
+        // off on press, on on release — serialised so a quick tap still sends both, in order
+        const press = (e) => { e.preventDefault(); light.classList.add('held'); lightBusy = setLight(false); };
+        const release = () => {
+          if (!light.classList.contains('held')) return;
+          light.classList.remove('held');
+          lightBusy = (lightBusy || Promise.resolve()).then(() => setLight(true));
+        };
+        light.addEventListener('pointerdown', press);
+        for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) light.addEventListener(ev, release);
 
         async function runTest() {
           out.innerHTML = '<p class="busy">Checking…</p>';
