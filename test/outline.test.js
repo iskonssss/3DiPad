@@ -5,7 +5,7 @@ import { loadConfig } from '../src/config.js';
 import { shapePolygon, pointInPolygon } from '../src/gcode/geometry.js';
 import { prepareStrokes } from '../src/gcode/strokes.js';
 
-const cfg = loadConfig();
+const cfg = loadConfig({ exampleOnly: true });
 
 const area = (P) => {
   let a = 0;
@@ -181,7 +181,7 @@ test('every shape the booth offers is one the generator knows', async () => {
   const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const { loadConfig } = await import('../src/config.js');
   const { shapePolygon } = await import('../src/gcode/geometry.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
 
   const offered = [...kiosk.matchAll(/\['(\w+)','[^']+'\]/g)].map((m) => m[1]);
   // The booth offers four: a shape a child draws themselves, and three presets.

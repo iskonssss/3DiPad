@@ -17,7 +17,7 @@ import { uploadGcode } from './integrations/drive.js';
 import { startMonitor } from './dispatch/monitor.js';
 import { createDispatcher } from './dispatch/dispatcher.js';
 import { publicPrinters, savePrinter, checkPrinter } from './printers.js';
-import { lastCommandSent, clearIfStuck, needsClearing, publishCommand, buildStopCommand } from './integrations/bambu.js';
+import { lastCommandSent, clearIfStuck, needsClearing, publishCommand, buildStopCommand, buildLightCommand } from './integrations/bambu.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -75,6 +75,13 @@ app.get('/api/config', (_req, res) => {
  * anyone who can reach the booth Wi-Fi and POST to the API directly, and it is
  * not meant to — the printers are two feet away and have their own screens.
  */
+/** Is this an operator saying yes? A PIN match, or any override at all when no PIN is set. */
+function operatorApproves(override) {
+  if (!override) return false;
+  const pin = operatorPin();
+  return pin ? String(override.pin || '') === pin : true;
+}
+
 function operatorPin() {
   return String(process.env.BOOTH_ADMIN_PIN || cfg.operator?.pin || '').trim();
 }
@@ -142,9 +149,15 @@ app.post('/api/submit', async (req, res) => {
   }
 
   const { gcode, meta } = generate(design, cfg);
-  if (meta.overBudget) {
-    return res.status(422).json({ ok: false, error: 'Design exceeds the print-time limit — simplify it.', meta });
+  // Over the time budget: refused, unless an operator approves it from the
+  // tablet. The approval is the operator PIN (the same one that opens the
+  // send panel), sent along with the design; with no PIN configured, the hold
+  // gesture alone is the approval, as it is for the panel.
+  const approved = meta.overBudget && operatorApproves(req.body.override);
+  if (meta.overBudget && !approved) {
+    return res.status(422).json({ ok: false, error: 'Design exceeds the print-time limit — simplify it, or an operator can approve it.', meta });
   }
+  if (approved) meta.approvedByOperator = true;
   if (!meta.hasDesign) {
     return res.status(422).json({ ok: false, error: 'Nothing to print — draw or upload a design first.', meta });
   }
@@ -171,6 +184,7 @@ app.post('/api/submit', async (req, res) => {
     notify: null,
   });
 
+  if (meta.approvedByOperator) console.log(`[queue] ${filename} is over the ${cfg.limits.maxPrintMinutes}-min budget (~${meta.estMinutes} min) — approved by the operator`);
   try { saveLead(leadsDir, job, design, cfg); } catch (e) { console.error('lead save failed', e); }
 
   // push the lead to the CRM the moment they submit (captures them even if they
@@ -200,6 +214,7 @@ app.get('/api/jobs', (_req, res) => {
     printers: (cfg.integrations?.printers || []).map((p) => ({
       id: p.id, name: p.name, configured: !!(p.ip && p.serial && p.accessCode),
       live: monitor.states()[p.id] || null,
+      levelNext: dispatcher.levelNext(p.id),
     })),
     stats: queue.stats(),
     integrations: {
@@ -223,6 +238,7 @@ app.get('/api/history', (req, res) => {
     printers: (cfg.integrations?.printers || []).map((p) => ({
       id: p.id, name: p.name, configured: !!(p.ip && p.serial && p.accessCode),
       live: monitor.states()[p.id] || null,
+      levelNext: dispatcher.levelNext(p.id),
     })),
   });
 });
@@ -335,8 +351,8 @@ app.post('/api/jobs/:id/dispatch', async (req, res) => {
 
   // an operator asking for it explicitly clears the give-up counter
   queue.setStatus(job.id, 'assigned', { printerId: printer.id, dispatchAttempts: 0 });
-  const r = await dispatcher.send(job, printer);
-  res.json({ ok: !!(r.sent || r.manual), printer: printer.name, result: r, job: publicJob(queue.get(job.id)) });
+  const r = (await dispatcher.send(job, printer)) || { ok: false, sent: false, error: 'not sent' };
+  res.json({ ok: !!(r.sent || r.manual), error: r.sent || r.manual ? undefined : r.error, printer: printer.name, result: r, job: publicJob(queue.get(job.id)) });
 });
 
 // ---- printer setup ----
@@ -378,6 +394,73 @@ app.post('/api/printers/:slot/test', async (req, res) => {
   if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
   const result = await checkPrinter(printer, monitor.states()[printer.id], monitor.health()[printer.id], cfg);
   res.json({ ok: result.ok, findings: result.findings });
+});
+
+// "Level the bed before the next print on this printer." One-shot, from the
+// dashboard, no restart — the config's bedLevel is every print or none.
+app.post('/api/printers/:id/level', (req, res) => {
+  const printer = (cfg.integrations?.printers || []).find((p) => p.id === req.params.id);
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer' });
+  const on = dispatcher.setLevelNext(printer.id, req.body?.on !== false);
+  console.log(`[${printer.id}] bed level on the next print: ${on ? 'ON' : 'off'}`);
+  res.json({ ok: true, levelNext: on });
+});
+
+// The last few things this printer said that were not routine status — command
+// echoes and replies. A print command sent by ANY client (Bambu Studio included)
+// comes back on the report topic with every field, so this is how another
+// program's exact request can be read without a packet capture.
+app.get('/api/printers/:slot/recent', (req, res) => {
+  const list = cfg.integrations?.printers || [];
+  const printer = list[Number(req.params.slot) - 1];
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
+  const h = monitor.health()[printer.id] || {};
+  res.json({ ok: true, connected: !!h.connected, messages: h.messages || 0, recent: (h.recent || []).map((r) => ({ at: r.at, msg: r.msg })) });
+});
+
+// Publish an arbitrary command over the booth's own printer connection. For
+// tools/probe-change.mjs: the printer ignores a second MQTT client, so a
+// diagnostic that needs to be heard has to speak through this one. Localhost
+// only — this is a raw pipe to the printer.
+app.post('/api/printers/:slot/command', async (req, res) => {
+  const ip = String(req.ip || '');
+  if (!/^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ip)) return res.status(403).json({ ok: false, error: 'localhost only' });
+  const list = cfg.integrations?.printers || [];
+  const printer = list[Number(req.params.slot) - 1];
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
+  const payload = req.body?.payload;
+  if (!payload || typeof payload !== 'object') return res.status(400).json({ ok: false, error: 'payload required' });
+  const r = await publishCommand(printer, payload, cfg);
+  res.json({ ok: !!r.ok, error: r.error || null });
+});
+
+// Toggle the chamber light from the setup page. Test reports what the printer
+// says; this is for seeing a command land with your own eyes, from the setup
+// page, on a printer that is not printing anything.
+app.post('/api/printers/:slot/light', async (req, res) => {
+  const list = cfg.integrations?.printers || [];
+  const printer = list[Number(req.params.slot) - 1];
+  if (!printer) return res.status(404).json({ ok: false, error: 'no such printer slot' });
+  const on = !!req.body?.on;
+  const seq = String(Date.now() % 100000);
+  const sent = await publishCommand(printer, buildLightCommand(on, seq), cfg);
+  if (!sent.ok) return res.status(502).json({ ok: false, error: `could not reach ${printer.name}: ${sent.error}` });
+
+  // The reply lands on the monitor's connection as health.lastCommand; wait a
+  // moment for it, keyed on our sequence id so an older answer is not mistaken
+  // for this one.
+  let reply = null;
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline && !reply) {
+    const c = monitor.health()[printer.id]?.lastCommand;
+    if (c && c.command === 'ledctrl' && c.sequenceId === seq) reply = c;
+    else await new Promise((r) => setTimeout(r, 200));
+  }
+  const success = reply && String(reply.result || '').toUpperCase() === 'SUCCESS';
+  res.json({
+    ok: !!success, on, sent: true,
+    reply: reply ? { result: reply.result, reason: reply.reason } : null,
+  });
 });
 
 app.post('/api/jobs/:id/notify', async (req, res) => {
@@ -480,7 +563,11 @@ function sanitizeImage(img) {
   if (typeof img.data !== 'string' || !img.data.length) return null;
   // base64 of a bit-packed mask: about ceil(w*h/8) bytes, ~1.34x as base64.
   if (img.data.length > Math.ceil((w * h) / 8) * 2 + 8) return null;
-  return { w, h, data: img.data };
+  const out = { w, h, data: img.data };
+  // the size slider, as a fraction of the contain-fit; anything odd means 1
+  const scale = Number(img.scale);
+  if (Number.isFinite(scale) && scale > 0 && scale <= 1) out.scale = scale;
+  return out;
 }
 
 const clamp = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : NaN);
@@ -568,6 +655,13 @@ function probeStart(printer) {
  * dispatching a NEW job, any pause belongs to a job we are already done with.
  */
 function clearBeforeSend(printer) {
+  // The operator has pressed "Bed cleared". The printer goes on reporting
+  // FAILED until its next print regardless, so the dashboard shows READY on
+  // their word — and this check was still refusing the send on the printer's.
+  // Trust the operator here too; if the print then does not start,
+  // confirmStart hands the job back and says so.
+  const s0 = monitor.states()[printer.id];
+  if (s0?.acknowledged) return { needed: false, acknowledged: true, state: s0.state };
   const read = () => {
     const s = monitor.states()[printer.id];
     if (!s || String(s.state || '').toUpperCase() !== 'PAUSE') return s;
@@ -611,6 +705,9 @@ const dispatcher = createDispatcher({
       console.error('           job, and take the plate off), then press Send on the dashboard.');
       console.error(`           ${e.job.filename} stays assigned to it and will go as soon as it is clear.`);
       console.error('');
+    }
+    else if (e.type === 'levelled') {
+      console.log(`[${e.printer.id}] ${e.job.filename} sent WITH a bed level, as asked. Next print will skip it again.`);
     }
     else if (e.type === 'notstarted') {
       console.error(`[${e.printer.id}] ${e.job.filename} is on the SD card but the printer did not start it.`);
@@ -766,6 +863,19 @@ server.on('error', (err) => {
   console.error('');
   process.exit(1);
 });
+
+// A thrown error in an async route used to take the whole booth down: Node
+// exits on an unhandled rejection, the launcher window closed with it, and the
+// operator saw the iPads disconnect with no message anywhere. Log it, loudly,
+// and keep serving — one bad request is not a reason to stop the fair.
+for (const kind of ['unhandledRejection', 'uncaughtException']) {
+  process.on(kind, (err) => {
+    console.error('');
+    console.error(`  !! ${kind} — the booth is still running, but this is a bug. Take a photo of this:`);
+    console.error(err?.stack || err);
+    console.error('');
+  });
+}
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => { monitor.stop(); server.close(() => process.exit(0)); });

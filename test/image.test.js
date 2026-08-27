@@ -4,7 +4,7 @@ import { loadConfig } from '../src/config.js';
 import { generate } from '../src/gcode/engine.js';
 import { imageCoverage, decodeBitmap } from '../src/gcode/image.js';
 
-const cfg = loadConfig();
+const cfg = loadConfig({ exampleOnly: true });
 
 /** A binary bitmap {w,h,ink}, ink=1 from fn(x,y). Origin top-left, y DOWN. */
 function bitmap(w, h, fn) {
@@ -214,4 +214,39 @@ test('an image that thresholds to blank is refused, not printed as one colour', 
   };
   const { meta } = generate(design, cfg);
   assert.equal(meta.hasDesign, false, 'a blank upload must not look printable');
+});
+
+test('the size slider shrinks the drawing about the centre of the plate', () => {
+  const bbox = { w: 60, h: 60 };
+  const full = bitmap(200, 200, () => 1);
+  const extent = (cov) => {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = 0; j < cov.h; j++) for (let i = 0; i < cov.w; i++) {
+      if (cov.mask[j * cov.w + i]) { const x = cov.toMm({ x: i, y: j }).x; lo = Math.min(lo, x); hi = Math.max(hi, x); }
+    }
+    return { lo, hi, w: hi - lo };
+  };
+  const whole = extent(imageCoverage(full, cfg, bbox, null, null, 0));
+  const half = extent(imageCoverage({ ...full, scale: 0.5 }, cfg, bbox, null, null, 0));
+  assert.ok(Math.abs(half.w - whole.w / 2) < 1.5, `half size should be half as wide: ${half.w.toFixed(1)} vs ${whole.w.toFixed(1)}`);
+  assert.ok(Math.abs((half.lo + half.hi) / 2 - (whole.lo + whole.hi) / 2) < 1, 'and stay centred');
+  // the wire form carries it
+  assert.equal(decodeBitmap({ ...pack(full), scale: 0.5 }).scale, 0.5);
+});
+
+test('strokes drawn over an imported image print too', async () => {
+  // A studio uploads a drawing; the child writes their name on it. Both must
+  // reach the plate. The image sits in the left half; the stroke is on the right.
+  const { generate } = await import('../src/gcode/engine.js');
+  const left = bitmap(200, 200, (x) => x < 60);
+  const base = { shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: 'none', holePos: 'none' };
+  const stroke = [{ pts: [{ x: 80, y: 20 }, { x: 95, y: 20 }], w: 2.2 }];
+  const imgOnly = generate({ ...base, image: pack(left), design: [] }, cfg);
+  const both = generate({ ...base, image: pack(left), design: stroke }, cfg);
+  const strokeOnly = generate({ ...base, design: stroke }, cfg);
+  assert.ok(imgOnly.meta.hasDesign && strokeOnly.meta.hasDesign && both.meta.hasDesign);
+  // the combined print lays more filament than either alone
+  assert.ok(both.meta.estGrams > imgOnly.meta.estGrams, 'the stroke adds to the image');
+  assert.ok(both.meta.estGrams > strokeOnly.meta.estGrams, 'the image adds to the stroke');
+  assert.match(both.gcode, /imported image \+ 1 strokes/);
 });

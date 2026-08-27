@@ -99,7 +99,7 @@ echo Starting the booth. The dashboard will open once it is ready...
 rem /b, not /min: /min still creates a console window, so the waiter appeared as
 rem a mystery black Node window sitting on the desktop for up to a minute. /b
 rem runs it inside this window, where its output belongs anyway.
-start "" /b node tools\open-when-ready.mjs 3000 /dashboard/
+start "" /b node tools\open-when-ready.mjs 3000 /dashboard/ /
 echo.
 echo ===================================================================
 echo  Leave this window open. Close it to stop the booth.
@@ -107,6 +107,11 @@ echo  The address the iPads should open is printed just below.
 echo ===================================================================
 echo.
 call npm start
+rem The server has stopped. If it crashed, the reason is on the lines above —
+rem without this pause the window closes and takes the message with it.
+echo.
+echo The booth server has stopped. If you did not close it, take a photo of this window.
+pause
 goto :eof
 
 :failed

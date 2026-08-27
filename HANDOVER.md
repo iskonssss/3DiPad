@@ -106,8 +106,46 @@ the `machine_pause_gcode` config value. The stop comes from
 kept anyway, outside `M620…M621`, because a file that never stops is a
 one-colour keychain and that is the one failure nobody can see coming.
 
-`src/gcode/engine.js` now emits the sequence above verbatim. **It has not been
-run on hardware yet** — that is the next print, and it is worth babysitting.
+`src/gcode/engine.js` emits the sequence above verbatim, and **as of 2026-08-27
+the automatic change works on hardware**: cut, eject, prompt, the operator
+feeds colour 2 in, the printer grabs it, purges at the right edge and prints.
+
+What it took, after the g-code was already right, was three more transcriptions
+and one bisect — none of them a guess:
+
+1. **Start g-code.** Bambu's own start has a "prepare material" section
+   (`M620 M` enable remap → `M620 S0A` → `T0` → `M621 S0A`). Ours homed and
+   primed. Without it the later `T1` had nothing to bind to and went looking
+   for an AMS Lite. Transcribed into `a1mini.start.gcode`.
+2. **Header.** Studio writes `; filament: 1,2` with per-filament lengths; ours
+   said `; filament: 1`. Now per filament.
+3. **The print command — `cfg: "1"`.** The printer writes a task record to
+   `/sdcard/cache/<plate>_<name>.bbl` the moment it accepts a job, and that
+   record carries `manual_color_change`. Studio's prints recorded `true`, ours
+   `false`, whatever we sent — `manual_color_change: true`, `ext_change_assist`,
+   `ams_mapping [254,254]`: all guesses, all ignored. Studio's real command was
+   captured off the printer's report topic (it echoes every command it
+   receives), and `tools/probe-change.mjs` then bisected its fields against
+   the task record without printing anything: upload, start, read the record
+   after 20 s, stop. Studio's own 3mf with our command → false (the file was
+   never the problem). Ours + `cfg: "1"` → **true**. md5, cali flags, the
+   `ftp://` url form → nothing. One field.
+
+`ams_mapping [-1,-1]` / `ams_mapping2 [{ams_id:255,slot_id:0}×2]` (external
+spool per filament) are also sent because Studio sends them; the bisect did
+not isolate whether they are needed on top of `cfg`, so they stay.
+
+Two tools worth knowing about, both zero-cost: `GET /api/printers/:slot/recent`
+returns the printer's last command echoes in full (how Studio's command was
+read), and `tools/probe-change.mjs` is the bisect harness. The printer ignores
+a second MQTT client, so the probe publishes through the booth
+(`POST /api/printers/:slot/command`, localhost only) — the booth must be up.
+
+Also fixed the same day: the purge after the pause now re-parks at X180 Y90
+first (the screen-driven load leaves the head over the part, and a blob landed
+on a keychain); a FINISH printer is sendable (it was refused as "holding a
+job" while the tile said READY); mode `"manual"` exists as a no-toolchange
+fallback but is unneeded.
 
 Two things that cost prints and must not be undone:
 
@@ -152,11 +190,8 @@ knows what filament 2 *is*.
 
 ## Open items
 
-1. **Run the transcribed colour change once, and watch it.** The block now
-   matches a real export line for line, but has never been sent to a printer.
-   `mode: "bambu"` for the full automatic change, `mode: "cut"` to stop before
-   the toolchange. Babysit it; `mode: "purge"` is the fallback that has always
-   worked.
+1. ~~Run the transcribed colour change once~~ — done, works, `mode: "bambu"`
+   is the booth setting. See the colour-change section for what it took.
 2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
    the laptop. This is a lead-gen product with no lead capture wired up. Highest
    business value of anything on this list.

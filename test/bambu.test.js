@@ -4,7 +4,7 @@ import {
   sdName, buildPrintCommand, readStatus, isConfigured, sendToPrinter,
   publishCommand, registerLiveClient, releaseLiveClient, getLiveClient,
   readCommandReply, startVariants, START_VARIANTS, startPrint, lastCommandSent, readPattern,
-  buildStopCommand, needsClearing, clearIfStuck, errorCodeHint,
+  buildStopCommand, buildLightCommand, withBedLevel, needsClearing, clearIfStuck, errorCodeHint,
 } from '../src/integrations/bambu.js';
 import { startMonitor } from '../src/dispatch/monitor.js';
 
@@ -362,6 +362,35 @@ test('a reply is recognised whatever namespace it comes back in', () => {
   // and the routine pushes are still not replies, in any namespace
   assert.equal(readCommandReply({ print: { command: 'push_status', gcode_state: 'IDLE' } }), null);
   assert.equal(readCommandReply({ system: { command: 'ledctrl' } }), null, 'no result and no error is not an answer');
+});
+
+test('a one-off bed level goes into both the file and the print task', () => {
+  // The engine leaves a marker where the level would have been; the send puts
+  // the G29 back there and tells the printer's task record the same thing.
+  const skipped = 'G28 ; home all axes\n; bed levelling skipped — using the mesh stored on the printer\nM104 S220\n';
+  const levelled = withBedLevel(skipped);
+  assert.match(levelled, /^G29\b/m, 'G29 is in the file');
+  assert.ok(!/bed levelling skipped/.test(levelled), 'the marker is gone');
+  assert.equal(withBedLevel(levelled), levelled, 'a file that already levels is left alone');
+  // an older file with no marker still gets it, right after homing
+  assert.match(withBedLevel('G28\nM104 S220\n'), /^G28\nG29\b/m);
+
+  const cmd = buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file', bedLevel: true });
+  assert.equal(cmd.print.bed_leveling, true);
+  assert.equal(buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file' }).print.bed_leveling, false, 'off unless asked');
+});
+
+test('the light command is the one measured to move the light, and its reply matches by sequence id', () => {
+  const on = buildLightCommand(true, 42);
+  assert.deepEqual(on, { system: {
+    sequence_id: '42', command: 'ledctrl', led_node: 'chamber_light', led_mode: 'on',
+    led_on_time: 500, led_off_time: 500, loop_times: 0, interval_time: 0,
+  } });
+  assert.equal(buildLightCommand(false).system.led_mode, 'off');
+  // the setup page keys the answer on the sequence id it sent
+  const reply = readCommandReply({ system: { ...on.system, result: 'success', reason: 'success' } });
+  assert.equal(reply.sequenceId, '42');
+  assert.equal(reply.command, 'ledctrl');
 });
 
 test('a printer holding a failed job is cleared before it is sent another', async () => {

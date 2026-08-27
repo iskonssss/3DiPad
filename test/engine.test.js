@@ -6,7 +6,7 @@ import { generate } from '../src/gcode/engine.js';
 import { shapePolygon, pointInPolygon, distToBoundary, holeIsValid, presetHole } from '../src/gcode/geometry.js';
 import { insetPolygon } from '../src/gcode/outline.js';
 
-const cfg = loadConfig();
+const cfg = loadConfig({ exampleOnly: true });
 const SHAPES = ['square', 'circle', 'heart', 'custom'];
 
 const customOutline = [
@@ -527,9 +527,16 @@ test('the g-code is in the three blocks Bambu firmware reads', () => {
   // the real ones and in the units Bambu uses.
   const header = lines.slice(0, at('; HEADER_BLOCK_END')).join('\n');
   assert.match(header, /^; total layer number: \d+$/m);
-  assert.match(header, /^; filament_density: 1\.24$/m, 'g/cm^3, as Bambu writes it — not our g/mm^3');
-  assert.match(header, /^; filament_diameter: 1\.75$/m);
-  assert.match(header, new RegExp(`^; total filament weight \\[g\\] : ${meta.estGrams.toFixed(1)}`, 'm'));
+  // One value per filament, as Bambu Studio writes a two-colour file. The
+  // printer's task record for a file saying "; filament: 1" came back
+  // manual_color_change: false; Studio's "; filament: 1,2" came back true.
+  assert.match(header, /^; filament: 1,2$/m, 'two filaments declared');
+  assert.match(header, /^; filament_density: 1\.24,1\.24$/m, 'g/cm^3, as Bambu writes it — not our g/mm^3');
+  assert.match(header, /^; filament_diameter: 1\.75,1\.75$/m);
+  const weights = /^; total filament weight \[g\] : ([\d.]+),([\d.]+)$/m.exec(header);
+  assert.ok(weights, 'weight per filament');
+  assert.ok(Math.abs(+weights[1] + +weights[2] - meta.estGrams) < 0.1, 'and they add up to the total');
+  assert.ok(+weights[2] > 0, 'colour 2 has a share — it is the drawing plus the flush');
   assert.match(header, /^; max_z_height: \d+\.\d+$/m);
 });
 
@@ -545,7 +552,7 @@ test('the g-code is in the three blocks Bambu firmware reads', () => {
 test('the bambu colour change cuts, unloads and reloads, in that order', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const lines = colourChangeBlock({ ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu' } }, 2.24);
   const at = (re) => lines.findIndex((l) => re.test(l));
 
@@ -588,7 +595,7 @@ test('the bambu colour change cuts, unloads and reloads, in that order', async (
 test('the cutter coordinate is the mini bed, and stays inside it', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const lines = colourChangeBlock({ ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu' } }, 2.24);
   const cutX = lines.find((l) => /^G1 X\d+ F18000/.test(l)).match(/X(\d+)/)[1];
   // The A1 (non-mini) puts this elsewhere on a bigger bed. Copying that value
@@ -600,7 +607,7 @@ test('the cutter coordinate is the mini bed, and stays inside it', async () => {
 test('whatever the default swap is, it is a mode that exists and stops the print', async () => {
   const { loadConfig } = await import('../src/config.js');
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
-  const cfg = loadConfig();
+  const cfg = loadConfig({ exampleOnly: true });
   const mode = cfg.colourChange.mode;
   assert.ok(['purge', 'pause', 'bambu'].includes(mode), `"${mode}" is not a colour-change mode`);
 
@@ -623,7 +630,7 @@ test('whatever the default swap is, it is a mode that exists and stops the print
 test('an explicit gcode override beats every mode, and is not silently ignored', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
   const mine = ['M400 U1 ; swap it yourself'];
 
   for (const mode of ['purge', 'pause', 'bambu']) {
@@ -676,7 +683,7 @@ test('the booth says which swap is really in effect, including the override', ()
 test('every colour change mode stops the print, whatever else it tries', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
   for (const mode of ['purge', 'pause', 'bambu']) {
     const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode } }, 2.24);
     assert.ok(block.some((l) => /^\s*M400\s+U1\b/.test(l)), `mode "${mode}" produces a file that never stops`);
@@ -686,7 +693,7 @@ test('every colour change mode stops the print, whatever else it tries', async (
 test('a file that would never stop is refused rather than written', async () => {
   const { generate } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
   const d = {
     shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: null,
     design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
@@ -717,7 +724,7 @@ test('the printer plays its start tune, before it starts moving', async () => {
   const { gcode } = generate({
     shape: 'rectangle', colours: { layer1: 'BLACK', layer2: 'PINK' }, hole: null,
     design: [{ w: 1.6, pts: [{ x: -12, y: 0 }, { x: 12, y: 0 }] }],
-  }, loadConfig());
+  }, loadConfig({ exampleOnly: true }));
 
   const notes = gcode.match(/^M1006 A\d+ B\d+ L\d+ C\d+ D\d+ M\d+ E\d+ F\d+ N\d+/gm) || [];
   assert.ok(notes.length >= 12, `only ${notes.length} notes — that is a chime, not a tune`);
@@ -746,14 +753,19 @@ test('the printer plays its start tune, before it starts moving', async () => {
 test('the print task asks for a manual colour change, on an external spool', async () => {
   const { buildPrintCommand } = await import('../src/integrations/bambu.js');
   const cmd = buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file', gcodePath: 'Metadata/plate_1.gcode' });
-  assert.equal(cmd.print.manual_color_change, true);
+  // Neither manual_color_change nor ext_change_assist is in Bambu Studio's
+  // real command — both were guesses, and the printer ignored both. The
+  // external-spool change comes from ams_mapping2 with ams_id 255 per filament.
+  assert.equal(cmd.print.manual_color_change, undefined, 'a guessed key, not sent');
+  assert.equal(cmd.print.ext_change_assist, undefined, 'a guessed key, not sent');
+  assert.deepEqual(cmd.print.ams_mapping2, [{ ams_id: 255, slot_id: 0 }, { ams_id: 255, slot_id: 0 }]);
   assert.equal(cmd.print.use_ams, false, 'an AMS would do the change itself');
 });
 
 test('the change asks for a filament index, never 254 or 255', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
   const block = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu' } }, 2.24).join('\n');
 
   // This test used to assert the exact opposite — that T254 was right and that
@@ -782,7 +794,7 @@ test('the change asks for a filament index, never 254 or 255', async () => {
 test('the "cut" mode cuts and unloads but leaves the loading to a person', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
   const cut = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'cut' } }, 2.24);
   const full = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu' } }, 2.24);
 
@@ -811,7 +823,7 @@ test('the "cut" mode cuts and unloads but leaves the loading to a person', async
 test('the pause survives the printer skipping the whole change block', async () => {
   const { colourChangeBlock } = await import('../src/gcode/engine.js');
   const { loadConfig } = await import('../src/config.js');
-  const base = loadConfig();
+  const base = loadConfig({ exampleOnly: true });
 
   for (const amsFraming of [false, true]) {
     const b = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'bambu', amsFraming } }, 2.24);
@@ -820,5 +832,38 @@ test('the pause survives the printer skipping the whole change block', async () 
     assert.ok(close > 0, 'the change block must be closed');
     assert.ok(at(/^M400 U1/) > close, `amsFraming:${amsFraming} — the pause is inside the block and can be skipped with it`);
     assert.ok(at(/^G1 E23/) > close, `amsFraming:${amsFraming} — the purge is inside the block`);
+  }
+});
+
+test('mode "manual" cuts and unloads with no toolchange, then pauses, then purges', async () => {
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig({ exampleOnly: true });
+  const lines = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode: 'manual' } }, 2.24);
+  const block = lines.join('\n');
+  // no tool commands at all — T1 is what sent the firmware to the AMS
+  assert.ok(!/^T\d+$/m.test(block), 'no T command');
+  assert.ok(!/^M62[01] /m.test(block), 'no M620/M621 framing');
+  const at = (re) => lines.findIndex((l) => re.test(l));
+  const cut = at(/^M620\.11 S0/), unload = at(/^G1 E-80\.0/), pause = at(/^M400 U1/), purge = at(/--- purge/);
+  assert.ok(cut >= 0 && unload > cut && pause > unload && purge > pause, 'cut, unload, pause, purge — in that order');
+  // the cut is at the right-hand edge, where the A1 mini keeps it; not X-25
+  assert.ok(lines[cut - 1].startsWith('G1 X180 '), 'to the cutter at X180 first');
+  assert.ok(!/X-2\d/.test(block), 'never past the left end of travel');
+});
+
+test('after the pause the head goes back to the park spot before purging', async () => {
+  // A purge blob landed on the top-left of a heart: Resume carried on from
+  // wherever the screen-driven load left the head, straight into the purge.
+  const { colourChangeBlock } = await import('../src/gcode/engine.js');
+  const { loadConfig } = await import('../src/config.js');
+  const base = loadConfig({ exampleOnly: true });
+  for (const mode of ['bambu', 'purge', 'manual']) {
+    const lines = colourChangeBlock({ ...base, colourChange: { ...base.colourChange, mode } }, 2.24);
+    const pause = lines.findIndex((l) => /^M400 U1/.test(l));
+    const purge = lines.findIndex((l, i) => i > pause && /^G1 E\d/.test(l));
+    const park = lines.findIndex((l, i) => i > pause && /^G1 X180 Y90 /.test(l));
+    assert.ok(pause >= 0 && purge > pause, `${mode}: pause then purge`);
+    assert.ok(park > pause && park < purge, `${mode}: re-park between the pause and the purge`);
   }
 });

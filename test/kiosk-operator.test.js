@@ -86,7 +86,8 @@ test('every printer the panel offers is labelled, and the label is plain', () =>
 test('the way into the operator panel is a hold, and only on the booth build', () => {
   const init = kiosk.slice(kiosk.indexOf('const ADM_HOLD_MS'), kiosk.indexOf('function admOpen()'));
   assert.match(init, /__BOOTH_SERVER__/, 'the way in must hide itself off the booth build');
-  assert.match(init, /setTimeout\([^,]*admOpen[^,]*,\s*ADM_HOLD_MS\)/, 'opening must be on a timer, not a tap');
+  assert.match(init, /setTimeout\([^,]*onDone[^,]*,\s*ADM_HOLD_MS\)/, 'opening must be on a timer, not a tap');
+  assert.match(init, /function admHold\(el, onDone = admOpen\)/, 'and the panel is what a hold opens by default');
   assert.ok(Number(kiosk.match(/ADM_HOLD_MS\s*=\s*(\d+)/)[1]) >= 600, 'the hold is too short to be deliberate');
   for (const ev of ['touchend', 'touchmove', 'touchcancel', 'mouseup']) {
     assert.ok(init.includes(ev), `a hold interrupted by ${ev} must not open the panel`);

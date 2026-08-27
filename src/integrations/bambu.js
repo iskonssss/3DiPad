@@ -112,19 +112,39 @@ export function buildPrintCommand(remotePath, opts = {}) {
           url: `file://${remotePath}`,
           subtask_name: bare,
           timelapse: false,
-          bed_leveling: false,
+          bed_leveling: !!opts.bedLevel,
           flow_cali: false,
           vibration_cali: false,
           layer_inspect: false,
           use_ams: false,
-          // The manual colour change is a property of the PRINT TASK, not of
-          // the g-code. Read out of a .bbl that Bambu Studio produced for an
-          // external-spool manual change on this exact printer, alongside
-          // "use ams": false — and it is why weeks of trying to make the swap
-          // happen from g-code alone got nowhere. The T1 in the file is only
-          // half of it; without this flag the firmware has no reason to stop
-          // and ask anybody for anything.
-          manual_color_change: true,
+          // Where each filament in the print comes from. Captured from Bambu
+          // Studio's own project_file command for a two-colour external-spool
+          // print on this printer (the printer echoes every command it receives
+          // on its report topic, and this booth logged it):
+          //
+          //   "ams_mapping":  [-1, -1],
+          //   "ams_mapping2": [{"ams_id":255,"slot_id":0},{"ams_id":255,"slot_id":0}]
+          //
+          // ams_id 255 is the external spool, once per filament in the print.
+          // Studio sends NO manual_color_change and NO ext_change_assist — both
+          // were our guesses, and the printer's task record ignored both. It
+          // derives the manual external-spool change from this mapping. With
+          // our old [254, 254] and no ams_mapping2, T1 resolved to an AMS slot:
+          // cut, eject, "AMS Lite communication is abnormal", no reload.
+          ams_mapping: (opts.filaments ?? [0, 1]).map(() => -1),
+          ams_mapping2: (opts.filaments ?? [0, 1]).map(() => ({ ams_id: 255, slot_id: 0 })),
+          // Also in Studio's command; harmless, and one less difference.
+          bed_type: 'textured_plate',
+          // THE field. Bisected against the printer's own task record with
+          // tools/probe-change.mjs (2026-08-27): our 3mf + our command records
+          // manual_color_change false; add cfg "1" and it records true; md5,
+          // the cali flags and Studio's ftp:// url form change nothing, and
+          // Studio's own 3mf with our command is false too. So the file was
+          // never the problem, the mapping was never the problem, and no
+          // "manual"/"assist" flag exists on the wire — this is what tells the
+          // firmware to take the print's configuration (the two filaments,
+          // both external) from the project, and behave accordingly.
+          cfg: '1',
           profile_id: '0', project_id: '0', subtask_id: '0', task_id: '0',
         },
       };
@@ -151,6 +171,20 @@ export function buildPrintCommand(remotePath, opts = {}) {
  */
 export function buildStopCommand(sequenceId) {
   return { print: { sequence_id: String(sequenceId ?? Date.now()), command: 'stop', param: '' } };
+}
+
+/**
+ * Chamber light on or off. The one command a person can watch land without
+ * printing anything, and it lives in the `system` namespace, which Developer
+ * Mode does not gate — so it proves the connection and the access code, not
+ * that a print will start. The field set is the one measured to move the light
+ * on the booth's A1 mini; the timing fields are ignored for a steady on/off.
+ */
+export function buildLightCommand(on, sequenceId) {
+  return { system: {
+    sequence_id: String(sequenceId ?? Date.now()), command: 'ledctrl', led_node: 'chamber_light',
+    led_mode: on ? 'on' : 'off', led_on_time: 500, led_off_time: 500, loop_times: 0, interval_time: 0,
+  } };
 }
 
 /** States a printer will not accept a new job from until it is cleared. */
@@ -356,8 +390,15 @@ export async function sendToPrinter(printer, filePath, cfg, opts = {}) {
   }
   let up, send = filePath, gcodePath = '';
   try {
+    // A one-off bed level asked for from the dashboard. The file was generated
+    // at submit time with the step skipped; put it back on the way out.
+    if (opts.bedLevel) {
+      const levelled = filePath.replace(/\.gcode$/i, '') + '.level.gcode';
+      fs.writeFileSync(levelled, withBedLevel(fs.readFileSync(filePath, 'utf8')));
+      send = levelled;
+    }
     if (container(cfg) === '3mf') {
-      send = wrapAs3mf(filePath, cfg, opts.meta);
+      send = wrapAs3mf(send, cfg, opts.meta, path.basename(filePath));
       gcodePath = 'Metadata/plate_1.gcode';
     }
     up = await uploadFile(printer, send, cfg);
@@ -377,12 +418,29 @@ export async function sendToPrinter(printer, filePath, cfg, opts = {}) {
  * the fair, this is the file to copy onto a USB stick or hand to Bambu Studio,
  * and it is the one the printer would have been given.
  */
-export function wrapAs3mf(gcodePath, cfg, meta) {
-  const out = gcodePath.replace(/\.gcode$/i, '') + '.3mf';
+export function wrapAs3mf(gcodePath, cfg, meta, asName = null) {
   const gcode = fs.readFileSync(gcodePath, 'utf8');
-  const name = path.basename(gcodePath).replace(/\.gcode$/i, '');
-  fs.writeFileSync(out, build3mf({ gcode, meta, cfg, name }));
+  // `asName` keeps the job's own name on the printer when the file being
+  // wrapped is a variant of it (the levelled copy) rather than the job itself.
+  const base = (asName || path.basename(gcodePath)).replace(/\.gcode$/i, '');
+  const out = path.join(path.dirname(gcodePath), base + '.3mf');
+  fs.writeFileSync(out, build3mf({ gcode, meta, cfg, name: base }));
   return out;
+}
+
+/** The marker the engine leaves where the bed level would have gone. */
+const LEVEL_SKIPPED = /^; bed levelling skipped.*$/m;
+
+/**
+ * Put the bed level back into a file that was generated without one.
+ * Prefers the engine's own marker; failing that, goes straight after homing.
+ * A file that already levels is returned as it is.
+ */
+export function withBedLevel(gcode) {
+  if (/^G29\b/m.test(gcode)) return gcode;
+  const line = 'G29 ; auto bed levelling (asked for from the dashboard)';
+  if (LEVEL_SKIPPED.test(gcode)) return gcode.replace(LEVEL_SKIPPED, line);
+  return gcode.replace(/^(G28\b[^\n]*)$/m, `$1\n${line}`);
 }
 
 /**
@@ -554,7 +612,12 @@ export function watchPrinter(printer, cfg, onStatus, onRaw = null) {
     // start command is being refused for a reason we have not learned to
     // recognise, this is where it will be visible.
     if (msg?.print?.command !== 'push_status') {
-      const text = JSON.stringify(msg).slice(0, 600);
+      // A command echo is kept whole: the printer repeats a project_file
+      // request back with every field, and 600 characters cuts off exactly
+      // the flags at the end that decide how a colour change behaves. That
+      // echo is how Bambu Studio's own request can be read without a print.
+      const full = JSON.stringify(msg);
+      const text = /"command":"(project_file|gcode_file)"/.test(full) ? full : full.slice(0, 600);
       // The parsed message is kept beside the text: the diagnostics print the
       // text, and tools/probe-start.mjs reads the reply out of `msg` with the
       // same parser the monitor uses, rather than pattern-matching the string.

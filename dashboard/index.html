@@ -100,6 +100,9 @@
       .resetbtn { margin-top:8px; width:100%; background:#0b1220; color:#fff;
                   border:2px solid #0b122055; font-size:13px; padding:6px; font-weight:800; }
       .resetbtn:hover { background:#000; }
+      .levelbtn { margin-top:8px; width:100%; background:transparent; color:inherit;
+                  border:2px dashed #0b122055; font-size:12px; padding:5px; font-weight:700; }
+      .levelbtn.armed { background:#ffd23f; color:#201a05; border-style:solid; }
 
       /* Says what a button did. Nothing on this page should be able to do
          nothing and say nothing. */
@@ -238,6 +241,12 @@
         if (state === 'FAILED') {
           return { canReset: true, cls: 'soon', st: 'FAILED', sub: [who, 'clear the bed, then send again'].filter(Boolean).join(' · '), pct: null, cols, send: 'warn' };
         }
+        // Finished is not free: the keychain is still on the plate. Say so, and
+        // give the same "Bed cleared" button — this tile used to say READY
+        // while the send was refused for "holding a FINISH job".
+        if (state === 'FINISH') {
+          return { canReset: true, cls: 'soon', st: 'DONE', sub: [who, 'take the print off first'].filter(Boolean).join(' · '), pct: null, cols, send: 'ok' };
+        }
         // Heating is not printing. The printer reports PREPARE while it brings
         // the bed and nozzle up, and during that its remaining-time estimate is
         // 0 — which the "1 minute or less" rule read as ALMOST DONE, on a print
@@ -277,6 +286,7 @@
             ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
             ${s.canStop ? `<button class="stopbtn" onclick="stopPrinter('${p.id}','${esc(p.name)}')">■ Stop this print</button>` : ''}
             ${s.canReset ? `<button class="resetbtn" onclick="resetPrinter('${p.id}','${esc(p.name)}')">✓ Bed cleared — ready</button>` : ''}
+            ${p.configured ? `<button class="levelbtn${p.levelNext ? ' armed' : ''}" onclick="levelNext('${p.id}','${esc(p.name)}',${p.levelNext ? 'false' : 'true'})">${p.levelNext ? '📐 Levelling before the next print — tap to cancel' : '📐 Level bed on next print'}</button>` : ''}
           </div>`;
         }).join('');
       }
@@ -447,10 +457,13 @@
       }
 
       async function sendTo(id, printerId) {
-        if (await api(`/api/jobs/${id}/dispatch`, {
+        const r = await api(`/api/jobs/${id}/dispatch`, {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(printerId ? { printerId } : {}),
-        })) toast('Sent to the printer.');
+        });
+        // "Sent" used to be said whenever the request came back at all — including
+        // when the printer was holding a failed job and nothing went anywhere.
+        if (r) toast(r.ok ? 'Sent to the printer.' : (r.error || 'Not sent.'), !r.ok);
         tick();
       }
 
@@ -470,6 +483,14 @@
       async function resetPrinter(id, name) {
         const r = await api(`/api/printers/${id}/reset`, { method: 'POST' });
         if (r) toast(r.released ? `${name} is ready — released ${r.released}.` : `${name} is ready.`);
+        tick();
+      }
+
+      // One-shot: the next print sent to this printer runs a full bed level
+      // (about 1.3 min extra), then the button goes back to off by itself.
+      async function levelNext(id, name, on) {
+        const r = await api(`/api/printers/${id}/level`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+        if (r) toast(r.levelNext ? `${name} will level the bed before its next print.` : `${name}: bed level cancelled.`);
         tick();
       }
 
