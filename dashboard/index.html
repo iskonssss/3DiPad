@@ -124,7 +124,6 @@
       <span class="pill" id="p-lan">LAN</span>
       <span class="pill" id="p-outbox" style="display:none"></span>
       <a class="pill" href="setup.html" style="text-decoration:none">🔌 Printer setup</a>
-      <button class="pill tab" id="sound-toggle" onclick="toggleSound()" title="Play a sound on the booth laptop when a print starts and finishes">🔊 Sound</button>
       <button class="pill tab" id="tab-toggle" onclick="toggleView()">🕘 History</button>
       <div class="stats" id="stats"></div>
     </header>
@@ -136,58 +135,6 @@
     <script>
       const COLOUR_HEX = { BLACK:'#1c1c1e',WHITE:'#f5f5f7',RED:'#e23b3b',BLUE:'#2f6fed',GREEN:'#34a853',YELLOW:'#f4c20d',PINK:'#ff5fa2',PURPLE:'#8b5cf6',ORANGE:'#ff8a34',TEAL:'#14b8a6',GREY:'#8e8e93',GRAY:'#8e8e93',GOLD:'#d4af37',SILVER:'#c0c4cc',BROWN:'#8b5a2b' };
       let printers = [];
-      /* ---- booth-speaker sounds ----
-         The A1 mini has no speaker — its own tunes are played by the stepper
-         motors. Real audio plays here, on the laptop the dashboard is open on.
-         Drop your files in dashboard/sounds/ as start.mp3 and finish.mp3
-         (any browser audio format); nothing plays if they are absent.
-         Browsers block audio until the page is interacted with, so the first
-         click on the dashboard primes it — the operator has tapped Send long
-         before a print finishes. */
-      let soundOn = localStorage.getItem('boothSound') !== 'off';
-      const audio = {};
-      function loadAudio(name){ const a = new Audio('sounds/' + name + '.mp3'); a.preload = 'auto'; a.onerror = () => { a._missing = true; }; return a; }
-      function primeAudio(){
-        if (audio.start) return;
-        audio.start = loadAudio('start'); audio.finish = loadAudio('finish');
-        // a muted play/pause unlocks autoplay for later, unprompted plays
-        for (const a of [audio.start, audio.finish]) { a.muted = true; a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = false; }).catch(() => { a.muted = false; }); }
-      }
-      window.addEventListener('pointerdown', primeAudio, { once: true });
-      window.addEventListener('keydown', primeAudio, { once: true });
-      function playSound(which){
-        if (!soundOn) return;
-        primeAudio();
-        const a = audio[which];
-        if (!a || a._missing) return;
-        try { a.currentTime = 0; a.play().catch(() => {}); } catch {}
-      }
-      function toggleSound(){
-        soundOn = !soundOn;
-        localStorage.setItem('boothSound', soundOn ? 'on' : 'off');
-        if (soundOn) primeAudio();
-        applySoundPill();
-      }
-      function applySoundPill(){
-        const b = document.getElementById('sound-toggle');
-        b.textContent = soundOn ? '🔊 Sound' : '🔇 Sound';
-        b.className = 'pill tab' + (soundOn ? ' on' : '');
-      }
-      // Fire a start sound when a printer begins RUNNING, a finish sound when it
-      // FINISHes cleanly — each once per transition, and never on the first poll.
-      const prevPrinterState = {};
-      let soundPrimedOnce = false;
-      function soundsForStates(list){
-        for (const p of list){
-          const now = String(p.live?.state || '').toUpperCase();
-          const prev = prevPrinterState[p.id];
-          prevPrinterState[p.id] = now;
-          if (!soundPrimedOnce || prev === undefined || now === prev) continue;
-          if (now === 'RUNNING' && prev !== 'RUNNING') playSound('start');
-          else if (now === 'FINISH' && prev !== 'FINISH' && !p.live?.errorCode && (p.live?.percent == null || p.live.percent >= 50)) playSound('finish');
-        }
-        soundPrimedOnce = true;
-      }
       // the cards need every job's printer assignment, not just their own
       let allJobs = [];
 
@@ -200,7 +147,6 @@
           const r = await fetch('/api/jobs');
           const d = await r.json();
           printers = d.printers || [];
-          soundsForStates(printers);
           render(d);
           if (showingHistory) await renderHistory();
         } catch { document.getElementById('board').innerHTML = '<div class="empty">No connection to booth server…</div>'; }
@@ -568,7 +514,6 @@
       const esc = (s) => String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 
       tick();
-      applySoundPill();
       setInterval(tick, 4000);
     </script>
   </body>
