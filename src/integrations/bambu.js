@@ -113,7 +113,10 @@ export function buildPrintCommand(remotePath, opts = {}) {
           subtask_name: bare,
           timelapse: false,
           bed_leveling: !!opts.bedLevel,
-          flow_cali: false,
+          // Flow calibration rides with the bed level: both are "the printer is
+          // printing badly, recalibrate once", and neither is worth a minute on
+          // every keychain. This is the task flag Studio's own print sets.
+          flow_cali: !!opts.bedLevel,
           vibration_cali: false,
           layer_inspect: false,
           use_ams: false,

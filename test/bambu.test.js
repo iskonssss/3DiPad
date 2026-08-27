@@ -377,6 +377,8 @@ test('a one-off bed level goes into both the file and the print task', () => {
 
   const cmd = buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file', bedLevel: true });
   assert.equal(cmd.print.bed_leveling, true);
+  assert.equal(cmd.print.flow_cali, true, 'flow calibration rides with the bed level');
+  assert.equal(buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file' }).print.flow_cali, false);
   assert.equal(buildPrintCommand('/sdcard/x.3mf', { variant: 'project_file' }).print.bed_leveling, false, 'off unless asked');
 });
 

@@ -286,7 +286,7 @@
             ${s.pct != null ? `<span class="bar"><i style="width:${s.pct}%"></i></span>` : ''}
             ${s.canStop ? `<button class="stopbtn" onclick="stopPrinter('${p.id}','${esc(p.name)}')">■ Stop this print</button>` : ''}
             ${s.canReset ? `<button class="resetbtn" onclick="resetPrinter('${p.id}','${esc(p.name)}')">✓ Bed cleared — ready</button>` : ''}
-            ${p.configured ? `<button class="levelbtn${p.levelNext ? ' armed' : ''}" onclick="levelNext('${p.id}','${esc(p.name)}',${p.levelNext ? 'false' : 'true'})">${p.levelNext ? '📐 Levelling before the next print — tap to cancel' : '📐 Level bed on next print'}</button>` : ''}
+            ${p.configured ? `<button class="levelbtn${p.levelNext ? ' armed' : ''}" onclick="levelNext('${p.id}','${esc(p.name)}',${p.levelNext ? 'false' : 'true'})">${p.levelNext ? '📐 Bed level + flow calibration before the next print — tap to cancel' : '📐 Level bed + flow cali on next print'}</button>` : ''}
           </div>`;
         }).join('');
       }
@@ -490,7 +490,7 @@
       // (about 1.3 min extra), then the button goes back to off by itself.
       async function levelNext(id, name, on) {
         const r = await api(`/api/printers/${id}/level`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
-        if (r) toast(r.levelNext ? `${name} will level the bed before its next print.` : `${name}: bed level cancelled.`);
+        if (r) toast(r.levelNext ? `${name} will level the bed and calibrate flow before its next print.` : `${name}: calibration cancelled.`);
         tick();
       }
 
