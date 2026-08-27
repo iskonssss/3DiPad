@@ -5,43 +5,36 @@
 ; engine: temperatures from the temp block, the calibration step from the
 ; calibration block (bed levelling is off by default - see config.example.json).
 ; ============================================================================
-; --- start tune: John Cena, "My Time Is Now" (the trumpet fanfare) ---
-; "Duh duh duh DAAH, duh duh duh DAAH, duh-duh-duh-DAAAH."
+; --- start tune: Spider-Man 3, "Black Suit" theme ---
+; Transcribed from "Spiderman 3 Black suit theme.mid": four quick notes, a lift
+; and a long held note, then the same four and a lower held note. The dark,
+; brooding motif — D F D F Bb A(hold), D F D F G#(hold).
 ;
 ; Not decoration at a booth: a child who has just handed over their drawing has
 ; no other way to know that THEIR print is the one that started, and a tune
-; carries across a fair floor where a screen does not. And this one the whole
-; queue joins in on.
+; carries across a fair floor where a screen does not.
 ;
 ; Format, worked out from Bambu's own start tune in an exported A1 mini file:
 ; three voices, each a pitch/duration/volume triple — A,B,L then C,D,M then E,F,N.
-; Pitch is a MIDI note number and 0 is a rest; the melody is doubled on voices 2
-; and 3, which is what Bambu does. Duration 10 is a beat, 20 holds.
-; Kept in a low register — the notes are played by the STEPPER MOTORS, not a
-; speaker, so this is the tune of the fanfare, not the trumpet, and a melody two
-; octaves up may not carry.
-;
-; It is the hook by ear: three pickups and a held note, twice, then a rising run
-; to a triumphant top. To retune a phrase, the numbers are MIDI notes:
-; C=48 D=50 E=52 F=53 G=55 A=57 B=59, and +12 is an octave up.
+; Pitch is a MIDI note number and 0 is a rest; the melody plays on all three
+; voices for volume. Duration 10 is a beat, 20 a lift, 40 a long hold. The notes
+; are played by the STEPPER MOTORS, not a speaker, so it is the tune, not the
+; orchestra — but it carries. The pitches are the MIDI file's own (56-70), which
+; already sit in the register this hardware plays.
 M17
 M400 S1
 M1006 S1
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A55 B20 L100 C52 D20 M100 E52 F20 N100  ; DAAH
-M1006 A0 B10 L100 C0 D10 M100 E0 F10 N100
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A55 B20 L100 C52 D20 M100 E52 F20 N100  ; DAAH
-M1006 A0 B10 L100 C0 D10 M100 E0 F10 N100
-M1006 A0 B0 L100 C55 D10 M100 E55 F10 N100    ; duh
-M1006 A0 B0 L100 C57 D10 M100 E57 F10 N100    ; duh
-M1006 A0 B0 L100 C59 D10 M100 E59 F10 N100    ; duh
-M1006 A60 B20 L100 C60 D20 M100 E60 F20 N100  ; DAAAH
-M1006 A60 B20 L100 C60 D20 M100 E60 F20 N100  ; (held)
+M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
+M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
+M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
+M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
+M1006 A70 B20 L100 C70 D20 M100 E70 F20 N100  ; Bb (lift)
+M1006 A69 B40 L100 C69 D40 M100 E69 F40 N100  ; A  (hold)
+M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
+M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
+M1006 A62 B10 L100 C62 D10 M100 E62 F10 N100  ; D
+M1006 A65 B10 L100 C65 D10 M100 E65 F10 N100  ; F
+M1006 A56 B40 L100 C56 D40 M100 E56 F40 N100  ; G# (low hold)
 M1006 W
 M18
 

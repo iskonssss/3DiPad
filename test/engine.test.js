@@ -712,8 +712,8 @@ test('a file that would never stop is refused rather than written', async () => 
 });
 
 /**
- * The A1 mini plays a fanfare (John Cena's "My Time Is Now") before it moves,
- * and the "Witch Doctor" tune when it finishes — both on the stepper motors.
+ * The A1 mini plays the Spider-Man 3 "Black Suit" theme before it moves, and
+ * the "Witch Doctor" tune when it finishes — both on the stepper motors.
  *
  * Not decoration at a booth. A child who has just handed over their drawing has
  * no other way to know their print is the one that started, and the sound
