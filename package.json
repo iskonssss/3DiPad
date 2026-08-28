@@ -15,7 +15,8 @@
     "probe-commands": "node tools/probe-commands.mjs",
     "clear-printer": "node tools/clear-printer.mjs",
     "pretest": "npm run build",
-    "clear-data": "node tools/clear-test-data.mjs"
+    "clear-data": "node tools/clear-test-data.mjs",
+    "music": "node tools/make-music.mjs"
   },
   "engines": {
     "node": ">=20"
