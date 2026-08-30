@@ -38,14 +38,18 @@ export function generate(design, cfg) {
 
   em.comment(`3DiPad keychain  shape:${shape}  ${bbox.w.toFixed(0)}x${bbox.h.toFixed(0)}mm`);
   em.comment(`layer1(backing): ${design.colours?.layer1 ?? '?'}   layer2(design): ${design.colours?.layer2 ?? '?'}`);
-  // Per-colour nozzle temperature: some filaments need more heat than the
-  // default or their layers will not bond (PINK delaminated into spaghetti at
-  // 220 while PURPLE was fine from the same g-code). A print using an over-temp
-  // colour, as backing OR drawing, runs at the higher temperature throughout.
+  // Per-colour nozzle temperature, PER LAYER — the backing prints at colour 1's
+  // temperature and the drawing at colour 2's, not the hotter of the two across
+  // the whole print. Some filaments need more heat or their layers will not bond
+  // (PINK/YELLOW-silk delaminated at 220 while others were fine from the same
+  // g-code); a colour with no override just prints at the default.
   const _ov = cfg.temp?.colourOverrides || {};
-  const _bump = (base) => Math.max(base ?? 0, _ov[design.colours?.layer1] ?? 0, _ov[design.colours?.layer2] ?? 0);
-  const cfgT = { ...cfg, temp: { ...cfg.temp, nozzle: _bump(cfg.temp?.nozzle), nozzleFirst: _bump(cfg.temp?.nozzleFirst) } };
-  em.raw(applyTemplate(cfgT.template.startResolved, cfgT));
+  const _eff = (col, base) => Math.max(base ?? 0, _ov[col] ?? 0);
+  const _baseT = _eff(design.colours?.layer1, cfg.temp?.nozzle);
+  const _designT = _eff(design.colours?.layer2, cfg.temp?.nozzle);
+  const cfgStart = { ...cfg, temp: { ...cfg.temp, nozzle: _baseT, nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) } };
+  const cfgSwap = { ...cfg, temp: { ...cfg.temp, nozzle: _designT } };   // the colour change restores THIS for the drawing
+  em.raw(applyTemplate(cfgStart.template.startResolved, cfgStart));
   em.raw('G90'); em.raw('M83');
   // Bambu's on-screen progress and time-remaining come from M73. Without it the
   // printer shows 0:00 for the whole print. Marks are collected as we go and
@@ -152,7 +156,7 @@ export function generate(design, cfg) {
   // change's own flush, is colour 2's. The header quotes them separately.
   const mmColour1 = em.meta().filamentMm;
   em.comment(`===== COLOUR CHANGE: load ${design.colours?.layer2 ?? 'colour 2'}, then Resume =====`);
-  const swap = colourChangeBlock(cfgT, backingZs[nBack - 1]);
+  const swap = colourChangeBlock(cfgSwap, backingZs[nBack - 1]);
   // A two-colour keychain whose file never stops is not a keychain — it is a
   // one-colour part that took fifteen minutes and looks like a success until
   // someone picks it up. It happened: a change block built from AMS commands
@@ -208,7 +212,7 @@ export function generate(design, cfg) {
   });
 
   marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
-  em.raw(applyTemplate(cfgT.template.endResolved, cfgT));
+  em.raw(applyTemplate(cfg.template.endResolved, cfg));
 
   const raw = em.meta();
   const startupMin = startupMinutes(cfg);
@@ -1124,6 +1128,11 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   // above it. If the change worked, this is one redundant press and a purge
   // that costs a few centimetres. If it did not, it is the whole swap.
   const tail = [...pauseLines(c)];
+  // The flush ran at the 240C flush temperature. Drop back to the DRAWING's
+  // print temperature now — during the swap pause it has time to cool — or the
+  // drawing bakes at 240 (this only used to happen inside the purge, which is
+  // off by default, so a black/light-blue drawing printed at 240).
+  tail.push(`M104 S${t} ; back to the drawing print temperature after the flush`);
   // Back to the park spot before purging. The printer's own load routine (and
   // the operator, via the screen) moves the head during the pause, and Resume
   // carried straight on from wherever it was left — which put a purge blob on
@@ -1155,6 +1164,7 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
 
   out.push('M629', `M621 S${tool}${ams}`, 'G392 S0', 'M400', 'G92 E0');
   out.push(...tail);
+  out.push(`M109 S${t} ; ensure the drawing prints at temperature, not the flush 240`);
   out.push(`G1 Z${up} F3000`, 'M1007 S1');
   return out;
 }
