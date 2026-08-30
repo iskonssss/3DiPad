@@ -38,7 +38,14 @@ export function generate(design, cfg) {
 
   em.comment(`3DiPad keychain  shape:${shape}  ${bbox.w.toFixed(0)}x${bbox.h.toFixed(0)}mm`);
   em.comment(`layer1(backing): ${design.colours?.layer1 ?? '?'}   layer2(design): ${design.colours?.layer2 ?? '?'}`);
-  em.raw(applyTemplate(cfg.template.startResolved, cfg));
+  // Per-colour nozzle temperature: some filaments need more heat than the
+  // default or their layers will not bond (PINK delaminated into spaghetti at
+  // 220 while PURPLE was fine from the same g-code). A print using an over-temp
+  // colour, as backing OR drawing, runs at the higher temperature throughout.
+  const _ov = cfg.temp?.colourOverrides || {};
+  const _bump = (base) => Math.max(base ?? 0, _ov[design.colours?.layer1] ?? 0, _ov[design.colours?.layer2] ?? 0);
+  const cfgT = { ...cfg, temp: { ...cfg.temp, nozzle: _bump(cfg.temp?.nozzle), nozzleFirst: _bump(cfg.temp?.nozzleFirst) } };
+  em.raw(applyTemplate(cfgT.template.startResolved, cfgT));
   em.raw('G90'); em.raw('M83');
   // Bambu's on-screen progress and time-remaining come from M73. Without it the
   // printer shows 0:00 for the whole print. Marks are collected as we go and
@@ -145,7 +152,7 @@ export function generate(design, cfg) {
   // change's own flush, is colour 2's. The header quotes them separately.
   const mmColour1 = em.meta().filamentMm;
   em.comment(`===== COLOUR CHANGE: load ${design.colours?.layer2 ?? 'colour 2'}, then Resume =====`);
-  const swap = colourChangeBlock(cfg, backingZs[nBack - 1]);
+  const swap = colourChangeBlock(cfgT, backingZs[nBack - 1]);
   // A two-colour keychain whose file never stops is not a keychain — it is a
   // one-colour part that took fifteen minutes and looks like a success until
   // someone picks it up. It happened: a change block built from AMS commands
@@ -201,7 +208,7 @@ export function generate(design, cfg) {
   });
 
   marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
-  em.raw(applyTemplate(cfg.template.endResolved, cfg));
+  em.raw(applyTemplate(cfgT.template.endResolved, cfgT));
 
   const raw = em.meta();
   const startupMin = startupMinutes(cfg);

@@ -90,7 +90,11 @@
     "nozzle": 220,
     "bed": 60,
     "nozzleFirst": 220,
-    "bedFirst": 60
+    "bedFirst": 60,
+    "_colourOverrides_comment": "Nozzle temperature per filament colour, when that colour needs more heat than the default. PINK PLA delaminated on the infill and turned to spaghetti at 220 while PURPLE printed clean from the same g-code, so it prints hotter. A print using an over-temp colour (as base OR drawing) runs at the highest of the two. Add a colour here if it under-extrudes or its layers do not bond.",
+    "colourOverrides": {
+      "PINK": 230
+    }
   },
   "limits": {
     "_comment": "These went up when the volumetric cap went in. The old 15/13 were measured against files that asked the hotend for twice what it can melt — the estimate was honest arithmetic about a print that then failed. A keychain that finishes takes about 15 minutes, so the budget is 18. To buy time back, thin the plate (build.backingThickness) or drop build.solidLayers to 1 — not by raising speed.maxVolumetricMmps, which is what caused the failures.",
@@ -138,12 +142,12 @@
     "WHITE",
     "RED",
     "BLUE",
-    "GREEN",
     "YELLOW",
     "PINK",
     "PURPLE",
     "ORANGE",
-    "TEAL"
+    "GREY",
+    "LIGHTBLUE"
   ],
   "output": {
     "_comment": "Where the day's files land. Both accept an absolute path, so they can point at a synced or backup folder while the booth itself runs from local disk — do NOT run the project from inside Google Drive/OneDrive/Dropbox, which sync node_modules and .git file by file and lock them mid-write. e.g. \"dir\": \"G:/My Drive/3DiPad/gcode\"",

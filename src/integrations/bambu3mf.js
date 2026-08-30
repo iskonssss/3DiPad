@@ -233,6 +233,7 @@ export function solidPng(width, height, [r, g, b]) {
 
 const HEX = { BLACK: '#1c1c1e', WHITE: '#f5f5f7', RED: '#e23b3b', BLUE: '#2f6fed', GREEN: '#34a853',
   YELLOW: '#f4c20d', PINK: '#ff5fa2', PURPLE: '#8b5cf6', ORANGE: '#ff8a34', TEAL: '#14b8a6',
+  GREY: '#9aa0a6', LIGHTBLUE: '#74c7ec',
   GREY: '#8e8e93', GRAY: '#8e8e93', GOLD: '#d4af37', SILVER: '#c0c4cc', BROWN: '#8b5a2b' };
 
 export function colourHex(name) {
