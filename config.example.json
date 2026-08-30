@@ -91,9 +91,10 @@
     "bed": 60,
     "nozzleFirst": 220,
     "bedFirst": 60,
-    "_colourOverrides_comment": "Nozzle temperature per filament colour, when that colour needs more heat than the default. PINK PLA delaminated on the infill and turned to spaghetti at 220 while PURPLE printed clean from the same g-code, so it prints hotter. A print using an over-temp colour (as base OR drawing) runs at the highest of the two. Add a colour here if it under-extrudes or its layers do not bond.",
+    "_colourOverrides_comment": "Nozzle temperature per filament colour, when that colour needs more heat than the default. PINK PLA delaminated on the infill at 220 while PURPLE was fine from the same g-code; YELLOW here is PLA SILK, which (like most silk) needs more heat to bond and to keep its sheen. A print using an over-temp colour, as base OR drawing, runs at the highest of the two. Add a colour here if it under-extrudes or its layers do not bond.",
     "colourOverrides": {
-      "PINK": 230
+      "PINK": 230,
+      "YELLOW": 230
     }
   },
   "limits": {
