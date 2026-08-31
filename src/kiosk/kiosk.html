@@ -1244,18 +1244,31 @@ function enterReview(){if(imgInk)refreshImagePreview();drawPreview();lastGen=gen
   const cls=m.overBudget?'over':m.nearBudget?'warn':'';const li=(k,v,x='')=>`<li class="${x}"><span>${k}</span><b>${v}</b></li>`;
   $('#summary').innerHTML=li('Name',esc(state.contact.name))+li('Shape',cap(state.shape))+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))
     +li('Print time',`~${m.estMinutes} min`,cls)+li('Material',`~${m.estGrams} g`);
-  state.approved=false;
-  $('#submit').disabled=!!m.overBudget;
-  if(m.overBudget){
-    toast('That design is a bit big — simplify it to fit under '+CFG.limits.maxPrintMinutes+' min',true);
-    // The way past it is for an operator, so it is a hold, not a button: hold
-    // the print-time row. Nothing on the page says so — the operator knows.
-    if(window.__BOOTH_SERVER__){const row=$('#summary li.over');if(row){row.classList.add('adm-hold');admHold(row,()=>admRequire(approveOverBudget));}}
-  }}
+  state.approved=false; state.overBudget=!!m.overBudget;
+  // Make it stays pressable when over the limit — a normal tap is refused with
+  // a hint, and pressing-and-holding it for a second opens the operator PIN,
+  // which sends the longer print. (Wired once, in wireOverBudgetHold.)
+  $('#submit').disabled=false;
+  if(m.overBudget) toast('Over the '+CFG.limits.maxPrintMinutes+'-min limit — simplify it, or hold “Make it” and enter the operator PIN.',true);
+}
 function approveOverBudget(){
   state.approved=true;
-  $('#submit').disabled=false;
-  toast('Approved by the operator — it will take ~'+(lastGen?.meta.estMinutes)+' min');
+  toast('Approved — sending it (~'+(lastGen?.meta.estMinutes)+' min)');
+  submit();
+}
+// Press and hold "Make it" for a second to approve an over-budget print, then
+// enter the operator PIN. A normal tap submits as usual (or is refused if over
+// budget). submitHeld swallows the click a hold's release fires, so approve +
+// submit does not double-send.
+let submitHeld=false;
+function wireOverBudgetHold(){
+  const btn=$('#submit'); if(!btn) return; let t=null;
+  const start=(e)=>{ if(!state.overBudget||state.approved) return; e.preventDefault(); btn.style.filter='brightness(.82)';
+    t=setTimeout(()=>{ btn.style.filter=''; submitHeld=true; admRequire(approveOverBudget); }, 1000); };
+  const cancel=()=>{ clearTimeout(t); t=null; btn.style.filter=''; };
+  btn.addEventListener('touchstart',start,{passive:false});
+  btn.addEventListener('mousedown',start);
+  for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) btn.addEventListener(ev,cancel);
 }
 function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
   const {poly,bbox}=shapePolygon(state.shape,CFG,state.customOutline);const pad2=44;
@@ -1473,7 +1486,7 @@ async function admSend(jobId, printerId){
 async function submit(){
   if(!lastGen)lastGen=generate(designObj(),CFG);
   const {gcode,meta}=lastGen;
-  if(meta.overBudget&&!state.approved)return toast('Design too big to print in time — simplify it',true);
+  if(meta.overBudget&&!state.approved)return toast('Over the time limit — hold “Make it” for a second, then enter the operator PIN.',true);
   const first=state.contact.name.split(' ')[0]||'there';
   if(window.__BOOTH_SERVER__){
     $('#submit').disabled=true;
@@ -1521,7 +1534,8 @@ const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 /* ---- boot (after all declarations) ---- */
 if(CFG.eventName)$('#tagline').textContent=CFG.eventName;
 setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();wireImage();wireSteps();admInit();
-$('#submit').addEventListener('click',submit);
+$('#submit').addEventListener('click',()=>{ if(submitHeld){ submitHeld=false; return; } submit(); });
+wireOverBudgetHold();
 updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);setStep('base');updateUndo();
 
 addEventListener('resize',()=>{fitCanvas();redraw();});
