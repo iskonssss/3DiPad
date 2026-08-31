@@ -1249,7 +1249,7 @@ function enterReview(){if(imgInk)refreshImagePreview();drawPreview();lastGen=gen
   // a hint, and pressing-and-holding it for a second opens the operator PIN,
   // which sends the longer print. (Wired once, in wireOverBudgetHold.)
   $('#submit').disabled=false;
-  if(m.overBudget) toast('Over the '+CFG.limits.maxPrintMinutes+'-min limit — simplify it, or hold “Make it” and enter the operator PIN.',true);
+  if(m.overBudget) toast('Over time limit of '+CFG.limits.maxPrintMinutes+'mins! Simplify your drawing',true);
 }
 function approveOverBudget(){
   state.approved=true;
@@ -1488,7 +1488,7 @@ async function admSend(jobId, printerId){
 async function submit(){
   if(!lastGen)lastGen=generate(designObj(),CFG);
   const {gcode,meta}=lastGen;
-  if(meta.overBudget&&!state.approved)return toast('Over the time limit — hold “Make it” for a second, then enter the operator PIN.',true);
+  if(meta.overBudget&&!state.approved)return toast('Over time limit of '+CFG.limits.maxPrintMinutes+'mins! Simplify your drawing',true);
   const first=state.contact.name.split(' ')[0]||'there';
   if(window.__BOOTH_SERVER__){
     $('#submit').disabled=true;
