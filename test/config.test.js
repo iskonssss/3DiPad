@@ -80,7 +80,10 @@ for (const file of bundles) {
   const name = path.basename(file);
 
   test(`${name}: the tablet prints to the same settings as the server`, () => {
-    const example = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8'));
+    // The kiosk is built from the booth's config.json merged over the example,
+    // so it must match what the SERVER actually runs — loadConfig() — not the
+    // shipped example alone (which is why an over-budget limit could differ).
+    const example = loadConfig();
     const cfg = bundledConfig(file);
     for (const key of ['designLayers', 'layerHeight', 'backingThickness', 'lineWidth', 'chamferMm', 'wallLoops', 'infillWallOverlap', 'holeDiameter']) {
       assert.equal(cfg.build[key], example.build[key], `build.${key} matches config.example.json`);
