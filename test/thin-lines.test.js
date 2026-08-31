@@ -12,6 +12,10 @@ import { shapePolygon } from '../src/gcode/geometry.js';
 import { skeletonize, skeletonPaths, pruneSpurs } from '../src/gcode/fill.js';
 
 const cfg = loadConfig({ exampleOnly: true });
+// These tests check bead width and fill continuity at a fixed 60mm square
+// plate; the booth's configured square size is a product choice and must not
+// change what they assert.
+cfg.build.shapeSizes = { ...cfg.build.shapeSizes, square: [60, 60] };
 const XS = Math.PI * (cfg.build.filamentDiameter / 2) ** 2;
 const N = 1000;
 

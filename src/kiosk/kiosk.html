@@ -759,22 +759,30 @@ function setPen(w,fromRange){state.pen=clampWidth(w,CFG);$('#pen-range').value=s
 /* Undo has to be undoable. Children draw a line, undo it, and want it back —
    without a redo the only way back is to draw it again, which on a keychain
    they have watched being measured is not the same line. */
-let redoStack = [];
-function pushUndoable(){ redoStack = []; updateUndo(); }
+// Undo is a history of whole-drawing snapshots, so ONE action = one undo step.
+// A bucket fill lays dozens of scan lines but is a single snapshot, so undo
+// removes the whole fill at once rather than a line at a time. Pen strokes and
+// erases are one snapshot each too.
+let history = [[]], hi = 0, pendingRecord = false;
+const snapStrokes = () => state.strokes.map(st => ({ w: st.w, pts: st.pts.slice() }));
+function recordStep(){ history = history.slice(0, hi + 1); history.push(snapStrokes()); hi = history.length - 1; updateUndo(); }
+function resetHistory(){ history = [snapStrokes()]; hi = 0; updateUndo(); }
+// kept as the name the draw code calls when it commits one action
+function pushUndoable(){ recordStep(); }
 function updateUndo(){
   const u = $('#undo'), r = $('#redo');
   if(!u) return;
-  u.disabled = state.mode === 'outline' || !state.strokes.length;
-  r.disabled = state.mode === 'outline' || !redoStack.length;
+  u.disabled = state.mode === 'outline' || hi <= 0;
+  r.disabled = state.mode === 'outline' || hi >= history.length - 1;
 }
 function undo(){
-  if(state.mode === 'outline' || !state.strokes.length) return;
-  redoStack.push(state.strokes.pop());
+  if(state.mode === 'outline' || hi <= 0) return;
+  hi--; state.strokes = history[hi].map(st => ({ w: st.w, pts: st.pts.slice() }));
   lastGen = null; updateUndo(); redraw();
 }
 function redo(){
-  if(state.mode === 'outline' || !redoStack.length) return;
-  state.strokes.push(redoStack.pop());
+  if(state.mode === 'outline' || hi >= history.length - 1) return;
+  hi++; state.strokes = history[hi].map(st => ({ w: st.w, pts: st.pts.slice() }));
   lastGen = null; updateUndo(); redraw();
 }
 
@@ -1039,7 +1047,7 @@ $('#redo').addEventListener('click',redo);
   $('#clear-drawing').addEventListener('click',()=>{
     if(imgInk){clearImage();return;}
     if(!state.strokes.length)return toast('Nothing drawn yet');
-    state.strokes=[];outsideWarned=false;redraw();toast('Drawing cleared');});
+    state.strokes=[];outsideWarned=false;recordStep();redraw();toast('Drawing cleared');});
   // Clear base: only the Custom shape has a drawn base. Wiping it also clears
   // the hole, because the hole position only makes sense against a shape.
   $('#clear-base').addEventListener('click',()=>{
@@ -1098,10 +1106,10 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   // to leave a mark nobody meant to make.
   if(state.step!=='draw'&&state.mode!=='outline'){return;}
   if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
-  if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;eraseAt(p);redraw();return;}
+  if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;pendingRecord=true;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
-  else { state.strokes.push({w:state.pen,pts:[p]}); pushUndoable(); }
+  else { state.strokes.push({w:state.pen,pts:[p]}); pendingRecord = true; }
   redraw();}
 function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefault();
   if(imgDrag){const p=toMM(ev);imgDrag.delta={x:p.x-imgDrag.from.x,y:p.y-imgDrag.from.y};redraw();return;}
@@ -1113,6 +1121,7 @@ function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefaul
 function onUp(ev){if(ev.pointerId!==activeId)return;drawing=false;activeId=null;
   if(imgDrag){const d=imgDrag.delta;imgDrag=null;setImageOffset({x:imgOffset.x+d.x,y:imgOffset.y+d.y});return;}
   if(state.mode==='outline'&&outlinePts){finishOutline();}
+  if(pendingRecord){ pendingRecord=false; recordStep(); }
   redraw();}
 function finishOutline(){
   const raw=outlinePts;outlinePts=null;
@@ -1496,7 +1505,7 @@ async function submit(){
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
 function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'WHITE',layer2:'BLACK'};
-  state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;
+  state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;history=[[]];hi=0;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
   $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(0.8);selectShape(DEFAULT_SHAPE);setStep('base');show('welcome');}
