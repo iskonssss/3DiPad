@@ -1264,7 +1264,7 @@ let submitHeld=false;
 function wireOverBudgetHold(){
   const btn=$('#submit'); if(!btn) return; let t=null;
   const start=(e)=>{ if(!state.overBudget||state.approved) return; e.preventDefault(); btn.style.filter='brightness(.82)';
-    t=setTimeout(()=>{ btn.style.filter=''; submitHeld=true; admRequire(approveOverBudget); }, 1000); };
+    t=setTimeout(()=>{ btn.style.filter=''; submitHeld=true; admRequire(approveOverBudget, true); }, 1000); };
   const cancel=()=>{ clearTimeout(t); t=null; btn.style.filter=''; };
   btn.addEventListener('touchstart',start,{passive:false});
   btn.addEventListener('mousedown',start);
@@ -1333,9 +1333,9 @@ let admUnlockedUntil = 0, admPinBuf = '', admLockMin = 10;
 let admLastPin = '', admOnUnlock = null;
 
 /** Run cb once an operator has unlocked — straight away if they already have. */
-function admRequire(cb){
+function admRequire(cb, force){
   admOnUnlock = cb;
-  return admOpen();
+  return admOpen(force);
 }
 function admUnlocked(){
   const cb = admOnUnlock; admOnUnlock = null;
@@ -1343,8 +1343,10 @@ function admUnlocked(){
   return admShow();
 }
 
-async function admOpen(){
-  if(Date.now() < admUnlockedUntil) return admUnlocked();
+async function admOpen(force){
+  // force skips the 'unlocked for a while' shortcut, so the over-budget approval
+  // always asks for the PIN even if the panel was opened recently.
+  if(!force && Date.now() < admUnlockedUntil) return admUnlocked();
   // Ask the server whether it wants a PIN at all. An empty attempt answers that
   // without being counted as a guess, and means the tablet never has to be told
   // in advance — so there is nothing about the PIN baked into the page.
