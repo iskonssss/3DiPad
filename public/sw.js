@@ -14,7 +14,7 @@
 // that must always come from the server, and the day's g-code and previews
 // under /output and /leads must never be served stale. So the worker now
 // handles the kiosk's own files and steps aside for everything else.
-const CACHE = '3dipad-v4';
+const CACHE = '3dipad-v5';
 const ASSETS = ['.', 'index.html', 'manifest.webmanifest', 'icon.svg'];
 
 /** Is this one of the kiosk's own URLs? Everything else is none of our business. */
