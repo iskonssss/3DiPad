@@ -109,8 +109,25 @@ function stripComments(value) {
   return value;
 }
 
+// Merge the booth's own config.json over the example, so the kiosk enforces the
+// SAME limits/palette/temps the server does. Building from the example alone
+// baked the wrong print-time limit into the tablets: config.example.json still
+// said 18 min while the booth's config.json said 15, so an over-budget design
+// looked fine on the tablet and the over-15 approval never armed.
+function deepMerge(base, over) {
+  if (Array.isArray(over)) return over;
+  if (over && typeof over === 'object' && base && typeof base === 'object' && !Array.isArray(base)) {
+    const out = { ...base };
+    for (const [k, v] of Object.entries(over)) out[k] = deepMerge(base[k], v);
+    return out;
+  }
+  return over === undefined ? base : over;
+}
 function kioskConfig() {
-  const cfg = stripComments(JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8')));
+  const example = JSON.parse(fs.readFileSync(path.join(root, 'config.example.json'), 'utf8'));
+  const userPath = path.join(root, 'config.json');
+  const merged = fs.existsSync(userPath) ? deepMerge(example, JSON.parse(fs.readFileSync(userPath, 'utf8'))) : example;
+  const cfg = stripComments(merged);
   for (const key of SERVER_ONLY) delete cfg[key];
   const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8').trimEnd();
   cfg.template = {
