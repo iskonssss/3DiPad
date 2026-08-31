@@ -29,12 +29,35 @@ is heavily commented and is the real documentation.
 
 ## Current state
 
-Working end to end: draw → g-code → 3mf → FTPS upload → MQTT start → print.
-Volumetric flow cap (12 mm³/s) stops the infill failures. Operator panel on the
-iPad (hold the corner chip, PIN-gated). Dashboard has stop, reset, reprint,
-history.
+**The booth has run real events.** Working end to end: draw (or import a photo)
+→ g-code → 3mf → FTPS upload → MQTT start → print → the automatic colour change
+→ finish. Volumetric flow cap (12 mm³/s) stops the infill failures. Operator
+panel on the iPad, dashboard has stop, reset, reprint, history, one-shot bed
+level + flow cali, per-printer connection Reconnect, and a chamber-light ping.
 
-**Colour change is the one unfinished thing.** See below.
+The **colour change is solved** (`mode: "bambu"`) — see the section below for
+what it took. What's live now that the section below predates:
+
+- **Per-colour and per-layer nozzle temperature.** `temp.colourOverrides`
+  (e.g. `{ "PINK": 230, "YELLOW": 230 }`) prints a colour hotter when it needs
+  it — PINK and YELLOW-silk delaminated on the infill at 220 while others were
+  fine from the same g-code. Temps are applied PER LAYER: the backing at
+  colour 1's temperature, the drawing at colour 2's, not the hotter of the two.
+  The bambu change flushes at 240 and now restores the drawing's print temp
+  after the flush (it only did that inside the purge, which is off by default —
+  so a drawing used to bake at 240). See `generate()` in engine.js.
+- **Showcase music files.** `npm run music` writes `output/music/<tune>.gcode`
+  and `.3mf` that play a tune on the buzzer (M1006) and print NOTHING — copy the
+  .3mf to the SD card and run it from the printer screen. Tunes live in
+  `tools/make-music.mjs`; the printer plays each M1006 unit at ~16 ms (about 2×
+  the 8 ms preview). "Booth Buzzer Studio" (a published Artifact) previews M1006
+  tunes in the browser and converts them from MIDI.
+- **`npm run clear-data`** backs up then wipes the test leads + queue + files
+  before a real event, resetting numbering to #0001. Refuses while the booth is
+  running.
+- **Over-budget approval:** press and hold **"Make it"** for 1 s → operator PIN
+  (always required for this) → sends the longer print. Replaces the old
+  hold-the-print-time-row gesture.
 
 ## The colour change — read this before touching it
 
@@ -186,6 +209,26 @@ knows what filament 2 *is*.
   prints which swap is actually in effect — trust that, not the config file.
 - **Config is read once at startup.** Editing `config.json` needs a restart.
 - **`config.json` is not in git** — it lives on the booth laptop only.
+- **The kiosk bakes its config in at build time, from `config.json` merged over
+  `config.example.json`.** `npm run build` (which `npm start` runs) inlines it
+  as `const CFG` in `public/index.html`; the tablet does NOT fetch it live. For
+  a long time the build read the EXAMPLE alone, so the tablet enforced the
+  example's print-time limit (18) while the server enforced config.json's (15):
+  an over-budget design looked fine on the tablet and the hold-to-approve never
+  armed, while the server rejected the submit. If a config change (limit,
+  palette, temps) does not show on the tablets, they were not rebuilt — the fix
+  was to merge config.json in `tools/build-kiosk.mjs` (server-only sections —
+  printer codes, PIN, output paths — are still stripped). After changing
+  config.json, restart the booth so the kiosk is rebuilt.
+- **"Prints stopped triggering on printers 2 and 3" was a stale MQTT session,
+  not the SD card or a held job.** The booth's connection still read
+  `connected: true` and status kept streaming, but the printer had stopped
+  honouring that session for COMMANDS — a light ping got no reply while P1
+  answered instantly. The start command vanished; the operator had to press Run
+  on the screen. Rebooting the printer (or the setup page's **↻ Reconnect**,
+  which rebuilds the booth's channel) fixed it. Diagnose it with the light ping:
+  a printer that will not answer `ledctrl` will not act on a print command
+  either, whatever its status says.
 - **Printers move between networks, and their IP moves with them.** The same
   A1 mini is 192.168.100.64 at home and 192.168.10.105 at the studio. With
   the stale address the file still uploads (over whatever link is left) and
@@ -224,9 +267,12 @@ knows what filament 2 *is*.
 
 1. ~~Run the transcribed colour change once~~ — done, works, `mode: "bambu"`
    is the booth setting. See the colour-change section for what it took.
-2. **`GHL_LEAD_WEBHOOK_URL` is empty.** Every lead is sitting in a JSON file on
-   the laptop. This is a lead-gen product with no lead capture wired up. Highest
-   business value of anything on this list.
+2. **CRM is off by choice — `notify.provider: "none"`.** GHL was never wired up
+   (no time to configure it), so the booth runs fully manual: leads are saved to
+   `leads/leads.csv` + a per-design `.svg` on the laptop and read from there. The
+   pluggable notify layer is still there if a future event wants it — set the
+   provider and the `GHL_*` webhook. Until then, "Ready" just marks a job
+   collected; no message fires.
 3. **A `FAILED` printer needs its own screen, and nothing else reaches it.**
    `stop` is accepted — the printer answers "success" — and `gcode_state` stays
    `FAILED` anyway. The dashboard's reset sends that same `stop`, so it does not
@@ -242,8 +288,15 @@ knows what filament 2 *is*.
    booth's; a timeout usually means the machine is elsewhere, not misconfigured.
    **Run the tool before theorising about the network** — it answers in 30
    seconds what a log will not.
-4. **PNG/JPEG import** — built on `claude/png-jpeg-image-import-wb68kf`, not yet
-   merged. The booth laptop is still on `main` and does not have it.
+4. ~~**PNG/JPEG import**~~ — merged and in use. A studio uploads a black-and-white
+   photo instead of drawing live; `src/gcode/image.js` turns it into the same
+   coverage mask a drawing makes. On the review page it can be sized (a slider),
+   dragged into position, and drawn on top of with the pen, and it takes the
+   chosen drawing colour. See "Next feature: image import" below for the design
+   constraints that still hold.
+5. **Undo is one step per action.** A bucket fill lays dozens of scan lines but
+   undoes as a single step, so undo removes the whole fill; pen strokes, erase
+   and Clear drawing are one step each too. Snapshot history in kiosk.html.
 
 ## Next feature: image import
 
