@@ -337,6 +337,7 @@
             <button data-tool="pen" class="sel">✏️ Draw</button>
             <button data-tool="fill">🪣 Fill</button>
             <button data-tool="eraser">🧽 Erase</button>
+            <button data-tool="move">🖐️ Move</button>
           </div>
           <div class="penrow" id="eraser-row" style="display:none">
             <span class="mini">Size</span>
@@ -848,7 +849,7 @@ function defaultHole(){
    and the operator can see the result before it prints. */
 let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=128,imgInvert=false,imgScale=100,imgPreviewCanvas=null,imgPreviewRect=null;
 // where the image sits, plate mm from centred; set by dragging on the shape step
-let imgOffset={x:0,y:0},imgDrag=null,imgPreviewTint='';
+let imgOffset={x:0,y:0},imgDrag=null,moveDrag=null,imgPreviewTint='';
 
 function wireImage(){
   $('#img-pick').addEventListener('click',()=>$('#img-file').click());
@@ -1105,7 +1106,13 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   // Only the drawing step draws. A stray finger on the shape or hole step used
   // to leave a mark nobody meant to make.
   if(state.step!=='draw'&&state.mode!=='outline'){return;}
-  if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
+  if(state.tool==='move'&&state.mode!=='outline'){
+    if(!state.strokes.length&&!imgInk)return toast('Nothing to move yet — draw or upload first',true);
+    drawing=true;activeId=ev.pointerId;
+    moveDrag={from:p, strokes:state.strokes.map(st=>({w:st.w,pts:st.pts.map(q=>({x:q.x,y:q.y}))})), off:{...imgOffset}};
+    return;
+  }
+    if(state.tool==='fill'&&state.mode!=='outline'){bucketFill(p);return;}
   if(state.tool==='eraser'&&state.mode!=='outline'){drawing=true;activeId=ev.pointerId;pendingRecord=true;eraseAt(p);redraw();return;}
   if(drawing)return;drawing=true;activeId=ev.pointerId;
   if(state.mode==='outline'){outlinePts=[p];}
@@ -1113,6 +1120,10 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   redraw();}
 function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefault();
   if(imgDrag){const p=toMM(ev);imgDrag.delta={x:p.x-imgDrag.from.x,y:p.y-imgDrag.from.y};redraw();return;}
+  if(moveDrag){const p=toMM(ev);const dx=p.x-moveDrag.from.x,dy=p.y-moveDrag.from.y;
+    state.strokes=moveDrag.strokes.map(st=>({w:st.w,pts:st.pts.map(q=>({x:q.x+dx,y:q.y+dy}))}));
+    if(imgInk){imgOffset={x:moveDrag.off.x+dx,y:moveDrag.off.y+dy};imgInk.offset={...imgOffset};imgPacked=null;schedulePreview();}
+    lastGen=null;redraw();return;}
   const evs=ev.getCoalescedEvents?ev.getCoalescedEvents():[ev];
   if(state.tool==='eraser'&&state.mode!=='outline'){for(const e of evs)eraseAt(toMM(e));redraw();return;}
   if(state.mode==='outline'){for(const e of evs)outlinePts.push(toMM(e));}
@@ -1120,6 +1131,7 @@ function onMove(ev){if(!drawing||ev.pointerId!==activeId)return;ev.preventDefaul
   redraw();}
 function onUp(ev){if(ev.pointerId!==activeId)return;drawing=false;activeId=null;
   if(imgDrag){const d=imgDrag.delta;imgDrag=null;setImageOffset({x:imgOffset.x+d.x,y:imgOffset.y+d.y});return;}
+  if(moveDrag){moveDrag=null;recordStep();lastGen=null;updateUndo();redraw();return;}
   if(state.mode==='outline'&&outlinePts){finishOutline();}
   if(pendingRecord){ pendingRecord=false; recordStep(); }
   redraw();}
@@ -1152,6 +1164,7 @@ function updateBanner(){const b=$('#banner');
   if(state.mode==='hole')return say('📍 Tap where the keyring hole goes');
   if(state.step==='draw'&&state.tool==='fill')return say('🪣 Tap inside a shape you drew to colour it in');
   if(state.step==='draw'&&state.tool==='eraser')return say('🧽 Rub over your drawing to erase');
+  if(state.step==='draw'&&state.tool==='move')return say('🖐️ Drag to move the whole drawing');
   if(state.step==='base')return say(STEPS[0].banner);
   if(state.step==='hole')return say(STEPS[2].banner);
   b.style.display='none';}
