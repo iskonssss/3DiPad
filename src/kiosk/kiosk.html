@@ -169,6 +169,9 @@
   /* review */
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; }
   #preview { width: 100%; height: auto; display: block; background: #0a1020; border-radius: 12px; }
+  /* the spinner's turntable: drag to turn, the disc flips on its own */
+  #preview3d { width: 100%; height: auto; display: none; background: #0a1020; border-radius: 12px; margin-top: 10px; touch-action: none; }
+  #preview3d-hint { display: none; margin: 6px 0 0; text-align: center; }
   .summary { list-style: none; padding: 0; margin: 14px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 18px; }
   .summary li { display: flex; justify-content: space-between; gap: 10px; font-size: 15px; color: var(--muted); padding: 8px 0;
     border-bottom: 1px solid #ffffff10; font-variant-numeric: tabular-nums; }
@@ -406,6 +409,8 @@
     <p class="sub" id="review-sub">Here's your keychain. Happy with it?</p>
     <div class="card">
       <canvas id="preview" width="1000" height="640"></canvas>
+      <canvas id="preview3d" width="1000" height="720"></canvas>
+      <p class="mini" id="preview3d-hint">Drag to turn it round · the disc flips by itself</p>
       <!-- Colours live HERE, not on the drawing board. Choosing them while
            drawing means choosing against a blank plate and a pen that is not
            the colour it will print; here every tap redraws the keychain as it
@@ -528,7 +533,7 @@ function bboxFor(shape){
 function polyFor(){ return shapePolygon(state.shape,CFG,state.customOutline).poly; }
 
 /* ---- nav ---- */
-function show(name){$$('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===name));if(name==='review')enterReview();if(name==='studio'){requestAnimationFrame(()=>{fitCanvas();redraw();});}window.scrollTo(0,0);}
+function show(name){$$('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===name));if(name!=='review')spinner3dStop();if(name==='review')enterReview();if(name==='studio'){requestAnimationFrame(()=>{fitCanvas();redraw();});}window.scrollTo(0,0);}
 function wireNav(){$$('[data-go]').forEach(el=>el.addEventListener('click',()=>{
     const v=el.dataset.validate;if(v&&!validate(v))return;
     if(el.dataset.go==='review'&&!goReview())return;
@@ -1445,6 +1450,108 @@ function drawSpinnerPreview(){
       g.beginPath();st.pts.forEach((p,i)=>{const px=X(p.x),py=Y(p.y);i?g.lineTo(px,py):g.moveTo(px,py);});g.stroke();}
     g.fillStyle='#9db0d8';g.font='bold 24px sans-serif';g.textAlign='center';g.fillText(label,W/4+k*W/2,H-12);
   });
+  spinner3dStart();
+}
+
+/* ---- 3D preview (spinner) ----
+   The finished spinner on a turntable: drag to turn it, and the disc flips
+   on its own so both faces come round. A plain-canvas renderer — the body is
+   a few hundred flat faces (ring sectors, walls, the loop, the disc, the two
+   pins), drawn back to front with a little shading. Orthographic, so each
+   face of the disc is an affine image of the plate and the drawing — strokes
+   AND an uploaded picture — is painted onto it exactly as it will print: the
+   back mirrored, reading right once flipped. No library, no network, works in
+   the standalone page. */
+const V3={raf:null,yaw:0.55,tilt:1.0,flip:0,last:0,drag:null,wired:false};
+function spinner3dStop(){ if(V3.raf){cancelAnimationFrame(V3.raf);V3.raf=null;} }
+function spinner3dStart(){
+  if(!SPINNER)return;
+  const cv=$('#preview3d');cv.style.display='block';$('#preview3d-hint').style.display='block';
+  if(!V3.wired){V3.wired=true;
+    cv.addEventListener('pointerdown',e=>{V3.drag={id:e.pointerId,x:e.clientX,y:e.clientY};cv.setPointerCapture(e.pointerId);});
+    cv.addEventListener('pointermove',e=>{if(!V3.drag||e.pointerId!==V3.drag.id)return;
+      V3.yaw+=(e.clientX-V3.drag.x)*0.012;V3.tilt=Math.max(0.15,Math.min(1.45,V3.tilt+(e.clientY-V3.drag.y)*0.008));V3.drag.x=e.clientX;V3.drag.y=e.clientY;});
+    for(const ev of ['pointerup', 'pointercancel'])cv.addEventListener(ev,()=>{V3.drag=null;});
+  }
+  spinner3dStop();V3.last=0;
+  const tick=(t)=>{ if(!$('[data-screen="review"]').classList.contains('active'))return spinner3dStop();
+    if(V3.last)V3.flip+=(t-V3.last)/1000*(Math.PI*2/5);V3.last=t;spinner3dDraw();V3.raf=requestAnimationFrame(tick); };
+  V3.raf=requestAnimationFrame(tick);
+}
+/** Hex colour scaled by k (0..1.3), for the shading. */
+function shadeHex(hex,k){const n=parseInt(hex.slice(1),16);const ch=v=>Math.max(0,Math.min(255,Math.round(((n>>v)&255)*k)));return `rgb(${ch(16)},${ch(8)},${ch(0)})`;}
+function spinner3dDraw(){
+  const cv=$('#preview3d'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const sp=CFG.spinner||{},R=sp.outerRadius??22.5,ri=sp.ringInnerRadius??18,rd=sp.discRadius??16.5,T=sp.thickness??5;
+  const lp=sp.loop||{},lcy=lp.cy??21,lro=lp.outerRadius??6,lri=lp.innerRadius??4,lt=lp.thickness??4;
+  const pin=sp.pin||{},pinR=pin.radius??2,pinReach=pin.reach??20.3;
+  const c1=COLOUR_HEX[state.colours.layer1]||'#888',c2=COLOUR_HEX[state.colours.layer2]||'#e11';
+  const s=Math.min(W,H)/62, cx=W/2, cy=H/2+4;
+  const cyw=Math.cos(V3.yaw),syw=Math.sin(V3.yaw),ct=Math.cos(V3.tilt),st=Math.sin(V3.tilt);
+  // body mm -> view: turn about z (yaw), lean the camera over (tilt); z is depth toward the eye
+  const view=p=>{const x=p[0]*cyw-p[1]*syw,y=p[0]*syw+p[1]*cyw,z=p[2];return [x,y*ct+z*st,-y*st+z*ct];};
+  const scr=v=>[cx+v[0]*s,cy-v[1]*s];
+  // the disc flips about the y axis at mid-thickness
+  const cf=Math.cos(V3.flip),sf=Math.sin(V3.flip);
+  const discXf=p=>{const z=p[2]-T/2;return [p[0]*cf+z*sf,p[1],-p[0]*sf+z*cf+T/2];};
+  const ident=p=>p;
+  const faces=[];
+  const add=(pts,xf,paint)=>{
+    const v=pts.map(p=>view(xf(p)));
+    const a=v[0],b=v[1],c=v[2];
+    const nx=(b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1]),ny=(b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2]),nz=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+    if(nz<=0)return;                                         // facing away
+    const L=Math.hypot(nx,ny,nz)||1,lit=0.62+0.38*Math.max(0,(nx*0.25+ny*0.45+nz*0.86)/L);
+    let depth=0;for(const q of v)depth+=q[2];depth/=v.length;
+    faces.push({v,depth,lit,paint});
+  };
+  const N=48;
+  const ring=(r0,r1,z0,z1,cx0,cy0,a0,a1,n,xf)=>{                // an annular slab: top, bottom, both walls
+    for(let k=0;k<n;k++){const p=a0+(a1-a0)*k/n,q=a0+(a1-a0)*(k+1)/n;
+      const P=(r,a,z)=>[cx0+r*Math.cos(a),cy0+r*Math.sin(a),z];
+      add([P(r1,p,z1),P(r1,q,z1),P(r0,q,z1),P(r0,p,z1)],xf);
+      add([P(r0,p,z0),P(r0,q,z0),P(r1,q,z0),P(r1,p,z0)],xf);
+      add([P(r1,p,z0),P(r1,q,z0),P(r1,q,z1),P(r1,p,z1)],xf);
+      if(r0>0)add([P(r0,p,z1),P(r0,q,z1),P(r0,q,z0),P(r0,p,z0)],xf);}
+  };
+  ring(ri,R,0,T,0,0,0,Math.PI*2,N,ident);
+  ring(lri,lro,0,lt,0,lcy,0.17,Math.PI-0.17,20,ident);       // the loop, the part of it outside the ring
+  // the disc: one face each side carrying the drawing, then its rim and pins
+  const circ=z=>{const o=[];for(let k=0;k<N;k++){const a=Math.PI*2*k/N;o.push([rd*Math.cos(a),rd*Math.sin(a),z]);}return o;};
+  const top=circ(T),bot=circ(0).reverse();
+  const front=state.faces.top,back=state.sameBack?state.faces.top:state.faces.bottom;
+  add(top,discXf,{face:front,map:(x,y)=>[x-R,y-R,T]});
+  add(bot,discXf,{face:back,map:(x,y)=>[R-x,y-R,0]});
+  for(let k=0;k<N;k++){const a=Math.PI*2*k/N,b=Math.PI*2*(k+1)/N;
+    add([[rd*Math.cos(a),rd*Math.sin(a),0],[rd*Math.cos(b),rd*Math.sin(b),0],[rd*Math.cos(b),rd*Math.sin(b),T],[rd*Math.cos(a),rd*Math.sin(a),T]],discXf);}
+  for(const d of [1,-1]){const y0=(rd-0.3)*d,tip=[0,pinReach*d,T/2],z=T/2,axis=[0,(y0+pinReach*d)/2,z];
+    const base=[[-pinR,y0,z-pinR],[pinR,y0,z-pinR],[pinR,y0,z+pinR],[-pinR,y0,z+pinR]];
+    for(let k=0;k<4;k++){const p=base[k],q=base[(k+1)%4];
+      // wound so each side faces away from the pin's own axis
+      const n=[(q[1]-p[1])*(tip[2]-p[2])-(q[2]-p[2])*(tip[1]-p[1]),(q[2]-p[2])*(tip[0]-p[0])-(q[0]-p[0])*(tip[2]-p[2]),(q[0]-p[0])*(tip[1]-p[1])-(q[1]-p[1])*(tip[0]-p[0])];
+      const c=[(p[0]+q[0]+tip[0])/3-axis[0],(p[1]+q[1]+tip[1])/3-axis[1],(p[2]+q[2]+tip[2])/3-axis[2]];
+      add(n[0]*c[0]+n[1]*c[1]+n[2]*c[2]>=0?[p,q,tip]:[q,p,tip],discXf);}}
+  // paint, far to near
+  faces.sort((p,q)=>p.depth-q.depth);
+  g.fillStyle='#0a1020';g.fillRect(0,0,W,H);
+  for(const f of faces){
+    g.beginPath();f.v.forEach((v,i)=>{const[X,Y]=scr(v);i?g.lineTo(X,Y):g.moveTo(X,Y);});g.closePath();
+    g.fillStyle=shadeHex(c1,f.lit);g.fill();
+    if(!f.paint||!f.paint.face)continue;
+    // the drawing, clipped to this face. Orthographic, so plate mm -> screen is
+    // affine: take the origin and the two unit steps through the whole chain.
+    const chain=(x,y)=>scr(view(discXf(f.paint.map(x,y))));
+    const o=chain(0,0),u=chain(1,0),w=chain(0,1);
+    g.save();g.clip();
+    g.setTransform(u[0]-o[0],u[1]-o[1],w[0]-o[0],w[1]-o[1],o[0],o[1]);
+    const fc=f.paint.face;
+    if(fc.imgPreviewCanvas&&fc.imgPreviewRect){const r=fc.imgPreviewRect;g.save();g.transform(1,0,0,-1,0,0);g.drawImage(fc.imgPreviewCanvas,r.x0,-r.y1,r.x1-r.x0,r.y1-r.y0);g.restore();}
+    g.strokeStyle=c2;g.fillStyle=c2;g.lineJoin='round';g.lineCap='round';
+    for(const st of fc.strokes){g.lineWidth=Math.max(0.5,st.w);
+      if(st.pts.length===1){g.beginPath();g.arc(st.pts[0].x,st.pts[0].y,st.w/2,0,7);g.fill();continue;}
+      g.beginPath();st.pts.forEach((p,i)=>i?g.lineTo(p.x,p.y):g.moveTo(p.x,p.y));g.stroke();}
+    g.restore();
+  }
 }
 function drawPreview(){if(SPINNER)return drawSpinnerPreview();const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
   const {poly,bbox}=shapePolygon(state.shape,CFG,state.customOutline);const pad2=44;
