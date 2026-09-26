@@ -64,6 +64,10 @@ export function spinnerSpec(cfg) {
     thickness, layerH, first, layers,
     edgeRound: s.edgeRoundMm ?? 0.5,
     lineWidth: s.lineWidth ?? 0.42,
+    firstLineWidth: s.firstLayerLineWidth ?? 0.5,
+    firstFlow: s.firstLayerFlow ?? 1.0,
+    firstZOffset: s.firstLayerZOffsetMm ?? 0,
+    bedTemp: s.bedTemp ?? null,
     walls: Math.max(1, s.wallLoops ?? 2),
     overlapFrac: s.infillWallOverlap ?? cfg.build?.infillWallOverlap ?? 0.15,
     bottomSolid: s.bottomSolidLayers ?? 3,
@@ -410,7 +414,6 @@ export function generateSpinner(design, cfg) {
   const cfgD = { ...cfg, build: { ...cfg.build, lineWidth: sp.lineWidth, layerHeight: sp.layerH, firstLayerHeight: sp.first, wallLoops: sp.walls, infillWallOverlap: sp.overlapFrac, designEdgeMargin: sp.designEdgeMargin }, speed: { ...cfg.speed, ...(cfg.spinner?.speed || {}) } };
   const s = cfgD.speed;
   const lw = sp.lineWidth;
-  const overlap = lw * sp.overlapFrac;
   // body-centred mm -> bed. The body's centre sits at (outerR, outerR) of the
   // plate-local box shapePolygon('spinner') describes; the loop takes the rest.
   const R0 = sp.outerR;
@@ -443,7 +446,8 @@ export function generateSpinner(design, cfg) {
   const _ov = cfg.temp?.colourOverrides || {};
   const _eff = (col, base) => Math.max(base ?? 0, _ov[col] ?? 0);
   const tempFor = (colour) => _eff(colour === 1 ? design.colours?.layer1 : design.colours?.layer2, cfg.temp?.nozzle);
-  const cfgStart = { ...cfgD, temp: { ...cfg.temp, nozzle: tempFor(1), nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) } };
+  const bedT = sp.bedTemp ?? cfg.temp?.bed, bedT1 = sp.bedTemp ?? cfg.temp?.bedFirst;
+  const cfgStart = { ...cfgD, temp: { ...cfg.temp, bed: bedT, bedFirst: bedT1, nozzle: tempFor(1), nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) } };
   // The change block takes the colour it changes INTO: its temperature, and
   // the filament index (0 = body, 1 = drawing) for the printer's own sequence.
   const cfgFor = (colour) => ({ ...cfgD, temp: { ...cfg.temp, nozzle: tempFor(colour) }, colourChange: { ...(cfg.colourChange || {}), tool: colour - 1 } });
@@ -453,6 +457,10 @@ export function generateSpinner(design, cfg) {
   em.comment(`colour1(body): ${design.colours?.layer1 ?? '?'}   colour2(drawing): ${design.colours?.layer2 ?? '?'}`);
   em.raw(applyTemplate(cfgStart.template.startResolved, cfgStart));
   em.raw('G90'); em.raw('M83');
+  // Bambu's own start for the textured plate lowers the nozzle a touch
+  // (G29.1 Z-0.02): a 0.2 mm first layer needs the squish a 0.28 one forgives.
+  // Reset at the end so a keychain printed next inherits nothing.
+  if (sp.firstZOffset) em.raw(`G29.1 Z${sp.firstZOffset} ; first-layer squish for the textured plate`);
   const marks = [{ at: em.lines.length, t: 0, pct: 0 }];
 
   // ---- the program: which layer, which part, which colour, in order ----
@@ -496,6 +504,16 @@ export function generateSpinner(design, cfg) {
   };
 
   /** A closed wall loop, with a slower feed where `zone` says the wall hangs over air. */
+  // The first layer is laid wider (the slicer's initial_layer_line_width) and
+  // can be told to run richer; every width and inset below follows `lay`.
+  let lay = null;
+  const layFor = (Li) => {
+    const w = Li.i === 1 ? sp.firstLineWidth : lw;
+    const eW = w * (Li.i === 1 ? sp.firstFlow : 1);
+    const ov = w * sp.overlapFrac;
+    const anchorInset = w * (sp.walls + 0.5) - ov;
+    return { lw: w, eW, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW } }, anchorInset, fillInset: anchorInset + (w / 2 - ov) };
+  };
   const wallLoop = (poly, feed, layerH, zone) => {
     if (!poly || poly.length < 3) return;
     const p0 = toBedC(poly[0]);
@@ -503,17 +521,15 @@ export function generateSpinner(design, cfg) {
     for (let k = 1; k <= poly.length; k++) {
       const q = poly[k % poly.length];
       const p = toBedC(q);
-      em.extrudeTo(p.x, p.y, zone && zone(q) ? sp.overhangWallSpeed : feed, lw, layerH);
+      em.extrudeTo(p.x, p.y, zone && zone(q) ? sp.overhangWallSpeed : feed, lay.eW, layerH);
     }
   };
   const fillRegion = (polys, spacing, feed, layerH, angle, phase) => {
     const { rows, fromScan } = regionRows(polys, spacing, phase, angle, 0.2);
-    if (rows.length) drawSpanRegions(em, cfgD, bbox, rows, spacing, feed, layerH, (p) => { const q = fromScan(p); return { x: q.x + R0, y: q.y + R0 }; });
+    if (rows.length) drawSpanRegions(em, lay.cfg, bbox, rows, spacing, feed, layerH, (p) => { const q = fromScan(p); return { x: q.x + R0, y: q.y + R0 }; });
   };
 
   const pinZone = (q) => Math.abs(q.x) < sp.pin.r + 1 && Math.abs(q.y) > sp.discR - 1;
-  const anchorInset = lw * (sp.walls + 0.5) - overlap;
-  const fillInset = anchorInset + (lw / 2 - overlap);
 
   function emitRing(Li, layerH) {
     const solid = Li.ringSolid;
@@ -522,8 +538,9 @@ export function generateSpinner(design, cfg) {
     const infillFeed = feedFor(Li, isFace ? 'top' : solid ? 'solid' : 'sparse');
     em.comment(`ring ${solid ? 'solid' : 'sparse'}${Li.loop ? ' +loop' : ''}${Li.pocket ? ' pocket' : ''}`);
     // walls: inner loops first, outer last, the order Bambu Studio uses
+    const { lw: lwL, anchorInset, fillInset } = lay;
     for (let w = sp.walls - 1; w >= 0; w--) {
-      const d = lw * (w + 0.5);
+      const d = lwL * (w + 0.5);
       em.comment(w === 0 ? 'outer wall' : 'inner wall');
       wallLoop(ringOuterOutline(sp, Li, d), perimFeed, layerH);
       wallLoop(loopHole(sp, Li, d), perimFeed, layerH);
@@ -537,7 +554,7 @@ export function generateSpinner(design, cfg) {
       wallLoop(ringInnerOutline(sp, Li, anchorInset), infillFeed, layerH, Li.pocketShrinking ? pinZone : null);
     }
     em.comment(solid ? 'solid infill' : 'sparse infill');
-    const spacing = solid ? lw : sp.sparseSpacing;
+    const spacing = solid ? lwL : sp.sparseSpacing;
     fillRegion([ringOuterOutline(sp, Li, dFill), loopHole(sp, Li, dFill), ringInnerOutline(sp, Li, dFill)],
       spacing, infillFeed, layerH, Li.i % 2 ? 45 : 135, (Li.i % 2) * (spacing / 2));
   }
@@ -549,8 +566,9 @@ export function generateSpinner(design, cfg) {
     const infillFeed = feedFor(Li, isFace ? 'top' : solid ? 'solid' : 'sparse');
     const cav = Li.cavity ? { w: sp.nfc.w, h: sp.nfc.h } : null;
     em.comment(`disc ${solid ? 'solid' : 'sparse'}${Li.pin ? ' pin' : Li.foot ? ' pin-foot' : ''}${cav ? ' NFC-cavity' : ''}${Li.bridge ? ' bridge' : ''}${Li.colour ? ` ${Li.colour}-face` : ''}`);
+    const { lw: lwL, anchorInset, fillInset } = lay;
     for (let w = sp.walls - 1; w >= 0; w--) {
-      const d = lw * (w + 0.5);
+      const d = lwL * (w + 0.5);
       em.comment(w === 0 ? 'outer wall' : 'inner wall');
       wallLoop(cachedDisc(Li.i, d), perimFeed, layerH, Li.pinGrowing ? pinZone : null);
       if (cav) wallLoop(rectPoly(cav.w, cav.h, d), perimFeed, layerH);
@@ -572,12 +590,12 @@ export function generateSpinner(design, cfg) {
       const cells = outline.map((p) => grid.toCell({ x: p.x + R0, y: p.y + R0 }));
       const mask = fillPolygon(cells, grid.w, grid.h);
       if (cov) {
-        const keep = dilate(cov.mask, cov.w, cov.h, Math.max(0, lw / 2 - overlap) / cov.cell);
+        const keep = dilate(cov.mask, cov.w, cov.h, Math.max(0, lwL / 2 - lwL * sp.overlapFrac) / cov.cell);
         for (let k = 0; k < mask.length; k++) if (keep[k]) mask[k] = 0;
       }
       em.comment('solid infill (around the drawing)');
-      const { rows, fromScan } = maskRowsAngle(mask, grid, angle, lw, 0, lw * 0.5);
-      if (rows.length) drawSpanRegions(em, cfgD, bbox, rows, lw, infillFeed, layerH, fromScan);
+      const { rows, fromScan } = maskRowsAngle(mask, grid, angle, lwL, 0, lwL * 0.5);
+      if (rows.length) drawSpanRegions(em, lay.cfg, bbox, rows, lwL, infillFeed, layerH, fromScan);
       return;
     }
     if (Li.bridge) {
@@ -585,16 +603,16 @@ export function generateSpinner(design, cfg) {
       // millimetre onto the walls either side. The rest of the layer is normal.
       const a = sp.nfc.anchorMm;
       em.comment('solid infill');
-      fillRegion([outline, rectPoly(sp.nfc.w, sp.nfc.h, a)], lw, infillFeed, layerH, angle, 0);
+      fillRegion([outline, rectPoly(sp.nfc.w, sp.nfc.h, a)], lwL, infillFeed, layerH, angle, 0);
       em.comment(`bridge over the NFC cavity @ ${Math.round(sp.bridgeSpeed / 60)} mm/s`);
       em.raw('M106 S255 ; full fan for the bridge');
       const along = sp.nfc.w >= sp.nfc.h ? 90 : 0;   // lines cross the shorter span
-      fillRegion([rectPoly(sp.nfc.w, sp.nfc.h, a)], lw, sp.bridgeSpeed, layerH, along, 0);
+      fillRegion([rectPoly(sp.nfc.w, sp.nfc.h, a)], lwL, sp.bridgeSpeed, layerH, along, 0);
       em.raw(`M106 S${Math.round(cfg.fan?.other ?? 255)}`);
       return;
     }
     em.comment(solid ? 'solid infill' : 'sparse infill');
-    const spacing = solid ? lw : sp.sparseSpacing;
+    const spacing = solid ? lwL : sp.sparseSpacing;
     fillRegion([outline, cav ? rectPoly(cav.w, cav.h, dFill) : null], spacing, infillFeed, layerH, angle, (Li.i % 2) * (spacing / 2));
   }
 
@@ -620,6 +638,7 @@ export function generateSpinner(design, cfg) {
   for (const seg of seq) {
     const Li = L(seg.i);
     const layerH = Li.h;
+    lay = layFor(Li);
     if (seg.colour !== current) {
       tally();
       const target = seg.colour;
@@ -648,12 +667,13 @@ export function generateSpinner(design, cfg) {
       const cov = seg.face === 'top' ? topCov : bottomCov;
       const k = seg.face === 'top' ? Li.i - topStart : Li.i - 1;
       em.comment(`drawing (${seg.face} face) layer ${k + 1}/${cL}`);
-      designLayer(em, cfgD, bbox, cov, s.bead, layerH, k % 2 === 1);
+      designLayer(em, lay.cfg, bbox, cov, s.bead, layerH, k % 2 === 1);
     }
   }
   tally();
 
   marks.push({ at: em.lines.length, t: em.timeNow(), pct: 100 });
+  if (sp.firstZOffset) em.raw('G29.1 Z0 ; back to no offset for whatever prints next');
   em.raw(applyTemplate(cfg.template.endResolved, cfgStart));
 
   const raw = em.meta();
