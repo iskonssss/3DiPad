@@ -246,8 +246,10 @@
   .adm-keys button:active { background: #2f4076; }
   .adm-pin .why { color: var(--muted); font-size: 13px; min-height: 18px; margin-top: 12px; }
   .adm-pin .why.bad { color: var(--danger); }
-  .canvas-undo { position: absolute; top: 10px; left: 10px; display: flex; gap: 8px; z-index: 6; }
-  .canvas-undo button { width: 46px; height: 46px; border-radius: 12px; border: 1px solid #ffffff26;
+  /* Bottom right, under the thumb of the hand holding the iPad — not top
+     left, where it took a reach across the drawing to get to. */
+  .canvas-undo { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 10px; z-index: 6; }
+  .canvas-undo button { width: 54px; height: 54px; border-radius: 14px; border: 1px solid #ffffff26;
                         background: #16203acc; color: var(--ink); font-size: 21px; line-height: 1;
                         -webkit-tap-highlight-color: transparent; }
   .canvas-undo button:disabled { opacity: .3; }
@@ -393,7 +395,8 @@
         <div class="canvas-wrap">
           <canvas id="pad" width="1000" height="1000"></canvas>
           <!-- On the canvas, not in the sidebar: undoing is a drawing action and
-               a child looks where they drew, not down a list of settings. -->
+               a child looks where they drew, not down a list of settings.
+               Bottom right, where a thumb reaches without letting go. -->
           <div class="canvas-undo">
             <button id="undo" title="Undo">↶</button>
             <button id="redo" title="Redo">↷</button>
