@@ -71,7 +71,9 @@ The body is generated from those; only the drawings change per child.
   first flip. (`pin.foot` is an alternative that grows the disc down instead.)
 - The back face is mirrored so it reads correctly when the disc is flipped;
   a different back drawing is optional.
-- Print a blank one first and check the disc flips, then a drawn one.
+- First print (2026-09-26): pins fused to the pockets at the modelled
+  clearance. The pocket is now opened by `pin.extraClearance` (0.3) and the
+  floating walls print at 10 mm/s like the slicer's. Tune from there.
 
 ## Future
 

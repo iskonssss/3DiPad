@@ -78,7 +78,13 @@ export function spinnerSpec(cfg) {
     designEdgeMargin: s.designEdgeMargin ?? 1.5,
     pin: {
       r: pin.radius ?? 2.0, neckLen: pin.neckLen ?? 0.8, tipR: pin.tipRadius ?? 0.3, reach: pin.reach ?? 20.3,
-      pocketR: pin.pocketRadius ?? 1.95, pocketTipR: pin.pocketTipRadius ?? 0.35, pocketReach: pin.pocketReach ?? 20.8,
+      // The pocket as modelled, opened up by extraClearance all round. The
+      // first hardware print at the modelled 0.34/0.5 fused: the pin's lower
+      // cone droops as it grows and the pocket's roof sags as it closes, and
+      // a third of a millimetre was not enough for both.
+      pocketR: (pin.pocketRadius ?? 1.95) + (pin.extraClearance ?? 0.3),
+      pocketTipR: (pin.pocketTipRadius ?? 0.35) + (pin.extraClearance ?? 0.3),
+      pocketReach: (pin.pocketReach ?? 20.8) + (pin.extraClearance ?? 0.3),
       foot: pin.foot ?? false, footClearance: pin.footClearance ?? 0.35,
       support: pin.support ?? true, supportClearance: pin.supportClearance ?? 0.25, supportWidth: pin.supportWidth ?? 7,
       supportGapLayers: Math.max(0, pin.supportGapLayers ?? 1),
@@ -89,7 +95,7 @@ export function spinnerSpec(cfg) {
       floorSolid: nfc.floorSolidLayers ?? 3, roofSolid: nfc.roofSolidLayers ?? 2, anchorMm: nfc.bridgeAnchorMm ?? 1.0,
     },
     bridgeSpeed: s.bridgeSpeed ?? 1200,
-    overhangWallSpeed: s.overhangWallSpeed ?? 1500,
+    overhangWallSpeed: s.overhangWallSpeed ?? 600,
     swapMinutes: s.swapMinutes ?? 1.0,
     pauseMinutes: s.nfcPauseMinutes ?? 0.5,
     maxPrintMinutes: s.maxPrintMinutes ?? 45,

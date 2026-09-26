@@ -241,9 +241,24 @@ What to know before touching it:
 - `node src/gcode/cli.js spinner 1,4,13,15,25` writes the sample and one SVG
   per listed layer — the quickest way to look at a layer without a printer.
 
-Not yet done: no print of the generated file has run on hardware. Print a
-blank (both faces empty are refused — draw a dot) and check the flip, the
-pins' foot, the pocket roof and the NFC roof before a workshop.
+**First hardware print, 2026-09-26** (A1 mini, external spool, textured
+plate): the body, the loop, the NFC pocket and the pause were all right, and
+the support under the pins is what the owner wants kept. Two things were
+wrong and were fixed from what was seen, not reasoned:
+
+1. The first layer had gaps between lines. The file's extrusion was correct;
+   a 0.2 mm first layer is less forgiving of nozzle height than the
+   keychain's 0.28. Now: the slicer's own first-layer line width (0.5), bed
+   65 on the textured plate, and Bambu's `G29.1 Z-0.02` plate nudge (reset at
+   the end). `firstLayerFlow` is the knob if it is still thin after a level.
+2. The disc did not flip: at the pause layer the pins were visibly fused to
+   their pockets, and after breaking loose it turned 180° and jammed — the
+   pin's lower cone droops outward as it grows, the pocket roof sags as it
+   closes, and the modelled clearance (0.34 radial, 0.5 axial) absorbed
+   neither. Now: `pin.extraClearance` opens the pocket 0.3 all round, and the
+   floating walls run at the slicer's 10 mm/s instead of 25. Next print
+   decides whether 0.3 is right; the test "the disc never touches the ring"
+   prints the closest approach if it ever needs reading.
 
 ## Traps that have bitten before
 
