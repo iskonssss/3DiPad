@@ -21,6 +21,7 @@ export function shapePolygon(shape, cfg, customOutline) {
     case 'circle': return ellipse(s.circle[0], s.circle[0]);
     case 'heart': return heart(s.heart[0], s.heart[1]);
     case 'custom': return customShape(customOutline, cfg);
+    case 'spinner': return spinnerShape(cfg);
     default: return rect(s.rectangle[0], s.rectangle[1]);
   }
 }
@@ -89,6 +90,26 @@ function heart(w, h, seg = 120) {
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
   const sx = w / (maxX - minX), sy = h / (maxY - minY);
   return finalize(pts.map((p) => ({ x: (p.x - minX) * sx, y: (p.y - minY) * sy })));
+}
+/**
+ * The spinner: the drawable area is the centre disc, but the box is the WHOLE
+ * body — ring and hanging loop — so the tablet shows the disc in context and
+ * the engine's plate frame covers everything it prints. Not finalize()d: the
+ * disc sits inside that box, not at its corner. The numbers mirror
+ * spinner.js's spec (kept here so geometry.js needs nothing from it).
+ */
+function spinnerShape(cfg) {
+  const s = cfg.spinner || {};
+  const R = s.outerRadius ?? 22.5;
+  const disc = s.discRadius ?? 16.5;
+  const loop = s.loop || {};
+  const h = R + (loop.cy ?? 21) + (loop.outerRadius ?? 6);
+  const poly = [];
+  for (let k = 0; k < 120; k++) {
+    const a = (2 * Math.PI * k) / 120;
+    poly.push({ x: R + disc * Math.cos(a), y: R + disc * Math.sin(a) });
+  }
+  return { poly, bbox: { w: 2 * R, h } };
 }
 function customShape(outline, cfg) {
   const [maxW, maxH] = cfg.build.customMax;

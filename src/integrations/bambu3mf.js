@@ -314,6 +314,23 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
     version: 2,
   };
 
+  // The keychain: colour 1 to the backing's top, both on the change layer,
+  // colour 2 above. The spinner declares its own (two faces, both colours on
+  // each), the way Bambu's slice_info for it does.
+  const layerFilamentLists = (Array.isArray(meta.filamentLayerLists) && meta.filamentLayerLists.length
+    ? meta.filamentLayerLists.map((l) => `      <layer_filament_list filament_list="${xmlEscape(l.list)}" layer_ranges="${xmlEscape(l.ranges)}" />`)
+    : [
+      `      <layer_filament_list filament_list="0" layer_ranges="0 ${Math.max(0, backing - 1)}" />`,
+      `      <layer_filament_list filament_list="0 1" layer_ranges="${backing} ${backing}" />`,
+      `      <layer_filament_list filament_list="1" layer_ranges="${backing + 1} ${Math.max(backing + 1, total - 1)}" />`,
+    ]).join('\n');
+  // Mid-print pauses (the NFC tag), as Bambu Studio records them.
+  const pauses = Array.isArray(meta.pauses) ? meta.pauses : [];
+  const pauseList = pauses.length
+    ? '\n    <pause_list>\n'
+      + pauses.map((p, i) => `      <pause index="${i + 1}" layer="${p.layer}" percent="${Math.round((p.layer / Math.max(1, total)) * 100)}" remaining_time="0" />`).join('\n')
+      + '\n    </pause_list>'
+    : '';
   const sliceInfo = `<?xml version="1.0" encoding="UTF-8"?>
 <config>
   <header>
@@ -334,17 +351,16 @@ export function build3mf({ gcode, meta = {}, cfg = {}, name = 'plate', now = new
     <metadata key="prediction" value="${seconds}"/>
     <metadata key="weight" value="${meta.estGrams ?? 6}"/>
     <metadata key="outside" value="false"/>
-    <metadata key="support_used" value="false"/>
+    <metadata key="support_used" value="false"/>${pauses.length ? `
+    <metadata key="pause_count" value="${pauses.length}"/>` : ''}
     <metadata key="label_object_enabled" value="false"/>
     <object identify_id="1" name="${xmlEscape(name)}" skipped="false" />
     <filament id="1" tray_info_idx="GFL99" type="PLA" color="${c1}" used_m="2.00" used_g="${meta.estGrams ?? 6}" group_id="0" nozzle_diameter="${nozzle}" volume_type="Standard" used_for_object="true" used_for_support="false"/>
     <filament id="2" tray_info_idx="GFL99" type="PLA" color="${c2}" used_m="0.30" used_g="1" group_id="0" nozzle_diameter="${nozzle}" volume_type="Standard" used_for_object="true" used_for_support="false"/>
     <nozzle id="0" extruder_id="1" nozzle_diameter="${nozzle}" volume_type="Standard"/>
     <layer_filament_lists>
-      <layer_filament_list filament_list="0" layer_ranges="0 ${Math.max(0, backing - 1)}" />
-      <layer_filament_list filament_list="0 1" layer_ranges="${backing} ${backing}" />
-      <layer_filament_list filament_list="1" layer_ranges="${backing + 1} ${Math.max(backing + 1, total - 1)}" />
-    </layer_filament_lists>
+${layerFilamentLists}
+    </layer_filament_lists>${pauseList}
   </plate>
 </config>
 `;

@@ -22,11 +22,46 @@ import { prepareStrokes, totalLength, simplify } from './strokes.js';
 import { insetPolygon, erode, dilate, smooth, decimate, distanceTo } from './outline.js';
 import { buildCoverage, maskContours, maskRows, contourToMm, skeletonize, skeletonPaths, pruneSpurs } from './fill.js';
 import { imageCoverage, decodeBitmap } from './image.js';
+import { generateSpinner } from './spinner.js';
 
 const FILAMENT_DENSITY = 0.00124; // g/mm^3 (PLA)
 const ACCEL_FUDGE = 1.6;
+/** The two numbers every product's estimate is built on. A function rather
+ *  than exported consts: spinner.js imports from this module while this module
+ *  imports from it, and a const is dead until its module body has run. */
+export function printConstants() { return { filamentDensity: FILAMENT_DENSITY, accelFudge: ACCEL_FUDGE }; }
+
+/**
+ * M73 progress reports, spliced into the emitted lines at every layer mark and
+ * every time tick. Bambu's on-screen progress and time-remaining come from M73;
+ * without it the printer shows 0:00 for the whole print.
+ */
+export function spliceProgress(em, marks, { startupMin, estMinutes, rawTimeMin }) {
+  // Layer marks plus the emitter's time ticks, in file order. The ticks are what
+  // keeps the bar moving through a long first layer.
+  const all = marks.concat(em.progress).sort((p, q) => p.at - q.at || p.t - q.t);
+
+  // Build one progress report per mark, dropping consecutive duplicates so the
+  // printer isn't told the same thing twice.
+  const reports = all.map((m) => {
+    const done = startupMin + m.t * ACCEL_FUDGE;
+    const pct = m.pct ?? Math.max(0, Math.min(100, Math.round((m.t / Math.max(rawTimeMin, 1e-6)) * 100)));
+    const remaining = m.pct === 100 ? 0 : Math.max(0, Math.ceil(estMinutes - done));
+    return `M73 P${pct} R${remaining}`;
+  });
+  // splice from the back so earlier indices stay valid
+  const lines = em.lines.slice();
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (i > 0 && reports[i] === reports[i - 1]) continue;
+    lines.splice(all[i].at, 0, reports[i]);
+  }
+  return lines;
+}
 
 export function generate(design, cfg) {
+  // A second product shares the emitter, the drawing pipeline and the colour
+  // change, but is a different object entirely — see spinner.js.
+  if (design?.product === 'spinner') return generateSpinner(design, cfg);
   const b = cfg.build;
   const s = cfg.speed;
   const shape = design.shape || 'rectangle';
@@ -219,24 +254,7 @@ export function generate(design, cfg) {
   const estMinutes = raw.timeMin * ACCEL_FUDGE + startupMin;
   const grams = raw.filamentMm * crossSection * FILAMENT_DENSITY;
 
-  // Layer marks plus the emitter's time ticks, in file order. The ticks are what
-  // keeps the bar moving through a long first layer.
-  const all = marks.concat(em.progress).sort((p, q) => p.at - q.at || p.t - q.t);
-
-  // Build one progress report per mark, dropping consecutive duplicates so the
-  // printer isn't told the same thing twice.
-  const reports = all.map((m) => {
-    const done = startupMin + m.t * ACCEL_FUDGE;
-    const pct = m.pct ?? Math.max(0, Math.min(100, Math.round((m.t / Math.max(raw.timeMin, 1e-6)) * 100)));
-    const remaining = m.pct === 100 ? 0 : Math.max(0, Math.ceil(estMinutes - done));
-    return `M73 P${pct} R${remaining}`;
-  });
-  // splice from the back so earlier indices stay valid
-  const lines = em.lines.slice();
-  for (let i = all.length - 1; i >= 0; i--) {
-    if (i > 0 && reports[i] === reports[i - 1]) continue;
-    lines.splice(all[i].at, 0, reports[i]);
-  }
+  const lines = spliceProgress(em, marks, { startupMin, estMinutes, rawTimeMin: raw.timeMin });
 
   const maxZ = designZs.length ? designZs[designZs.length - 1] : backingZs[nBack - 1];
   return {
@@ -302,14 +320,14 @@ function nudgeInside(pt, poly, cfg) {
 
 // ---------------------------------------------------------------------------
 
-function layerZs(first, step, top) {
+export function layerZs(first, step, top) {
   const zs = []; let z = first;
   while (z <= top + 1e-6) { zs.push(+z.toFixed(3)); z += step; }
   if (!zs.length) zs.push(+first.toFixed(3));
   return zs;
 }
 
-function perimeterLoop(em, cfg, bbox, poly, feed, layerH) {
+export function perimeterLoop(em, cfg, bbox, poly, feed, layerH) {
   if (poly.length < 3) return;
   const p0 = toBed(poly[0], bbox, cfg);
   em.travelTo(p0.x, p0.y);
@@ -387,7 +405,7 @@ function infillLayer(em, cfg, bbox, poly, hole, holeR, spacing, feed, layerH, ph
  * each region as one continuous serpentine. Shared by the backing's infill and
  * the design layer's fill; `toPlate` maps a span coordinate to plate-local mm.
  */
-function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPlate) {
+export function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPlate) {
   const b = cfg.build;
   const done = [];
   let open = [];
@@ -447,7 +465,7 @@ function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPlate) {
  * up one side of the ribbon and back the other — which is the right two passes
  * for a pen line and costs nothing extra to fall out of the same code.
  */
-function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
+export function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
   if (!cov) return;
   const b = cfg.build;
   const lw = b.lineWidth;
@@ -704,7 +722,7 @@ function smoothContour(pts, cell) {
   return simplify(smooth(decimate(pts, cell * 0.9, true), 2, false), cell / 3);
 }
 
-function makeEmitter(cfg, crossSection) {
+export function makeEmitter(cfg, crossSection) {
   const s = cfg.speed;
   const lines = [];
   const pos = { x: 0, y: 0, z: 0 };
@@ -1190,12 +1208,12 @@ function calibrationBlock(cfg) {
 }
 
 /** Minutes before the first extrusion: heat soak, homing, and any calibration. */
-function startupMinutes(cfg) {
+export function startupMinutes(cfg) {
   const c = cfg.calibration || {};
   return (c.startupMinutes ?? 1.2) + (c.bedLevel ? (c.bedLevelMinutes ?? 1.3) : 0);
 }
 
-function applyTemplate(text, cfg) {
+export function applyTemplate(text, cfg) {
   if (!text) return '';
   return text.replaceAll('{nozzle}', cfg.temp.nozzle).replaceAll('{bed}', cfg.temp.bed)
     .replaceAll('{nozzleFirst}', cfg.temp.nozzleFirst).replaceAll('{bedFirst}', cfg.temp.bedFirst)

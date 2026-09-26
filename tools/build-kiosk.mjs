@@ -25,6 +25,7 @@ const ENGINE_MODULES = [
   'src/gcode/fill.js',
   'src/gcode/image.js',
   'src/gcode/engine.js',
+  'src/gcode/spinner.js',
 ];
 
 function stripModuleSyntax(code) {

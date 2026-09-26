@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, syncedFolderWarning } from './config.js';
 import { generate } from './gcode/engine.js';
+import { shapePolygon } from './gcode/geometry.js';
 import { Queue } from './dispatch/queue.js';
 import { saveLead } from './leads.js';
 import * as notify from './integrations/notify.js';
@@ -523,6 +524,7 @@ function sanitizeContact(c) {
 const SHAPES = ['rectangle', 'square', 'circle', 'heart', 'custom'];
 
 function sanitizeDesign(body) {
+  if (body?.product === 'spinner') return sanitizeSpinner(body);
   const b = cfg.build;
   const shape = SHAPES.includes(body?.shape) ? body.shape : 'rectangle';
   const colours = {
@@ -539,6 +541,28 @@ function sanitizeDesign(body) {
     ? { x: clamp(+body.hole.x, 0, lim), y: clamp(+body.hole.y, 0, lim) }
     : null;
   return { shape, colours, design, image, customOutline, hole, holePos: holePos || 'top' };
+}
+
+/**
+ * The spinner: a fixed body and one drawing per face. `design`/`image` carry
+ * the front as well, so the lead record and anything else that reads a design
+ * the keychain's way sees the front face.
+ */
+function sanitizeSpinner(body) {
+  const colours = {
+    layer1: pickColour(body?.colours?.layer1),
+    layer2: pickColour(body?.colours?.layer2),
+  };
+  const { bbox } = shapePolygon('spinner', cfg, null);
+  const lim = Math.max(bbox.w, bbox.h);
+  const face = (f) => (f && typeof f === 'object' ? { design: cleanStrokes(f.design, lim), image: sanitizeImage(f.image) } : null);
+  const top = face(body?.faces?.top) || { design: [], image: null };
+  const bottom = body?.sameBothSides === false ? face(body?.faces?.bottom) : null;
+  return {
+    product: 'spinner', shape: 'spinner', colours,
+    faces: { top, bottom }, sameBothSides: !bottom,
+    design: top.design, image: top.image, customOutline: null, hole: null, holePos: 'none',
+  };
 }
 
 function pickColour(name) {
