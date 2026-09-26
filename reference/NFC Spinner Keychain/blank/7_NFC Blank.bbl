@@ -1,0 +1,17 @@
+{
+	"file path":	"/sdcard/cache/NFC Blank.3mf",
+	"subtask_name":	"NFC Blank",
+	"subtask id":	"1283717100",
+	"file_size":	"378687",
+	"md5":	"9D1C84329AB85670025E8817BDC50D30",
+	"timelapse":	false,
+	"bed_leveling":	true,
+	"flow_cali":	true,
+	"vibration_cali":	false,
+	"layer_inspect":	true,
+	"use ams":	false,
+	"xy_mech_mode_sweep":	false,
+	"auto_recovery":	true,
+	"manual_color_change":	false,
+	"ams mapping":	[65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280]
+}

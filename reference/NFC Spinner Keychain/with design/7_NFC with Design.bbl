@@ -1,0 +1,17 @@
+{
+	"file path":	"/sdcard/cache/NFC with Design.3mf",
+	"subtask_name":	"NFC with Design",
+	"subtask id":	"1283729366",
+	"file_size":	"378687",
+	"md5":	"732B9734020F57388122542834E462AF",
+	"timelapse":	false,
+	"bed_leveling":	true,
+	"flow_cali":	true,
+	"vibration_cali":	false,
+	"layer_inspect":	true,
+	"use ams":	false,
+	"xy_mech_mode_sweep":	false,
+	"auto_recovery":	true,
+	"manual_color_change":	true,
+	"ams mapping":	[65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280]
+}
