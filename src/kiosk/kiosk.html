@@ -172,6 +172,14 @@
   /* the spinner's turntable: drag to turn, the disc flips on its own */
   #preview3d { width: 100%; height: auto; display: none; background: #0a1020; border-radius: 12px; margin-top: 10px; touch-action: none; }
   #preview3d-hint { display: none; margin: 6px 0 0; text-align: center; }
+
+  /* recent designs (operator) */
+  .recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .recent-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px; cursor: pointer; text-align: left; color: var(--ink); font: inherit; }
+  .recent-card:active { background: var(--panel2); }
+  .recent-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #fff; border-radius: 8px; display: block; }
+  .recent-card .who { font-weight: 800; font-size: 14px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent-card .sub { font-size: 12px; margin: 2px 0 0; }
   .summary { list-style: none; padding: 0; margin: 14px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 18px; }
   .summary li { display: flex; justify-content: space-between; gap: 10px; font-size: 15px; color: var(--muted); padding: 8px 0;
     border-bottom: 1px solid #ffffff10; font-variant-numeric: tabular-nums; }
@@ -277,12 +285,23 @@
 <div id="app">
   <section class="screen active" data-screen="welcome">
     <div class="hero">
-      <span class="tagline" id="tagline">3D Workshop</span>
+      <!-- Operator: hold the event name to open recent designs. -->
+      <span class="tagline adm-hold" id="tagline">3D Workshop</span>
       <h1 id="welcome-h1">Draw it.<br /><span class="hl">Wear it.</span></h1>
       <p class="sub" id="welcome-sub">Design your own keychain — pick a shape, colours and pen, draw, and we 3D-print it while you explore the fair.</p>
       <button class="btn big" data-go="contact">Start designing ✏️</button>
-      <p class="foot">Takes about a minute · Bring a grown-up for the details</p>
+      <p class="foot" id="welcome-foot">Takes about a minute · Bring a grown-up for the details</p>
     </div>
+  </section>
+
+  <!-- Operator only: recent designs, back into the editor. Reached by holding
+       the event name on the welcome screen, behind the operator PIN. The
+       design is remade and sent as a NEW job; the old one is left as it was. -->
+  <section class="screen" data-screen="recent">
+    <h2>Recent designs</h2>
+    <p class="sub">Tap one to bring it back into the editor. Change what you need, then Make it — it goes out as a new job.</p>
+    <div class="recent-grid" id="recent-list"><span class="sub">Loading…</span></div>
+    <div class="nav"><button class="btn ghost" data-go="welcome">Back</button></div>
   </section>
 
   <section class="screen" data-screen="contact">
@@ -448,6 +467,10 @@
            design lands, so the way in is here as well as in the corner. Booth
            build only, and held rather than tapped like every other way in. -->
       <button class="btn ghost adm-hold" id="done-send" style="display:none;margin-top:6px;">⚙ Hold to send to a printer</button>
+      <!-- Same design, back in the editor — a stroke to fix, a colour to
+           change — sent again as a new job. Held, like the other operator
+           ways in: the child on the done screen is not the one deciding. -->
+      <button class="btn ghost adm-hold" id="done-edit" style="margin-top:6px;">✏️ Hold to edit and send again</button>
     </div>
   </section>
 
@@ -663,9 +686,9 @@ function emptyFace(){ return { strokes:[], history:[[]], hi:0, imgSrcCanvas:null
 function faceStore(){ return { strokes:state.strokes, history, hi, imgSrcCanvas, imgSrcPixels, imgInk, imgPacked, imgThreshold, imgInvert,
   imgScale, imgOffset:{...imgOffset}, imgPreviewCanvas, imgPreviewRect, imgArea:state.imgArea }; }
 function stashFace(){ if(SPINNER) state.faces[state.face]=faceStore(); }
-function switchFace(face){
-  if(face===state.face && state.faces[face]) return;   // already loaded, and in sync at the next stash
-  stashFace();
+function switchFace(face, force){
+  if(!force && face===state.face && state.faces[face]) return;   // already loaded, and in sync at the next stash
+  if(!force) stashFace();                                         // force: the store is newer than the globals
   state.face=face;
   const f=state.faces[face]||emptyFace();
   state.strokes=f.strokes; history=f.history; hi=f.hi;
@@ -995,7 +1018,84 @@ function clearImage(){
 function setImageUiActive(on){
   $('#img-controls').style.display=on?'':'none';
   $('#img-pick').textContent=on?'🖼️ Choose a different photo':'🖼️ Choose a photo';
+  // A picture brought back from a sent job is already cut: there are no
+  // source pixels to re-threshold, so those two controls step aside. Size,
+  // position and removal still work.
+  const locked=on&&!imgSrcPixels;
+  $('#img-threshold').parentElement.style.display=locked?'none':'';
+  $('#img-invert').parentElement.style.display=locked?'none':'';
   // the pen stays: a name gets written over an uploaded drawing
+}
+/** The wire form back into ink cells: the inverse of packBits. */
+function unpackBits(b64,n){
+  const s=atob(b64),ink=new Uint8Array(n);
+  for(let i=0;i<n;i++)if(s.charCodeAt(i>>3)&(1<<(7-(i&7))))ink[i]=1;
+  return ink;
+}
+/** A posted image payload as the live image state, with no source pixels. */
+function imageFromPayload(img){
+  if(!img||!(img.w>0)||!(img.h>0)||typeof img.data!=='string')return null;
+  return {w:img.w,h:img.h,ink:unpackBits(img.data,img.w*img.h),scale:Number.isFinite(img.scale)?img.scale:1,offset:{x:+(img.offset?.x||0),y:+(img.offset?.y||0)}};
+}
+
+/* ---- recent designs / edit again (operator) ----
+   What VaseDoodle has: a sent design comes back into the editor, gets changed,
+   and goes out as a NEW job. The g-code is never edited, only remade. The
+   server keeps every submitted design next to its lead picture; the list is
+   the same history the dashboard shows. */
+async function showRecent(){
+  show('recent');
+  const list=$('#recent-list');list.innerHTML='<span class="sub">Loading…</span>';
+  let d;
+  try{ d=await (await fetch('api/history?limit=40')).json(); }
+  catch{ list.innerHTML='<span class="sub">No connection to the booth server.</span>'; return; }
+  const jobs=(d.jobs||[]).filter(j=>!j.reprintOf);   // a reprint is the same design again
+  if(!jobs.length){ list.innerHTML='<span class="sub">Nothing sent yet today.</span>'; return; }
+  list.innerHTML=jobs.map(j=>`<button class="recent-card" data-design="${esc(j.designUrl||'')}">
+      <img src="${esc(j.previewUrl)}" alt="" loading="lazy" />
+      <div class="who">${esc(j.name)}</div>
+      <p class="sub">#${String(j.seq).padStart(4,'0')} · ${esc(String(j.colours?.layer1||''))} → ${esc(String(j.colours?.layer2||''))} · ${esc(j.status)}</p>
+    </button>`).join('');
+  for(const b of $$('.recent-card',list)) b.addEventListener('click',()=>loadJobDesign(b.dataset.design));
+}
+async function loadJobDesign(url){
+  let rec;
+  try{ const r=await fetch(url); if(!r.ok) throw new Error(); rec=await r.json(); }
+  catch{ return toast('Could not load that design',true); }
+  const d=rec.design||{};
+  // Different product from this tablet's: the design cannot be shown here.
+  if((d.product==='spinner')!==SPINNER) return toast(`That one is a ${d.product==='spinner'?'spinner':'keychain'} — this booth is set up for the ${SPINNER?'spinner':'keychain'}`,true);
+  resetAll();
+  if(rec.contact){ $('#f-name').value=rec.contact.name||''; const cc=COUNTRIES.find(c=>rec.contact.country===c.name); if(cc)$('#f-cc').value=cc.cc; syncPhonePlaceholder();
+    $('#f-phone').value=String(rec.contact.phone||'').replace(/^\+\d+\s*/,''); $('#f-consent').checked=true; state.contact={name:rec.contact.name||'',phone:rec.contact.phone||'',phoneE164:rec.contact.phoneE164||'',country:rec.contact.country||''}; }
+  if(d.colours){ for(const k of ['layer1', 'layer2']) if(CFG.palette.includes(d.colours[k])) state.colours[k]=d.colours[k]; updateLayerDots(); markSwatch(); }
+  const faceStoreFrom=(f)=>{ const s=emptyFace(); s.strokes=(f?.design||[]).map(st=>({w:st.w,pts:st.pts.map(p=>({x:+p.x,y:+p.y}))})); s.history=[s.strokes.map(st=>({w:st.w,pts:st.pts.slice()}))];
+    const img=imageFromPayload(f?.image); if(img){ s.imgInk=img; s.imgScale=Math.round(img.scale*100); s.imgOffset={...img.offset}; s.imgPacked=f.image; } return s; };
+  if(SPINNER){
+    state.faces={top:faceStoreFrom(d.faces?.top),bottom:d.faces?.bottom?faceStoreFrom(d.faces.bottom):null};
+    state.sameBack=d.sameBothSides!==false||!d.faces?.bottom; $('#same-back').checked=state.sameBack;
+    state.face='top'; switchFace('top', true);   // the stores are the truth, not the empty globals
+    show('studio'); setStep('front');
+    if(imgInk)refreshImagePreview();
+  } else {
+    if(SHAPES.some(([key])=>key===d.shape)) state.shape=d.shape;
+    state.customOutline=Array.isArray(d.customOutline)&&d.customOutline.length>=3?d.customOutline.map(p=>({x:+p.x,y:+p.y})):null;
+    selectShape(state.shape);
+    state.holePos=d.holePos||'top'; state.hole=d.hole&&Number.isFinite(+d.hole.x)?{x:+d.hole.x,y:+d.hole.y}:null;
+    if(!state.hole&&state.holePos!=='none') defaultHole();
+    const f=faceStoreFrom(d); state.strokes=f.strokes; history=f.history; hi=0;
+    imgInk=f.imgInk; imgPacked=f.imgPacked; imgScale=f.imgScale; imgOffset={...f.imgOffset}; imgSrcCanvas=null; imgSrcPixels=null;
+    if(imgInk){ $('#img-scale').value=imgScale; setImageUiActive(true); refreshImagePreview(); }
+    show('studio'); setStep('draw');
+  }
+  lastGen=null; updateUndo(); updateHoleState(); updateHoleButtons(); redraw();
+  toast(`Loaded #${String(rec.seq||'').padStart(4,'0')} for ${rec.contact?.name||'?'} — change what you need, then Make it`);
+}
+/** From the done screen: the design just sent, back in the editor, nothing reset. */
+function editAgain(){
+  $('#submit').disabled=false;
+  show('studio'); setStep(SPINNER?'front':'draw');
+  toast('Same design — change what you need, then Make it again');
 }
 /**
  * Re-threshold the drawing and rebuild the preview. Called on upload, on every
@@ -1593,9 +1693,19 @@ const ADM_HOLD_MS = 620;
 function admInit(){
   // No server means no queue to place, so the standalone build never shows a
   // way in at all rather than offering one that cannot work.
-  if(!window.__BOOTH_SERVER__){ $('#adm-dot').style.display = 'none'; return; }
+  if(!window.__BOOTH_SERVER__){
+    $('#adm-dot').style.display = 'none';
+    // no server, no PIN and no history — but the design just sent can still come back
+    admHold($('#done-edit'), editAgain);
+    return;
+  }
   $('#done-send').style.display = '';
-  for(const el of $$('.adm-hold')) admHold(el);
+  $('#welcome-foot').textContent = 'Takes about a minute · Bring a grown-up for the details · operator: hold the event name for recent designs';
+  for(const el of $$('.adm-hold')) {
+    if(el.id === 'tagline') admHold(el, () => admRequire(showRecent));
+    else if(el.id === 'done-edit') admHold(el, () => admRequire(editAgain));
+    else admHold(el);
+  }
 }
 
 /** Hold, do not tap. A tap is what a curious child does, and every button

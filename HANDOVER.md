@@ -241,6 +241,16 @@ What to know before touching it:
 - `node src/gcode/cli.js spinner 1,4,13,15,25` writes the sample and one SVG
   per listed layer — the quickest way to look at a layer without a printer.
 
+**Bringing a sent design back (both products).** As VaseDoodle does it: the
+server saves every submitted design as `<file>.design.json` next to the
+lead's picture, and the kiosk has two operator ways in, both held and behind
+the PIN — the event name on the welcome screen opens "Recent designs" (the
+dashboard's history, tap one to load it), and "Hold to edit and send again"
+on the done screen reopens the design just sent. Either way it is remade and
+goes out as a NEW job; nothing edits a g-code file in place. A picture loaded
+from a job has no source pixels, so its threshold controls hide; size,
+position, drawing over it and removal still work.
+
 **First hardware print, 2026-09-26** (A1 mini, external spool, textured
 plate): the body, the loop, the NFC pocket and the pause were all right, and
 the support under the pins is what the owner wants kept. Two things were

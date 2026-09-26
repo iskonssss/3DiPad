@@ -188,6 +188,13 @@ app.post('/api/submit', async (req, res) => {
 
   if (meta.approvedByOperator) console.log(`[queue] ${filename} is over the ${cfg.limits.maxPrintMinutes}-min budget (~${meta.estMinutes} min) — approved by the operator`);
   try { saveLead(leadsDir, job, design, cfg); } catch (e) { console.error('lead save failed', e); }
+  // The design itself, next to the lead's picture: an operator can bring a
+  // sent design back into the editor on the tablet, change it, and send it
+  // again as a new job. The g-code is never edited — only remade.
+  try {
+    const rec = { jobId: job.id, seq, createdAt: job.createdAt, contact: { name: contact.name, phone: contact.phone, phoneE164: contact.phoneE164, country: contact.country }, design };
+    fs.writeFileSync(path.join(leadsDir, filename.replace(/\.gcode$/, '') + '.design.json'), JSON.stringify(rec));
+  } catch (e) { console.error('design save failed', e); }
 
   // push the lead to the CRM the moment they submit (captures them even if they
   // never collect the print). Best-effort + retried by the outbox.
@@ -504,6 +511,8 @@ function publicJob(j) {
     est: j.meta?.estMinutes, printerId: j.printerId, createdAt: j.createdAt,
     driveLink: j.driveLink || null, notify: j.notify || null, leadPush: j.leadPush || null,
     previewUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.svg',
+    // the design as submitted, so the kiosk can bring it back into the editor
+    designUrl: '/leads/' + j.filename.replace(/\.gcode$/, '') + '.design.json',
     gcodeUrl: '/output/' + j.filename,
   };
 }
