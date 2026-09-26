@@ -206,10 +206,13 @@ What to know before touching it:
   on every layer. When the first print's disc will not flip, that number is
   the first thing to look at, and `pin.pocketRadius`/`pocketReach` are the
   knobs.
-- **No support.** The slicer put tree support under the pins' noses (layers
-  1–2). The disc grows a small foot there instead (`pin.foot`), kept 0.35 mm
-  from the ring. Unverified on hardware as of 2026-09-26; it is the one part
-  of the file that is a design decision rather than a transcription.
+- **Support under the pins, like the slicer's.** The pin's nose starts 0.5 mm
+  up with nothing under it. Layers 1–2 lay a short arc of loose lines in the
+  clearance gap under each pin (`pin.support`), 0.25 mm off the disc and the
+  ring, with layer 3 left empty so the pin sags onto it without fusing — the
+  slicer's tree support, in effect. It breaks away on the first flip. A foot
+  grown from the disc itself was tried first (`pin.foot`, off); the owner
+  wants the original pin untouched. Unverified on hardware as of 2026-09-26.
 - **Four filament swaps for two faces**, two layers of colour each: body L1 →
   drawing L1–2 → body L2–24 → drawing L24–25 → body L25. That is the minimum
   with one nozzle — a 0.4 mm island beside a 0.2 mm layer is where the nozzle

@@ -174,7 +174,12 @@
         "pocketRadius": 1.95,
         "pocketTipRadius": 0.35,
         "pocketReach": 20.8,
-        "foot": true,
+        "_support_comment": "support puts a short arc of loose lines in the clearance gap under each pin nose on the layers below the pin, then leaves supportGapLayers empty so the pin sags onto it without fusing, as the slicer’s tree support did. supportClearance keeps it off the disc and the ring; supportWidth is its length along the gap. It breaks away on the first flip. foot is the alternative: the disc itself grows down under the pin (no support to remove, but a stub on the disc). One or the other; foot wins if both are on.",
+        "support": true,
+        "supportClearance": 0.25,
+        "supportWidth": 7,
+        "supportGapLayers": 1,
+        "foot": false,
         "footClearance": 0.35
       },
       "loop": {

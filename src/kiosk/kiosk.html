@@ -1329,13 +1329,17 @@ function drawSpinnerGuide(c,px){
   c.fillStyle='#fff';c.beginPath();c.arc(lx,ly,lri*s,0,7);c.fill();
   c.fillStyle='#dfe4ee';c.beginPath();c.arc(cx,cy,R*s,0,7);c.fill();
   c.fillStyle='#fff';c.beginPath();c.arc(cx,cy,ri*s,0,7);c.fill();c.strokeStyle='#c8d1e2';c.stroke();
-  // the pins, as the small triangles they are on the finished part
+  // the pins: a round peg that tapers to a small flat tip
   c.fillStyle='#c8d1e2';
-  for(const dir of [1,-1]){c.beginPath();const[ax,ay]=px({x:R-2,y:R+dir*(rd-0.3)}),[bx,by]=px({x:R+2,y:R+dir*(rd-0.3)}),[tx,ty]=px({x:R,y:R+dir*(rd+3.6)});
-    c.moveTo(ax,ay);c.lineTo(bx,by);c.lineTo(tx,ty);c.closePath();c.fill();}
+  for(const dir of [1,-1]){c.beginPath();pinOutline(R,dir).forEach((p,i)=>{const[X,Y]=px(p);i?c.lineTo(X,Y):c.moveTo(X,Y);});c.closePath();c.fill();}
   // the disc itself, on top, as the plate to draw on
   c.fillStyle='#eef1f7';c.strokeStyle='#c8d1e2';c.beginPath();c.arc(cx,cy,rd*s,0,7);c.fill();c.stroke();
   c.restore();
+}
+/** The pin seen from above, in plate mm about a body centred at (R,R): peg, then cone, then a flat tip. */
+function pinOutline(R,dir){
+  const sp=CFG.spinner||{},rd=sp.discRadius??16.5,pin=sp.pin||{},r=pin.radius??2,neck=rd+(pin.neckLen??0.8),tip=pin.tipRadius??0.3,reach=pin.reach??20.3;
+  return [[-r,rd-0.3],[r,rd-0.3],[r,neck],[tip,reach],[-tip,reach],[-r,neck]].map(([x,y])=>({x:R+x,y:R+dir*y}));
 }
 /** Nudge the kid once if part of their drawing falls outside the base. */
 let outsideWarned=false;
@@ -1445,7 +1449,7 @@ function drawSpinnerPreview(){
     g.shadowColor='#0008';g.shadowBlur=18;g.shadowOffsetY=6;disc(R,R,R,c1);disc(R,R+lcy,lro,c1);g.shadowBlur=0;g.shadowOffsetY=0;
     disc(R,R+lcy,lri,bg);disc(R,R,R,c1);disc(R,R,ri,bg);disc(R,R,rd,c1);
     g.fillStyle=c1;
-    for(const dir of [1,-1]){g.beginPath();g.moveTo(X(R-2),Y(R+dir*(rd-0.3)));g.lineTo(X(R+2),Y(R+dir*(rd-0.3)));g.lineTo(X(R),Y(R+dir*(rd+3.6)));g.closePath();g.fill();}
+    for(const dir of [1,-1]){g.beginPath();pinOutline(R,dir).forEach((p,i)=>{i?g.lineTo(X(p.x),Y(p.y)):g.moveTo(X(p.x),Y(p.y));});g.closePath();g.fill();}
     if(f&&f.imgPreviewCanvas)paintImage(g,p=>[X(p.x),Y(p.y)],f.imgPreviewCanvas,f.imgPreviewRect);
     g.strokeStyle=c2;g.fillStyle=c2;g.lineJoin='round';g.lineCap='round';
     for(const st of (f?f.strokes:[])){g.lineWidth=Math.max(2,st.w*scale);
@@ -1527,13 +1531,17 @@ function spinner3dDraw(){
   add(bot,discXf,{face:back,map:(x,y)=>[R-x,y-R,0]});
   for(let k=0;k<N;k++){const a=Math.PI*2*k/N,b=Math.PI*2*(k+1)/N;
     add([[rd*Math.cos(a),rd*Math.sin(a),0],[rd*Math.cos(b),rd*Math.sin(b),0],[rd*Math.cos(b),rd*Math.sin(b),T],[rd*Math.cos(a),rd*Math.sin(a),T]],discXf);}
-  for(const d of [1,-1]){const y0=(rd-0.3)*d,tip=[0,pinReach*d,T/2],z=T/2,axis=[0,(y0+pinReach*d)/2,z];
-    const base=[[-pinR,y0,z-pinR],[pinR,y0,z-pinR],[pinR,y0,z+pinR],[-pinR,y0,z+pinR]];
-    for(let k=0;k<4;k++){const p=base[k],q=base[(k+1)%4];
-      // wound so each side faces away from the pin's own axis
-      const n=[(q[1]-p[1])*(tip[2]-p[2])-(q[2]-p[2])*(tip[1]-p[1]),(q[2]-p[2])*(tip[0]-p[0])-(q[0]-p[0])*(tip[2]-p[2]),(q[0]-p[0])*(tip[1]-p[1])-(q[1]-p[1])*(tip[0]-p[0])];
-      const c=[(p[0]+q[0]+tip[0])/3-axis[0],(p[1]+q[1]+tip[1])/3-axis[1],(p[2]+q[2]+tip[2])/3-axis[2]];
-      add(n[0]*c[0]+n[1]*c[1]+n[2]*c[2]>=0?[p,q,tip]:[q,p,tip],discXf);}}
+  // the pins as they really are: a round peg, then a cone to a small flat tip,
+  // revolved about the flip axis
+  const neck=rd+(pin.neckLen??0.8),tipR=pin.tipRadius??0.3,M=12,z0=T/2;
+  for(const d of [1,-1]){
+    const stations=[[rd-0.5,pinR],[neck,pinR],[pinReach,tipR]].map(([y,r])=>[y*d,r]);
+    const ringAt=([y,r])=>{const o=[];for(let k=0;k<M;k++){const a=Math.PI*2*k/M;o.push([r*Math.cos(a),y,z0+r*Math.sin(a)]);}return o;};
+    const rings=stations.map(ringAt);
+    for(let sIdx=0;sIdx+1<rings.length;sIdx++){const A=rings[sIdx],B=rings[sIdx+1];
+      for(let k=0;k<M;k++){const k2=(k+1)%M;add(d>0?[A[k],A[k2],B[k2],B[k]]:[A[k2],A[k],B[k],B[k2]],discXf);}}
+    const end=rings[rings.length-1];add(d>0?end.slice().reverse():end,discXf);
+  }
   // paint, far to near
   faces.sort((p,q)=>p.depth-q.depth);
   g.fillStyle='#0a1020';g.fillRect(0,0,W,H);

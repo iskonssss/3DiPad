@@ -41,6 +41,7 @@ function segments(gcode) {
     if (lm) { inBody = true; layer = +lm[1]; colour = +lm[5]; part = lm[3] === 'design' ? 'design' : ''; continue; }
     if (line.startsWith('; ring ')) part = 'ring';
     if (line.startsWith('; disc ')) part = 'disc';
+    if (line.startsWith('; support under the pins')) part = 'support';
     if (line.includes('A1 mini END') || line.includes('MACHINE_END_GCODE')) inBody = false;
     if (!line.startsWith('G1 ')) continue;
     const x = num(line, 'X'), y = num(line, 'Y'), e = num(line, 'E'), f = num(line, 'F');
@@ -64,13 +65,15 @@ const { gcode, meta } = generate(design(), cfg);
 const segs = segments(gcode);
 const plan = spinnerLayerPlan(cfg);
 
-test('layer plan matches the sliced original: 25 layers, cavity 12-14, pause before 15, pins 4-22, foot 1-3, loop to 20', () => {
+test('layer plan matches the sliced original: 25 layers, cavity 12-14, pause before 15, pins 4-22, support 1-2, loop to 20', () => {
   assert.equal(plan.layers.length, 25);
   assert.deepEqual(plan.cavityLayers, [12, 14]);
   assert.equal(plan.nfcPauseLayer, 15);
   const pins = plan.layers.filter((L) => L.pin).map((L) => L.i);
   assert.equal(pins[0], 4); assert.equal(pins[pins.length - 1], 22);
-  assert.deepEqual(plan.layers.filter((L) => L.foot).map((L) => L.i), [1, 2, 3]);
+  // the slicer's support sat on layers 1-2 with layer 3 empty under the pin
+  assert.deepEqual(plan.layers.filter((L) => L.support).map((L) => L.i), [1, 2]);
+  assert.deepEqual(plan.layers.filter((L) => L.foot), []);
   assert.deepEqual(plan.layers.filter((L) => L.loop).map((L) => L.i).slice(-1), [20]);
   assert.deepEqual(plan.layers.filter((L) => L.colour === 'bottom').map((L) => L.i), [1, 2]);
   assert.deepEqual(plan.layers.filter((L) => L.colour === 'top').map((L) => L.i), [24, 25]);
@@ -141,6 +144,22 @@ test('the disc never touches the ring: a clear gap on every layer, pins inside t
     const near = ring.filter(inPinZone), nearD = disc.filter(inPinZone);
     for (const p of nearD) for (const q of near) { const d = Math.hypot(p.x - q.x, p.y - q.y); if (d < min) min = d; }
     if (near.length && nearD.length) assert.ok(min >= sp.lineWidth + 0.25, `layer ${i}: pin and pocket walls ${min.toFixed(2)} mm apart`);
+  }
+});
+
+test('the pin support sits loose in the gap: clear of the disc, clear of the ring, gone before the pin', () => {
+  const c = sp.pin.supportClearance;
+  for (let i = 1; i <= 25; i++) {
+    const pts = segs.filter((s) => s.layer === i && s.part === 'support').flatMap((s) => samples(s, 0.1));
+    if (i > 2) { assert.equal(pts.length, 0, `layer ${i} has no support`); continue; }
+    assert.ok(pts.length > 40, `layer ${i} has support under both pins`);
+    const half = (i === 1 ? sp.firstLineWidth : sp.lineWidth) / 2;
+    for (const p of pts) {
+      const r = Math.hypot(p.x, p.y);
+      assert.ok(r - half >= sp.discR + c - 0.02, `layer ${i}: support at r=${r.toFixed(2)} touches the disc`);
+      assert.ok(r + half <= sp.ringInnerR - c + 0.02, `layer ${i}: support at r=${r.toFixed(2)} touches the ring`);
+      assert.ok(Math.abs(p.x) <= sp.pin.supportWidth / 2 + 0.3, 'support stays under the pin');
+    }
   }
 });
 

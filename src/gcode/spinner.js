@@ -30,12 +30,13 @@
 //   possible with one nozzle: a 0.4 mm-tall island beside a 0.2 mm layer is
 //   where the nozzle cone lands.
 //
-// Support: the slicer put tree support under the two pivot pins (layers 1–2)
-// because the pin's nose begins 0.5 mm above the bed with nothing under it.
-// Here the disc grows a small foot under each pin instead — the pin's own
-// first-layer footprint, extruded down to the bed, kept 0.35 mm clear of the
-// ring. It is part of the disc, sits in the clearance gap, and swings with the
-// disc. Nothing to snap off.
+// Support: the pin's nose begins 0.5 mm above the bed with nothing under it,
+// and the slicer put a little tree support there (layers 1–2, then a gap
+// layer). The same thing is done here: a short arc of loose lines in the
+// clearance gap under each pin, two layers tall, clear of the disc and the
+// ring, which breaks away when the disc is first flipped. (A foot grown from
+// the disc itself was tried and is kept as `pin.foot`; the owner prefers the
+// original pin untouched.)
 
 import { toBed } from './geometry.js';
 import { buildCoverage } from './fill.js';
@@ -78,7 +79,9 @@ export function spinnerSpec(cfg) {
     pin: {
       r: pin.radius ?? 2.0, neckLen: pin.neckLen ?? 0.8, tipR: pin.tipRadius ?? 0.3, reach: pin.reach ?? 20.3,
       pocketR: pin.pocketRadius ?? 1.95, pocketTipR: pin.pocketTipRadius ?? 0.35, pocketReach: pin.pocketReach ?? 20.8,
-      foot: pin.foot ?? true, footClearance: pin.footClearance ?? 0.35,
+      foot: pin.foot ?? false, footClearance: pin.footClearance ?? 0.35,
+      support: pin.support ?? true, supportClearance: pin.supportClearance ?? 0.25, supportWidth: pin.supportWidth ?? 7,
+      supportGapLayers: Math.max(0, pin.supportGapLayers ?? 1),
     },
     loop: { cy: loop.cy ?? 21, ro: loop.outerRadius ?? 6, ri: loop.innerRadius ?? 4, thickness: loop.thickness ?? 4.0 },
     nfc: {
@@ -141,7 +144,11 @@ export function spinnerLayerPlan(cfg) {
     L.pocketShrinking = L.pocket && L.zMid > axisZ;
   }
   const firstPin = out.find((L) => L.pin);
-  for (const L of out) L.foot = !!(sp.pin.foot && firstPin && !L.pin && L.i < firstPin.i);
+  for (const L of out) {
+    L.foot = !!(sp.pin.foot && firstPin && !L.pin && L.i < firstPin.i);
+    // support pads under the pin noses, stopping a gap layer short of the pin
+    L.support = !!(sp.pin.support && !L.foot && firstPin && L.i < firstPin.i - sp.pin.supportGapLayers);
+  }
   return { spec: sp, layers: out, nfcPauseLayer: bridge, cavityLayers: cavityLast > 0 ? [cavityFirst, cavityLast] : null, footDz: firstPin ? firstPin.dz : null };
 }
 
@@ -616,6 +623,33 @@ export function generateSpinner(design, cfg) {
     fillRegion([outline, cav ? rectPoly(cav.w, cav.h, dFill) : null], spacing, infillFeed, layerH, angle, (Li.i % 2) * (spacing / 2));
   }
 
+  /**
+   * The support under each pin's nose: an arc of lines in the clearance gap,
+   * `supportClearance` from both the disc and the ring so it fuses to
+   * neither, `supportWidth` long along the gap. Loose by design.
+   */
+  function emitPinSupport(Li, layerH) {
+    const c = sp.pin.supportClearance;
+    const lwL = lay.lw;
+    const r0 = sp.discR + c + lwL / 2, r1 = sp.ringInnerR - c - lwL / 2;
+    if (r1 < r0) return;
+    const half = sp.pin.supportWidth / 2;
+    em.comment('support under the pins');
+    for (const dir of [1, -1]) {
+      let k = 0;
+      for (let r = r0; r <= r1 + 1e-6; r += lwL, k++) {
+        const a0 = Math.PI / 2 * dir - half / r, a1 = Math.PI / 2 * dir + half / r;
+        const n = 16;
+        const pts = [];
+        for (let j = 0; j <= n; j++) { const a = a0 + ((a1 - a0) * j) / n; pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) }); }
+        if (k % 2) pts.reverse();
+        const p0 = toBedC(pts[0]);
+        if (k === 0) em.travelTo(p0.x, p0.y); else em.moveTo(p0.x, p0.y);
+        for (let j = 1; j < pts.length; j++) { const p = toBedC(pts[j]); em.extrudeTo(p.x, p.y, feedFor(Li, 'perim'), lay.eW, layerH); }
+      }
+    }
+  }
+
   function nfcPause(Li) {
     const c = cfg.colourChange || {};
     const t = tempFor(current);
@@ -663,6 +697,7 @@ export function generateSpinner(design, cfg) {
     if (seg.part === 'body') {
       emitRing(Li, layerH);
       emitDisc(Li, layerH);
+      if (Li.support) emitPinSupport(Li, layerH);
     } else {
       const cov = seg.face === 'top' ? topCov : bottomCov;
       const k = seg.face === 'top' ? Li.i - topStart : Li.i - 1;
@@ -707,6 +742,7 @@ export function generateSpinner(design, cfg) {
       strokeCount, drawnLengthMm: Math.round(totalLength(top.strokes) + (sameBoth ? 0 : totalLength(bottomSrc.strokes))),
       swaps, nfcPauseLayer: plan.nfcPauseLayer, cavityLayers: plan.cavityLayers,
       pauses: plan.nfcPauseLayer > 0 ? [{ layer: plan.nfcPauseLayer }] : [],
+      pinSupport: plan.layers.filter((L) => L.support).map((L) => L.i),
       filamentLayerLists,
       estMinutes: +estMinutes.toFixed(1), estGrams: +grams.toFixed(1),
       overBudget: estMinutes > sp.maxPrintMinutes, nearBudget: estMinutes > sp.warnPrintMinutes,
