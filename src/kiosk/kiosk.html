@@ -1477,7 +1477,8 @@ function spinner3dStart(){
   if(!V3.wired){V3.wired=true;
     cv.addEventListener('pointerdown',e=>{V3.drag={id:e.pointerId,x:e.clientX,y:e.clientY};cv.setPointerCapture(e.pointerId);});
     cv.addEventListener('pointermove',e=>{if(!V3.drag||e.pointerId!==V3.drag.id)return;
-      V3.yaw+=(e.clientX-V3.drag.x)*0.012;V3.tilt=Math.max(0.15,Math.min(1.45,V3.tilt+(e.clientY-V3.drag.y)*0.008));V3.drag.x=e.clientX;V3.drag.y=e.clientY;});
+      // finger up tips the top away from you, finger down brings it toward you
+      V3.yaw+=(e.clientX-V3.drag.x)*0.012;V3.tilt=Math.max(0.15,Math.min(1.45,V3.tilt-(e.clientY-V3.drag.y)*0.008));V3.drag.x=e.clientX;V3.drag.y=e.clientY;});
     for(const ev of ['pointerup', 'pointercancel'])cv.addEventListener(ev,()=>{V3.drag=null;});
   }
   spinner3dStop();V3.last=0;
