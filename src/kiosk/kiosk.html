@@ -273,8 +273,8 @@
   <section class="screen active" data-screen="welcome">
     <div class="hero">
       <span class="tagline" id="tagline">3D Workshop</span>
-      <h1>Draw it.<br /><span class="hl">Wear it.</span></h1>
-      <p class="sub">Design your own keychain — pick a shape, colours and pen, draw, and we 3D-print it while you explore the fair.</p>
+      <h1 id="welcome-h1">Draw it.<br /><span class="hl">Wear it.</span></h1>
+      <p class="sub" id="welcome-sub">Design your own keychain — pick a shape, colours and pen, draw, and we 3D-print it while you explore the fair.</p>
       <button class="btn big" data-go="contact">Start designing ✏️</button>
       <p class="foot">Takes about a minute · Bring a grown-up for the details</p>
     </div>
@@ -360,6 +360,14 @@
           <button class="btn ghost sm wide" id="clear-drawing">Clear drawing</button>
         </div>
 
+        <!-- Spinner only: the back is the front by default, so the child
+             gets a two-sided spinner without doing anything twice. -->
+        <div class="ctl" data-step="back" id="back-ctl">
+          <h4>Back of the spinner</h4>
+          <label class="mini imgopt"><input id="same-back" type="checkbox" checked /> Same drawing as the front</label>
+          <p class="mini imgnote">It prints mirrored underneath, so it reads the right way round when you flip it over. Untick to draw something different on the back.</p>
+        </div>
+
         <div class="ctl" data-step="hole">
           <h4>Where should the keyring go?</h4>
           <div class="holebtns" id="holebtns">
@@ -395,7 +403,7 @@
 
   <section class="screen" data-screen="review">
     <h2>Looking good?</h2>
-    <p class="sub">Here's your keychain. Happy with it?</p>
+    <p class="sub" id="review-sub">Here's your keychain. Happy with it?</p>
     <div class="card">
       <canvas id="preview" width="1000" height="640"></canvas>
       <!-- Colours live HERE, not on the drawing board. Choosing them while
@@ -468,6 +476,16 @@ const SHAPE_ICONS={
 const SHAPES=[['custom','Custom'],['square','Square'],['circle','Circle'],['heart','Heart']];
 const DEFAULT_SHAPE='circle';
 
+/* ---- product ----
+   One booth, one product. "keychain" is the drawn two-colour tag; "spinner" is
+   the NFC flip-spinner — a fixed body with a drawing on each face, no shape and
+   no hole to choose. Baked in from config; ?product=spinner in the URL for a
+   quick look at the other one. */
+const PRODUCT=(new URLSearchParams(location.search).get('product')||CFG.product||'keychain')==='spinner'?'spinner':'keychain';
+const SPINNER=PRODUCT==='spinner';
+const isDrawStep=id=>id==='draw'||id==='front'||id==='back';
+const budgetMinutes=()=>SPINNER?(CFG.spinner?.maxPrintMinutes??CFG.limits.maxPrintMinutes):CFG.limits.maxPrintMinutes;
+
 /* Country codes for the mobile field. Singapore first (booth default); `len`
    is the accepted national-number digit count, `ph` the example placeholder. */
 const COUNTRIES=[
@@ -491,8 +509,11 @@ const COUNTRIES=[
 ];
 const DEFAULT_CC='65';
 
-const state={contact:{name:'',phone:''},shape:DEFAULT_SHAPE,customOutline:null,colours:{layer1:'WHITE',layer2:'BLACK'},
+const state={contact:{name:'',phone:''},shape:SPINNER?'spinner':DEFAULT_SHAPE,customOutline:null,colours:{layer1:'WHITE',layer2:'BLACK'},
   pen:0.8,tool:'pen',eraser:6,hole:null,strokes:[],activeLayer:'layer1',mode:'design'/*design|outline|hole*/,
+  // Spinner: which face the drawing globals currently describe, the parked
+  // other face, and whether the back simply repeats the front.
+  face:'top',sameBack:true,faces:{top:null,bottom:null},
   // An uploaded drawing is an alternative to the strokes: a thresholded bitmap
   // in plate-grid cells, posted as {w,h,data} and turned into the same design
   // coverage the engine builds from strokes. When set, the hand-drawing tools
@@ -541,6 +562,12 @@ function validate(step){
   return true;
 }
 function goReview(){ // validation before review
+  if(SPINNER){
+    stashFace();
+    const t=state.faces.top;
+    if(!(t&&(t.strokes.length||t.imgInk)))return toast('Draw or upload your front design first',true),false;
+    return true;
+  }
   if(state.shape==='custom'&&!state.customOutline)return toast('Draw your custom shape outline first',true),false;
   if(!state.strokes.length&&!imgInk)return toast('Draw or upload your design first',true),false;
   // "No hole" is a choice, not the absence of one. Checking only for a placed
@@ -554,27 +581,47 @@ function goReview(){ // validation before review
    Four things in order: shape, drawing, hole, then colours on the preview.
    The old board put all of them on screen together, which is a lot of choices
    to hold at once when you only want to draw a cat. */
-const STEPS = [
+const STEPS = SPINNER ? [
+  { id:'front', title:'1. Draw the front', banner:'✏️ Draw on the front of the spinner' },
+  { id:'back',  title:'2. Draw the back',  banner:'✏️ Draw on the back — it prints so it reads right when you flip it' },
+] : [
   { id:'base', title:'1. Pick your shape',   banner:'Pick a shape, or draw your own' },
   { id:'draw', title:'2. Draw your design',  banner:'✏️ Draw on the plate' },
   { id:'hole', title:'3. Add the keyring hole', banner:'Choose where the keyring goes' },
 ];
 function stepIndex(){ return Math.max(0, STEPS.findIndex(s=>s.id===state.step)); }
+/** Which side-panel controls a step shows. The drawing tools serve every
+    drawing step; the spinner takes an uploaded picture on either face. */
+function stepShows(el, id){
+  const s = el.dataset.step;
+  if (s===id) return true;
+  if (isDrawStep(id) && s==='draw') return true;
+  if (SPINNER && isDrawStep(id) && el.id==='image-ctl') return true;
+  return false;
+}
 function setStep(id){
+  if (SPINNER) switchFace(id==='back' ? 'bottom' : 'top');
   state.step = id;
-  for (const el of $$('[data-step]')) el.style.display = el.dataset.step===id ? '' : 'none';
+  for (const el of $$('[data-step]')) el.style.display = stepShows(el, id) ? '' : 'none';
   const st = STEPS[stepIndex()];
   $('#step-title').textContent = st.title;
-  $('#step-next').textContent = id==='hole' ? 'Preview →' : 'Next →';
+  $('#step-next').textContent = (id==='hole' || id==='back') ? 'Preview →' : 'Next →';
   // Drawing is only possible on the drawing step; the outline mode owns the
   // base step when a custom shape has not been drawn yet.
   if (id==='base') state.mode = (state.shape==='custom' && !state.customOutline) ? 'outline' : 'design';
-  else if (id==='draw') state.mode = 'design';
-  else if (id==='hole') state.mode = 'design';
+  else state.mode = 'design';
   updateBanner(); updateHoleButtons(); updateHoleState(); redraw();
 }
 function stepNext(){
   const i = stepIndex();
+  if (SPINNER){
+    if (state.step==='front'){
+      if (!state.strokes.length && !imgInk) return toast('Draw or upload your front design first',true);
+      return setStep('back');
+    }
+    if (goReview()) show('review');
+    return;
+  }
   if (state.step==='base'){
     if (state.shape==='custom' && !state.customOutline) return toast('Draw your shape outline first',true);
     return setStep('draw');
@@ -595,7 +642,39 @@ function stepBack(){
 function wireSteps(){
   $('#step-next').addEventListener('click', stepNext);
   $('#step-back').addEventListener('click', stepBack);
+  $('#same-back').addEventListener('change', e=>{ state.sameBack=e.target.checked; lastGen=null; updateBanner(); updateUndo(); redraw(); });
 }
+
+/* ---- faces (spinner) ----
+   The drawing globals — strokes, undo history, the uploaded picture and its
+   preview — describe ONE face. The other face is parked in state.faces and
+   swapped back in when its step opens, so the pen, fill, eraser, move and the
+   picture import all work unchanged on either side. */
+function emptyFace(){ return { strokes:[], history:[[]], hi:0, imgSrcCanvas:null, imgSrcPixels:null, imgInk:null, imgPacked:null,
+  imgThreshold:128, imgInvert:false, imgScale:100, imgOffset:{x:0,y:0}, imgPreviewCanvas:null, imgPreviewRect:null, imgArea:0 }; }
+function faceStore(){ return { strokes:state.strokes, history, hi, imgSrcCanvas, imgSrcPixels, imgInk, imgPacked, imgThreshold, imgInvert,
+  imgScale, imgOffset:{...imgOffset}, imgPreviewCanvas, imgPreviewRect, imgArea:state.imgArea }; }
+function stashFace(){ if(SPINNER) state.faces[state.face]=faceStore(); }
+function switchFace(face){
+  if(face===state.face && state.faces[face]) return;   // already loaded, and in sync at the next stash
+  stashFace();
+  state.face=face;
+  const f=state.faces[face]||emptyFace();
+  state.strokes=f.strokes; history=f.history; hi=f.hi;
+  imgSrcCanvas=f.imgSrcCanvas; imgSrcPixels=f.imgSrcPixels; imgInk=f.imgInk; imgPacked=f.imgPacked; imgThreshold=f.imgThreshold;
+  imgInvert=f.imgInvert; imgScale=f.imgScale; imgOffset={...f.imgOffset}; imgPreviewCanvas=f.imgPreviewCanvas; imgPreviewRect=f.imgPreviewRect;
+  state.imgArea=f.imgArea;
+  $('#img-threshold').value=imgThreshold; $('#img-invert').checked=imgInvert; $('#img-scale').value=imgScale;
+  setImageUiActive(!!imgSrcCanvas); lastGen=null; outsideWarned=false; updateUndo();
+}
+/** The wire form of a parked face's picture, packed once and kept on the store. */
+function facePayload(s){
+  if(!s||!s.imgInk) return null;
+  if(!s.imgPacked) s.imgPacked={w:s.imgInk.w,h:s.imgInk.h,scale:s.imgScale/100,offset:{...s.imgOffset},data:packBits(s.imgInk.ink,s.imgInk.w*s.imgInk.h)};
+  return s.imgPacked;
+}
+/** On the back step with "same as the front" ticked, the front is what shows. */
+const mirrorView=()=>SPINNER && state.step==='back' && state.sameBack && state.faces.top;
 
 /* ---- shape chips ---- */
 function buildShapeChips(){const wrap=$('#shape-chips');wrap.innerHTML='';

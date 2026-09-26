@@ -187,10 +187,17 @@ function bumpPolyline(radiusAt, dz, grow, baseR, yCap = Infinity) {
   for (let y = baseR; y < baseR + 40; y += 0.02) { if (raw(y) <= 0) break; yEnd0 = y; }
   const yLim = Math.min(yEnd0 + grow, yCap);
   if (yLim <= y0 + 0.02) return null;
+  // The sides are offset along their normal, not sideways: a side sloping at
+  // angle a to the axis moves by grow/cos(a) in x. Capped near a point, where
+  // the slope runs away.
+  const off = (y) => {
+    const slope = (raw(y + 0.05) - raw(y - 0.05)) / 0.1;
+    return grow * Math.min(3, Math.sqrt(1 + slope * slope));
+  };
   const right = [];
   const step = 0.15;
-  for (let y = y0; y < yLim; y += step) right.push({ x: Math.max(0.02, raw(y) + grow), y });
-  right.push({ x: Math.max(0.02, raw(yLim) + grow), y: yLim });
+  for (let y = y0; y < yLim; y += step) right.push({ x: Math.max(0.02, raw(y) + off(y)), y });
+  right.push({ x: Math.max(0.02, raw(yLim) + off(yLim)), y: yLim });
   // A truncated tip, a pocket's offset end or a capped foot ends square; a
   // real point closes to one.
   const tip = right[right.length - 1];
