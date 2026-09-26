@@ -686,6 +686,8 @@ function selectShape(shape){
   $$('#shape-chips .chip').forEach(c=>c.classList.toggle('sel',c.dataset.shape===shape));
   if(shape==='custom'&&!state.customOutline){state.mode='outline';}
   else state.mode='design';
+  // the spinner's body has its own loop: no keyring hole, ever
+  if(SPINNER){state.hole=null;state.holePos='none';}
   // hole may become invalid on shape change
   if(state.hole&&!holeIsValid(state.hole,polyFor(),CFG))state.hole=null;
   if(!state.hole)defaultHole();
@@ -852,8 +854,9 @@ function pushUndoable(){ recordStep(); }
 function updateUndo(){
   const u = $('#undo'), r = $('#redo');
   if(!u) return;
-  u.disabled = state.mode === 'outline' || hi <= 0;
-  r.disabled = state.mode === 'outline' || hi >= history.length - 1;
+  const frozen = state.mode === 'outline' || !!mirrorView();
+  u.disabled = frozen || hi <= 0;
+  r.disabled = frozen || hi >= history.length - 1;
 }
 function undo(){
   if(state.mode === 'outline' || hi <= 0) return;
@@ -911,7 +914,7 @@ function updateHoleState(){const el=$('#hole-state');
    for one, and re-run on every shape change because a hole that fitted a square
    may not fit a heart. */
 function defaultHole(){
-  if(state.mode==='outline'||state.holePos==='none') return;
+  if(SPINNER||state.mode==='outline'||state.holePos==='none') return;
   const snapped=snapValidHole(presetHole('top',bboxFor(state.shape),CFG));
   if(snapped){state.hole=snapped;state.holePos='top';}
   else{state.hole=null;state.holePos=null;}
@@ -931,7 +934,7 @@ let imgSrcCanvas=null,imgSrcPixels=null,imgInk=null,imgPacked=null,imgThreshold=
 let imgOffset={x:0,y:0},imgDrag=null,moveDrag=null,imgPreviewTint='';
 
 function wireImage(){
-  $('#img-pick').addEventListener('click',()=>$('#img-file').click());
+  $('#img-pick').addEventListener('click',()=>{ if(mirrorView())return toast('Untick “Same drawing as the front” to put a different picture on the back'); $('#img-file').click(); });
   $('#img-file').addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];if(f)onImageFile(f);e.target.value='';});
   $('#img-threshold').addEventListener('input',e=>{imgThreshold=+e.target.value;rethreshold();schedulePreview();});
   $('#img-invert').addEventListener('change',e=>{imgInvert=e.target.checked;rethreshold();schedulePreview();});
@@ -1101,10 +1104,10 @@ function packBits(ink,n){
 /** Paint the imported drawing onto a context. `px` maps plate mm to device
     pixels; the preview canvas carries its own mm rectangle, so it lands exactly
     where it will print. Already clipped to the plate by imageCoverage. */
-function paintImage(c,px){
-  if(!imgPreviewCanvas||!imgPreviewRect)return;
-  const d=imgDrag?imgDrag.delta:{x:0,y:0};
-  const r={x0:imgPreviewRect.x0+d.x,x1:imgPreviewRect.x1+d.x,y0:imgPreviewRect.y0+d.y,y1:imgPreviewRect.y1+d.y};
+function paintImage(c,px,canvas=imgPreviewCanvas,rect=imgPreviewRect){
+  if(!canvas||!rect)return;
+  const d=(imgDrag&&canvas===imgPreviewCanvas)?imgDrag.delta:{x:0,y:0};
+  const r={x0:rect.x0+d.x,x1:rect.x1+d.x,y0:rect.y0+d.y,y1:rect.y1+d.y};
   const [X0,Y0]=px({x:r.x0,y:r.y1});          // top-left on screen: min x, max y
   const [X1,Y1]=px({x:r.x1,y:r.y0});
   c.save();
@@ -1112,7 +1115,7 @@ function paintImage(c,px){
   // wide can drop out of the PICTURE while still printing — the preview would
   // then be lying in the one direction that matters.
   c.imageSmoothingEnabled=true;
-  c.drawImage(imgPreviewCanvas,X0,Y0,X1-X0,Y1-Y0);
+  c.drawImage(canvas,X0,Y0,X1-X0,Y1-Y0);
   c.restore();
 }
 
@@ -1125,6 +1128,7 @@ function setupCanvas(){pad=$('#pad');ctx=pad.getContext('2d');const o={passive:f
 $('#redo').addEventListener('click',redo);
   // Clear drawing: wipe the pen strokes, keep the base shape and hole.
   $('#clear-drawing').addEventListener('click',()=>{
+    if(mirrorView())return toast('The back is a copy of the front — untick “Same drawing as the front” to change it');
     if(imgInk){clearImage();return;}
     if(!state.strokes.length)return toast('Nothing drawn yet');
     state.strokes=[];outsideWarned=false;recordStep();redraw();toast('Drawing cleared');});
@@ -1184,7 +1188,8 @@ function onDown(ev){ev.preventDefault();if(ev.pointerType==='pen')penSeen=true;i
   if(state.step==='base'&&imgInk&&state.mode!=='outline'){imgDrag={id:ev.pointerId,from:p,delta:{x:0,y:0}};activeId=ev.pointerId;drawing=true;return;}
   // Only the drawing step draws. A stray finger on the shape or hole step used
   // to leave a mark nobody meant to make.
-  if(state.step!=='draw'&&state.mode!=='outline'){return;}
+  if(!isDrawStep(state.step)&&state.mode!=='outline'){return;}
+  if(mirrorView()){toast('Untick “Same drawing as the front” to draw a different back');return;}
   if(state.tool==='move'&&state.mode!=='outline'){
     if(!state.strokes.length&&!imgInk)return toast('Nothing to move yet — draw or upload first',true);
     drawing=true;activeId=ev.pointerId;
@@ -1241,11 +1246,13 @@ function updateBanner(){const b=$('#banner');
   const say=(t)=>{b.style.display='';b.textContent=t;};
   if(state.shape==='custom'&&state.mode==='outline')return say('✏️ Draw the outline of your shape');
   if(state.mode==='hole')return say('📍 Tap where the keyring hole goes');
-  if(state.step==='draw'&&state.tool==='fill')return say('🪣 Tap inside a shape you drew to colour it in');
-  if(state.step==='draw'&&state.tool==='eraser')return say('🧽 Rub over your drawing to erase');
-  if(state.step==='draw'&&state.tool==='move')return say('🖐️ Drag to move the whole drawing');
+  if(mirrorView())return say('Same as the front — it prints mirrored underneath so it reads right. Untick to draw a different back');
+  if(isDrawStep(state.step)&&state.tool==='fill')return say('🪣 Tap inside a shape you drew to colour it in');
+  if(isDrawStep(state.step)&&state.tool==='eraser')return say('🧽 Rub over your drawing to erase');
+  if(isDrawStep(state.step)&&state.tool==='move')return say('🖐️ Drag to move the whole drawing');
   if(state.step==='base')return say(STEPS[0].banner);
   if(state.step==='hole')return say(STEPS[2].banner);
+  if(SPINNER)return say(STEPS[stepIndex()].banner);
   b.style.display='none';}
 
 function canvasPx(){const bb=bboxFor(state.shape);const sx=pad.width/bb.w,sy=pad.height/bb.h;return {bb,px:p=>[p.x*sx,pad.height-p.y*sy],sx,sy};}
@@ -1258,10 +1265,13 @@ function redraw(){
     const poly=polyFor();ctx.beginPath();poly.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.closePath();
     ctx.fillStyle='#eef1f7';ctx.fill();ctx.strokeStyle='#c8d1e2';ctx.lineWidth=2;ctx.stroke();
   }
+  if(SPINNER)drawSpinnerGuide(ctx,px);
   // imported drawing sits where the strokes would — clipped to the plate, so
   // what shows is what prints (the hole guide draws over it, just below)
   if(imgInk&&imgPreviewCanvas&&imgPreviewTint!=='#1b1b1b'&&STEPS.some(x=>x.id===state.step))refreshImagePreview();
-  if(imgInk&&imgPreviewCanvas)paintImage(ctx,px);
+  const mv=mirrorView();
+  if(mv){ if(mv.imgPreviewCanvas)paintImage(ctx,px,mv.imgPreviewCanvas,mv.imgPreviewRect); }
+  else if(imgInk&&imgPreviewCanvas)paintImage(ctx,px);
   // outline being drawn
   if(state.mode==='outline'&&outlinePts&&outlinePts.length){ctx.strokeStyle='#3a6fd8';ctx.lineWidth=3;ctx.lineJoin='round';ctx.lineCap='round';
     ctx.beginPath();outlinePts.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();}
@@ -1278,7 +1288,8 @@ function redraw(){
     // a pink pen here made kids think the colour had already been decided.
     const drawing=STEPS.some(s=>s.id===state.step);
     const hex=drawing?'#1b1b1b':(COLOUR_HEX[state.colours.layer2]||'#e11');ctx.strokeStyle=hex;ctx.fillStyle=hex;
-    for(const st of state.strokes){
+    const shown=mirrorView()?mirrorView().strokes:state.strokes;
+    for(const st of shown){
       const lw=Math.max(3,st.w*((pad.width/bb.w+pad.height/bb.h)/2));ctx.lineWidth=lw;
       if(st.pts.length===1){const[cx,cy]=px(st.pts[0]);ctx.beginPath();ctx.arc(cx,cy,lw/2,0,7);ctx.fill();continue;}
       ctx.beginPath();st.pts.forEach((p,i)=>{const[X,Y]=px(p);i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();
@@ -1294,6 +1305,29 @@ function redraw(){
   }
   updateMeter();
   warnIfOutside();
+}
+/** The spinner's body around the disc, so the child sees where the drawing
+    sits: the ring, the hanging loop, the two pivot pins. Plate mm, like the
+    disc; nothing here is drawable. */
+function drawSpinnerGuide(c,px){
+  const sp=CFG.spinner||{},R=sp.outerRadius??22.5,ri=sp.ringInnerRadius??18,rd=sp.discRadius??16.5;
+  const lp=sp.loop||{},lcy=lp.cy??21,lro=lp.outerRadius??6,lri=lp.innerRadius??4;
+  const s=pad.width/bboxFor('spinner').w;
+  const [cx,cy]=px({x:R,y:R}),[lx,ly]=px({x:R,y:R+lcy});
+  c.save();
+  c.fillStyle='#dfe4ee';c.strokeStyle='#c8d1e2';c.lineWidth=2;
+  c.beginPath();c.arc(lx,ly,lro*s,0,7);c.fill();c.stroke();
+  c.beginPath();c.arc(cx,cy,R*s,0,7);c.fill();c.stroke();
+  c.fillStyle='#fff';c.beginPath();c.arc(lx,ly,lri*s,0,7);c.fill();
+  c.fillStyle='#dfe4ee';c.beginPath();c.arc(cx,cy,R*s,0,7);c.fill();
+  c.fillStyle='#fff';c.beginPath();c.arc(cx,cy,ri*s,0,7);c.fill();c.strokeStyle='#c8d1e2';c.stroke();
+  // the pins, as the small triangles they are on the finished part
+  c.fillStyle='#c8d1e2';
+  for(const dir of [1,-1]){c.beginPath();const[ax,ay]=px({x:R-2,y:R+dir*(rd-0.3)}),[bx,by]=px({x:R+2,y:R+dir*(rd-0.3)}),[tx,ty]=px({x:R,y:R+dir*(rd+3.6)});
+    c.moveTo(ax,ay);c.lineTo(bx,by);c.lineTo(tx,ty);c.closePath();c.fill();}
+  // the disc itself, on top, as the plate to draw on
+  c.fillStyle='#eef1f7';c.strokeStyle='#c8d1e2';c.beginPath();c.arc(cx,cy,rd*s,0,7);c.fill();c.stroke();
+  c.restore();
 }
 /** Nudge the kid once if part of their drawing falls outside the base. */
 let outsideWarned=false;
@@ -1327,21 +1361,38 @@ function coveredLengthMm(){
   let n=0; for(let i=0;i<g.ink.length;i++) if(g.ink[i]&&g.plate[i]) n++;
   return n*FILL_CELL*FILL_CELL/CFG.build.lineWidth;
 }
-function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/CFG.limits.maxStrokeLengthMm);const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
+/** What a full meter means: the keychain's line budget, or the whole face of the spinner's disc. */
+function meterMaxMm(){
+  if(!SPINNER)return CFG.limits.maxStrokeLengthMm;
+  const r=(CFG.spinner?.discRadius??16.5)-(CFG.spinner?.designEdgeMargin??1.5);
+  return Math.PI*r*r/CFG.build.lineWidth;
+}
+function updateMeter(){const ratio=Math.min(1,coveredLengthMm()/meterMaxMm());const bar=$('#fill-bar');bar.style.width=(ratio*100).toFixed(0)+'%';bar.classList.toggle('hot',ratio>0.8);}
 
 /* ---- review ---- */
-function designObj(){return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:imagePayload()};}
+function designObj(){
+  if(SPINNER){
+    stashFace();
+    const f=face=>{const s=state.faces[face];return s?{design:s.strokes,image:facePayload(s)}:{design:[],image:null};};
+    return {product:'spinner',shape:'spinner',colours:state.colours,faces:{top:f('top'),bottom:state.sameBack?null:f('bottom')},sameBothSides:state.sameBack};
+  }
+  return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:imagePayload()};
+}
 function enterReview(){if(imgInk)refreshImagePreview();drawPreview();lastGen=generate(designObj(),CFG);const m=lastGen.meta,c=state.colours;
   const chip=n=>`<span class="swatch-mini" style="background:${COLOUR_HEX[n]||'#888'}"></span>${n}`;
   const cls=m.overBudget?'over':m.nearBudget?'warn':'';const li=(k,v,x='')=>`<li class="${x}"><span>${k}</span><b>${v}</b></li>`;
-  $('#summary').innerHTML=li('Name',esc(state.contact.name))+li('Shape',cap(state.shape))+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))
-    +li('Print time',`~${m.estMinutes} min`,cls)+li('Material',`~${m.estGrams} g`);
+  const what=SPINNER
+    ?li('Product','NFC spinner')+li('Faces',state.sameBack?'same both sides':'different each side')
+    :li('Shape',cap(state.shape));
+  const extra=SPINNER?li('Filament swaps',m.swaps)+li('NFC tag pause',m.nfcPauseLayer>0?`before layer ${m.nfcPauseLayer}`:'none'):'';
+  $('#summary').innerHTML=li('Name',esc(state.contact.name))+what+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))
+    +li('Print time',`~${m.estMinutes} min`,cls)+li('Material',`~${m.estGrams} g`)+extra;
   state.approved=false; state.overBudget=!!m.overBudget;
   // Make it stays pressable when over the limit — a normal tap is refused with
   // a hint, and pressing-and-holding it for a second opens the operator PIN,
   // which sends the longer print. (Wired once, in wireOverBudgetHold.)
   $('#submit').disabled=false;
-  if(m.overBudget) toast('Over time limit of '+CFG.limits.maxPrintMinutes+'mins! Simplify your drawing',true);
+  if(m.overBudget) toast('Over time limit of '+budgetMinutes()+'mins! Simplify your drawing',true);
 }
 function approveOverBudget(){
   state.approved=true;
@@ -1362,7 +1413,40 @@ function wireOverBudgetHold(){
   btn.addEventListener('mousedown',start);
   for(const ev of ['touchend','touchmove','touchcancel','mouseup','mouseleave']) btn.addEventListener(ev,cancel);
 }
-function drawPreview(){const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
+/**
+ * The spinner as it will come out: both faces side by side, each seen from
+ * its own side — the back is NOT mirrored here, because the child is looking
+ * at the finished thing, not at the bed. The pictures are re-tinted in the
+ * drawing colour face by face, which means loading each face in turn.
+ */
+function drawSpinnerPreview(){
+  const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const c1=COLOUR_HEX[state.colours.layer1]||'#888',c2=COLOUR_HEX[state.colours.layer2]||'#e11',bg='#0a1020';
+  const sp=CFG.spinner||{},R=sp.outerRadius??22.5,ri=sp.ringInnerRadius??18,rd=sp.discRadius??16.5;
+  const lp=sp.loop||{},lcy=lp.cy??21,lro=lp.outerRadius??6,lri=lp.innerRadius??4;
+  const was=state.face;
+  for(const face of ['top', 'bottom']){ if(!state.faces[face]&&face!==state.face)continue; switchFace(face); if(imgInk)refreshImagePreview(); stashFace(); }
+  switchFace(was);
+  g.fillStyle=bg;g.fillRect(0,0,W,H);
+  const bb=bboxFor('spinner'),pad2=36,scale=Math.min((W/2-pad2*2)/bb.w,(H-pad2*2-24)/bb.h);
+  const faces=[['Front',state.faces.top],['Back',state.sameBack?state.faces.top:state.faces.bottom]];
+  faces.forEach(([label,f],k)=>{
+    const ox=W/4+k*W/2-bb.w*scale/2, oy=H-24-pad2-(H-24-pad2*2-bb.h*scale)/2;
+    const X=x=>ox+x*scale,Y=y=>oy-y*scale;
+    const disc=(x,y,r,fill)=>{g.fillStyle=fill;g.beginPath();g.arc(X(x),Y(y),r*scale,0,7);g.fill();};
+    g.shadowColor='#0008';g.shadowBlur=18;g.shadowOffsetY=6;disc(R,R,R,c1);disc(R,R+lcy,lro,c1);g.shadowBlur=0;g.shadowOffsetY=0;
+    disc(R,R+lcy,lri,bg);disc(R,R,R,c1);disc(R,R,ri,bg);disc(R,R,rd,c1);
+    g.fillStyle=c1;
+    for(const dir of [1,-1]){g.beginPath();g.moveTo(X(R-2),Y(R+dir*(rd-0.3)));g.lineTo(X(R+2),Y(R+dir*(rd-0.3)));g.lineTo(X(R),Y(R+dir*(rd+3.6)));g.closePath();g.fill();}
+    if(f&&f.imgPreviewCanvas)paintImage(g,p=>[X(p.x),Y(p.y)],f.imgPreviewCanvas,f.imgPreviewRect);
+    g.strokeStyle=c2;g.fillStyle=c2;g.lineJoin='round';g.lineCap='round';
+    for(const st of (f?f.strokes:[])){g.lineWidth=Math.max(2,st.w*scale);
+      if(st.pts.length===1){g.beginPath();g.arc(X(st.pts[0].x),Y(st.pts[0].y),g.lineWidth/2,0,7);g.fill();continue;}
+      g.beginPath();st.pts.forEach((p,i)=>{const px=X(p.x),py=Y(p.y);i?g.lineTo(px,py):g.moveTo(px,py);});g.stroke();}
+    g.fillStyle='#9db0d8';g.font='bold 24px sans-serif';g.textAlign='center';g.fillText(label,W/4+k*W/2,H-12);
+  });
+}
+function drawPreview(){if(SPINNER)return drawSpinnerPreview();const cv=$('#preview'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
   const {poly,bbox}=shapePolygon(state.shape,CFG,state.customOutline);const pad2=44;
   const scale=Math.min((W-pad2*2)/bbox.w,(H-pad2*2)/bbox.h);const ox=(W-bbox.w*scale)/2,oy=H-(H-bbox.h*scale)/2;
   const X=x=>ox+x*scale,Y=y=>oy-y*scale;
@@ -1580,7 +1664,7 @@ async function admSend(jobId, printerId){
 async function submit(){
   if(!lastGen)lastGen=generate(designObj(),CFG);
   const {gcode,meta}=lastGen;
-  if(meta.overBudget&&!state.approved)return toast('Over time limit of '+CFG.limits.maxPrintMinutes+'mins! Simplify your drawing',true);
+  if(meta.overBudget&&!state.approved)return toast('Over time limit of '+budgetMinutes()+'mins! Simplify your drawing',true);
   const first=state.contact.name.split(' ')[0]||'there';
   if(window.__BOOTH_SERVER__){
     $('#submit').disabled=true;
@@ -1611,11 +1695,12 @@ async function submit(){
   $('#done-msg').textContent=`Your keychain file (${filename}) is ready — about ${meta.estMinutes} minutes to print.`;
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
-function resetAll(){state.contact={name:'',phone:''};state.shape=DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'WHITE',layer2:'BLACK'};
+function resetAll(){state.contact={name:'',phone:''};state.shape=SPINNER?'spinner':DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'WHITE',layer2:'BLACK'};
+  state.faces={top:null,bottom:null};state.face='top';state.sameBack=true;$('#same-back').checked=true;
   state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;history=[[]];hi=0;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
-  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(0.8);selectShape(DEFAULT_SHAPE);setStep('base');show('welcome');}
+  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(0.8);selectShape(state.shape);setStep(STEPS[0].id);show('welcome');}
 
 /* ---- utils ---- */
 function nextSeq(){let n=0;try{n=(parseInt(localStorage.getItem('3dipad_seq')||'0',10)||0)+1;localStorage.setItem('3dipad_seq',String(n));}catch{n=1;}return n;}
@@ -1630,7 +1715,12 @@ if(CFG.eventName)$('#tagline').textContent=CFG.eventName;
 setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();wireImage();wireSteps();admInit();
 $('#submit').addEventListener('click',()=>{ if(submitHeld){ submitHeld=false; return; } submit(); });
 wireOverBudgetHold();
-updateLayerDots();updateHoleState();updateHoleButtons();selectShape(DEFAULT_SHAPE);setStep('base');updateUndo();
+if(SPINNER){
+  $('#welcome-h1').innerHTML='Draw it.<br /><span class="hl">Spin it.</span>';
+  $('#welcome-sub').textContent='Design your own NFC spinner keychain — draw the front and the back, pick your colours, and we 3D-print it.';
+  $('#review-sub').textContent='Here’s your spinner, front and back. Happy with it?';
+}
+updateLayerDots();updateHoleState();updateHoleButtons();selectShape(state.shape);setStep(STEPS[0].id);updateUndo();
 
 addEventListener('resize',()=>{fitCanvas();redraw();});
 addEventListener('orientationchange',()=>setTimeout(()=>{fitCanvas();redraw();},250));

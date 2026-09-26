@@ -181,6 +181,67 @@ print-task property, not a g-code one. The 3mf also ships a 571-key
 `project_settings.config` (taken from a real Bambu Studio export) so the printer
 knows what filament 2 *is*.
 
+## The NFC spinner — a second product
+
+Corporate workshops print a flip-spinner keychain: an outer ring with a
+hanging loop, a disc inside it that flips about the axis through the loop, an
+NFC tag in a pocket inside the disc, and a two-colour drawing inlaid flush into
+both faces. It was designed in Tinkercad and sliced in Bambu Studio; the
+originals (STL, g-code, sliced 3mf, photos) and the numbers measured off them
+are in `reference/NFC Spinner Keychain/`. The booth now generates it without
+the slicer: `src/gcode/spinner.js`, dispatched from `generate()` on
+`design.product === 'spinner'`.
+
+What to know before touching it:
+
+- **The body is fixed and fully parametric** — every dimension is in
+  `config.example.json` under `spinner`, measured off the STL (Ø45 × 5,
+  disc r 16.5, ring bore r 18, pins Ø4 tapering to Ø0.6 at 20.3 from the
+  centre, pockets to 20.8, loop centred 21 up, NFC pocket 22 × 12 × 0.6 at
+  z 2.2). Only the drawings change. `spinnerLayerPlan()` says what every
+  layer is; the tests check it against the slicer's own layer plan.
+- **The mechanism is two cone pins riding in cone pockets**, on the Y axis at
+  mid-thickness, with 0.5 mm axial and ~0.3 mm radial clearance. The test
+  "the disc never touches the ring" measures the closest wall-to-wall approach
+  on every layer. When the first print's disc will not flip, that number is
+  the first thing to look at, and `pin.pocketRadius`/`pocketReach` are the
+  knobs.
+- **No support.** The slicer put tree support under the pins' noses (layers
+  1–2). The disc grows a small foot there instead (`pin.foot`), kept 0.35 mm
+  from the ring. Unverified on hardware as of 2026-09-26; it is the one part
+  of the file that is a design decision rather than a transcription.
+- **Four filament swaps for two faces**, two layers of colour each: body L1 →
+  drawing L1–2 → body L2–24 → drawing L24–25 → body L25. That is the minimum
+  with one nozzle — a 0.4 mm island beside a 0.2 mm layer is where the nozzle
+  cone hits — and it is what the slicer's file does too. `colourLayers: 1`
+  drops it to three. Each swap goes through the same `colourChangeBlock` as the
+  keychain, with the target colour's temperature and filament index (T0 body,
+  T1 drawing), so the AMS mode will work here when it does there.
+- **The NFC pause** is a plain `M400 U1` before the layer that roofs the
+  pocket (layer 15), head parked at the purge spot, with a re-prime and wipe
+  after Resume. The roof bridges the 12 mm span at 20 mm/s, fan full — the
+  slicer setting the customer had already found necessary.
+- **The back is mirrored** in the engine, not on the tablet: the child draws
+  each face as they will see it. "Same drawing as the front" is the default;
+  unticking it gives the back its own drawing. The bottom face prints first,
+  on the textured plate.
+- **Kiosk**: `product: "spinner"` in config (or `?product=spinner` on the URL
+  for a look) swaps the steps to Draw the front → Draw the back → Preview. No
+  shape, no hole. The drawing globals describe one face; the other is parked
+  in `state.faces` and swapped in by `switchFace()`, so every tool and the
+  picture import work on both sides unchanged. The server accepts either
+  product from any tablet.
+- **The budget is the spinner's own** (`spinner.maxPrintMinutes`, 45): a
+  two-faced spinner estimates at about 23 minutes plus the stops, well over
+  the keychain's 18. The 3mf declares both filaments on the face layers and
+  the pause the way Bambu's own slice_info for this part does.
+- `node src/gcode/cli.js spinner 1,4,13,15,25` writes the sample and one SVG
+  per listed layer — the quickest way to look at a layer without a printer.
+
+Not yet done: no print of the generated file has run on hardware. Print a
+blank (both faces empty are refused — draw a dot) and check the flip, the
+pins' foot, the pocket roof and the NFC roof before a workshop.
+
 ## Traps that have bitten before
 
 - **A print cancelling at a random point (HMS 0300_400C) was a bad SD card —

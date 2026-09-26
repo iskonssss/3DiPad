@@ -56,6 +56,23 @@ T1 in layer 1, T0 in layer 2, T1 in layer 24, T0 in layer 25.
 
 The bottom-face design must be mirrored so it reads correctly from below.
 
+## What the booth generator does with this (src/gcode/spinner.js)
+
+Every number above is a setting in `config.example.json` under `spinner`.
+The body is generated from those; only the drawings change per child.
+
+- Same layer plan as the slicer's file: 25 layers, cavity on 12–14, pause
+  before 15, roof bridged on 15 at 20 mm/s, colour on 1–2 and 24–25.
+- Colour order: body L1 → drawing L1–2 → body L2–24 → drawing L24–25 →
+  body L25. Four swaps, the same as the slicer needs. `colourLayers: 1`
+  makes it three.
+- No support. The disc grows a small foot under each pin's nose (the pin's
+  first-layer footprint, down to the bed, 0.35 mm clear of the ring). The
+  slicer's tree support was doing that job and nothing else.
+- The back face is mirrored so it reads correctly when the disc is flipped;
+  a different back drawing is optional.
+- Print a blank one first and check the disc flips, then a drawn one.
+
 ## Future
 
 - Printers: A1 mini and A1, both with AMS, 0.2 mm nozzle, PLA.
