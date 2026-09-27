@@ -71,9 +71,12 @@ test('layer plan matches the sliced original: 25 layers, cavity 12-14, pause bef
   assert.equal(plan.nfcPauseLayer, 15);
   const pins = plan.layers.filter((L) => L.pin).map((L) => L.i);
   assert.equal(pins[0], 4); assert.equal(pins[pins.length - 1], 22);
-  // the slicer's support sat on layers 1-2 with layer 3 empty under the pin
-  assert.deepEqual(plan.layers.filter((L) => L.support).map((L) => L.i), [1, 2]);
-  assert.deepEqual(plan.layers.filter((L) => L.foot), []);
+  // the foot fills layers 1-3 under the pin, which starts on 4
+  assert.deepEqual(plan.layers.filter((L) => L.foot).map((L) => L.i), [1, 2, 3]);
+  assert.deepEqual(plan.layers.filter((L) => L.support), []);
+  // the slicer's way, when chosen: support on layers 1-2 with layer 3 empty
+  const alt = spinnerLayerPlan({ ...cfg, spinner: { ...cfg.spinner, pin: { ...cfg.spinner.pin, foot: false, support: true } } });
+  assert.deepEqual(alt.layers.filter((L) => L.support).map((L) => L.i), [1, 2]);
   assert.deepEqual(plan.layers.filter((L) => L.loop).map((L) => L.i).slice(-1), [20]);
   assert.deepEqual(plan.layers.filter((L) => L.colour === 'bottom').map((L) => L.i), [1, 2]);
   assert.deepEqual(plan.layers.filter((L) => L.colour === 'top').map((L) => L.i), [24, 25]);
@@ -147,10 +150,12 @@ test('the disc never touches the ring: a clear gap on every layer, pins inside t
   }
 });
 
-test('the pin support sits loose in the gap: clear of the disc, clear of the ring, gone before the pin', () => {
+test('the pin support (when chosen) sits loose in the gap: clear of the disc, clear of the ring, gone before the pin', () => {
   const c = sp.pin.supportClearance;
+  const cfgS = { ...cfg, spinner: { ...cfg.spinner, pin: { ...cfg.spinner.pin, foot: false, support: true } } };
+  const segsS = segments(generate(design(), cfgS).gcode);
   for (let i = 1; i <= 25; i++) {
-    const pts = segs.filter((s) => s.layer === i && s.part === 'support').flatMap((s) => samples(s, 0.1));
+    const pts = segsS.filter((s) => s.layer === i && s.part === 'support').flatMap((s) => samples(s, 0.1));
     if (i > 2) { assert.equal(pts.length, 0, `layer ${i} has no support`); continue; }
     assert.ok(pts.length > 40, `layer ${i} has support under both pins`);
     const half = (i === 1 ? sp.firstLineWidth : sp.lineWidth) / 2;
@@ -210,6 +215,27 @@ test('the 3mf declares both colours on the face layers and the pause', () => {
   assert.ok(info.includes('filament_list="0" layer_ranges="2 22"'));
   assert.ok(info.includes('<pause index="1" layer="15"'));
   assert.ok(info.includes('<metadata key="pause_count" value="1"/>'));
+});
+
+test('with the change confirmed off, the bambu swap has no second stop, and the NFC pause remains', () => {
+  const cfgB = { ...cfg, colourChange: { ...cfg.colourChange, mode: 'bambu', confirmAfterChange: false } };
+  const out = generate(design(), cfgB);
+  assert.equal(out.meta.swaps, 4);
+  assert.equal((out.gcode.match(/^M400 U1\b/gm) || []).length, 1, 'only the NFC stop');
+  assert.equal((out.gcode.match(/^T1$/gm) || []).length, 2, 'the toolchange is the swap');
+  // and the keychain refuses the same only when nothing would stop it
+  const cfgP = { ...cfg, colourChange: { ...cfg.colourChange, mode: 'purge', gcode: ['G4 P1'] } };
+  assert.throws(() => generate({ ...design(), product: undefined, shape: 'circle', design: F, holePos: 'top' }, cfgP), /M400 U1/);
+});
+
+test('the spinner pen never goes under its own minimum', () => {
+  const thin = generate(design({ faces: { top: { design: [{ w: 0.4, pts: [{ x: c - 6, y: c }, { x: c + 6, y: c }] }] }, bottom: null } }), cfg);
+  const widths = segments(thin.gcode).filter((s) => s.layer === 25 && s.colour === 2);
+  assert.ok(widths.length > 0);
+  // the lone stroke is drawn as an inlay at least penRange[0] wide: its outline
+  // and fill span that width across
+  const ys = widths.flatMap((s) => [s.a.y, s.b.y]);
+  assert.ok(Math.max(...ys) - Math.min(...ys) >= sp.penRange[0] - sp.lineWidth - 0.1, `drawn ${(Math.max(...ys) - Math.min(...ys)).toFixed(2)} across`);
 });
 
 test('mirrorCoverage flips a mask about the plate centre', () => {

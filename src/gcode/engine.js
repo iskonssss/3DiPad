@@ -202,7 +202,7 @@ export function generate(design, cfg) {
   // So the file is checked rather than trusted. M400 U1 is the only pause this
   // machine has been seen to honour, and refusing to write the file at all is
   // far better than handing a child the wrong keychain.
-  if (!swap.some((l) => /^\s*M400\s+U1\b/.test(l))) {
+  if (!swap.some((l) => /^\s*M400\s+U1\b/.test(l)) && !changeStopsItself(cfg)) {
     throw new Error(
       'The colour-change block contains no M400 U1, so the print would never stop ' +
       'to swap filament and the whole keychain would come out in colour 1. ' +
@@ -934,6 +934,15 @@ const asLines = (v) => Array.isArray(v) ? v : String(v).split('\n');
 function pauseLines(c) {
   return asLines(c.pauseGcode ?? 'M400 U1 ; pause for the filament swap');
 }
+/**
+ * Whether the change block stops the printer without an M400 U1 of its own:
+ * Bambu's full sequence with a toolchange in it, and the operator having
+ * switched the extra confirmation off after seeing the change work.
+ */
+export function changeStopsItself(cfg) {
+  const c = cfg.colourChange || {};
+  return c.mode === 'bambu' && c.confirmAfterChange === false && !c.gcode;
+}
 
 export function colourChangeBlock(cfg, atZ = 0) {
   const c = cfg.colourChange || {};
@@ -1155,7 +1164,13 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
   // Out here, the stop survives whatever the printer decides about the block
   // above it. If the change worked, this is one redundant press and a purge
   // that costs a few centimetres. If it did not, it is the whole swap.
-  const tail = [...pauseLines(c)];
+  // The stop after the printer's own change. With the change verified on
+  // hardware — the printer cuts, prompts for the new spool, loads and flushes
+  // by itself — this is a second Resume press for nothing, and
+  // `confirmAfterChange: false` drops it. It stays on by default because of
+  // what the note above describes: a printer that skips the block would then
+  // never stop at all.
+  const tail = c.confirmAfterChange === false ? ['; no second stop: the toolchange above is the swap (colourChange.confirmAfterChange)'] : [...pauseLines(c)];
   // The flush ran at the 240C flush temperature. Drop back to the DRAWING's
   // print temperature now — during the swap pause it has time to cool — or the
   // drawing bakes at 240 (this only used to happen inside the purge, which is

@@ -30,13 +30,12 @@
 //   possible with one nozzle: a 0.4 mm-tall island beside a 0.2 mm layer is
 //   where the nozzle cone lands.
 //
-// Support: the pin's nose begins 0.5 mm above the bed with nothing under it,
-// and the slicer put a little tree support there (layers 1–2, then a gap
-// layer). The same thing is done here: a short arc of loose lines in the
-// clearance gap under each pin, two layers tall, clear of the disc and the
-// ring, which breaks away when the disc is first flipped. (A foot grown from
-// the disc itself was tried and is kept as `pin.foot`; the owner prefers the
-// original pin untouched.)
+// Under the pins: the pin's nose begins 0.5 mm above the bed with nothing
+// under it. The slicer put a little tree support there. Here the disc grows a
+// small foot instead (`pin.foot`): the pin's own first-layer footprint,
+// extruded down to the bed, kept clear of the ring. Part of the disc, so
+// there is nothing to break off — which, having printed both, is what the
+// owner prefers. `pin.support` is the slicer's way, kept as the alternative.
 
 import { toBed } from './geometry.js';
 import { buildCoverage, maskRowsAngle } from './fill.js';
@@ -45,7 +44,7 @@ import { prepareStrokes, totalLength } from './strokes.js';
 import { dilate, fillPolygon } from './outline.js';
 import {
   makeEmitter, drawSpanRegions, designLayer, unionCoverage, bambuBlocks, colourChangeBlock,
-  applyTemplate, startupMinutes, spliceProgress, printConstants,
+  applyTemplate, startupMinutes, spliceProgress, printConstants, changeStopsItself,
 } from './engine.js';
 
 /** The resolved numbers for the spinner body. config.example.json documents them. */
@@ -76,6 +75,10 @@ export function spinnerSpec(cfg) {
     sparseSpacing: s.sparseSpacing ?? 2.5,
     colourLayers: Math.max(1, s.colourLayers ?? 2),
     designEdgeMargin: s.designEdgeMargin ?? 1.5,
+    // The thinnest pen: an inlaid line is a slot in the body filled with the
+    // other colour, and under about 1.2 mm the slot's walls and the line's
+    // own bead fight for the same space.
+    penRange: Array.isArray(s.penRange) && s.penRange.length === 2 ? s.penRange : [1.2, cfg.build?.penRange?.[1] ?? 2.6],
     pin: {
       r: pin.radius ?? 2.0, neckLen: pin.neckLen ?? 0.8, tipR: pin.tipRadius ?? 0.3, reach: pin.reach ?? 20.3,
       // The pocket as modelled, opened up by extraClearance all round. The
@@ -85,8 +88,8 @@ export function spinnerSpec(cfg) {
       pocketR: (pin.pocketRadius ?? 1.95) + (pin.extraClearance ?? 0.2),
       pocketTipR: (pin.pocketTipRadius ?? 0.35) + (pin.extraClearance ?? 0.2),
       pocketReach: (pin.pocketReach ?? 20.8) + (pin.extraClearance ?? 0.2),
-      foot: pin.foot ?? false, footClearance: pin.footClearance ?? 0.35,
-      support: pin.support ?? true, supportClearance: pin.supportClearance ?? 0.25, supportWidth: pin.supportWidth ?? 7,
+      foot: pin.foot ?? true, footClearance: pin.footClearance ?? 0.35,
+      support: pin.support ?? false, supportClearance: pin.supportClearance ?? 0.25, supportWidth: pin.supportWidth ?? 7,
       supportGapLayers: Math.max(0, pin.supportGapLayers ?? 1),
     },
     loop: { cy: loop.cy ?? 21, ro: loop.outerRadius ?? 6, ri: loop.innerRadius ?? 4, thickness: loop.thickness ?? 4.0 },
@@ -395,7 +398,7 @@ export function generateSpinner(design, cfg) {
   const bbox = spinnerBBox(cfg);
   // Everything the shared drawing code reads from cfg.build, with the
   // spinner's own numbers over the keychain's.
-  const cfgD = { ...cfg, build: { ...cfg.build, lineWidth: sp.lineWidth, layerHeight: sp.layerH, firstLayerHeight: sp.first, wallLoops: sp.walls, infillWallOverlap: sp.overlapFrac, designEdgeMargin: sp.designEdgeMargin }, speed: { ...cfg.speed, ...(cfg.spinner?.speed || {}) } };
+  const cfgD = { ...cfg, build: { ...cfg.build, lineWidth: sp.lineWidth, layerHeight: sp.layerH, firstLayerHeight: sp.first, wallLoops: sp.walls, infillWallOverlap: sp.overlapFrac, designEdgeMargin: sp.designEdgeMargin, penRange: sp.penRange }, speed: { ...cfg.speed, ...(cfg.spinner?.speed || {}) } };
   const s = cfgD.speed;
   const lw = sp.lineWidth;
   // body-centred mm -> bed. The body's centre sits at (outerR, outerR) of the
@@ -657,7 +660,7 @@ export function generateSpinner(design, cfg) {
       const swap = colourChangeBlock(cfgFor(target), zNow);
       // The same guard the keychain has: a change block with no stop in it is a
       // print that never pauses and comes out in one colour.
-      if (!swap.some((l) => /^\s*M400\s+U1\b/.test(l))) {
+      if (!swap.some((l) => /^\s*M400\s+U1\b/.test(l)) && !changeStopsItself(cfg)) {
         throw new Error('The colour-change block contains no M400 U1, so the print would never stop to swap filament. Check colourChange in config.json.');
       }
       for (const line of swap) em.raw(line);

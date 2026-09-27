@@ -564,7 +564,9 @@ function sanitizeSpinner(body) {
   };
   const { bbox } = shapePolygon('spinner', cfg, null);
   const lim = Math.max(bbox.w, bbox.h);
-  const face = (f) => (f && typeof f === 'object' ? { design: cleanStrokes(f.design, lim), image: sanitizeImage(f.image) } : null);
+  // the spinner's own pen range: its lines are inlaid, and thinner than that does not print
+  const range = Array.isArray(cfg.spinner?.penRange) && cfg.spinner.penRange.length === 2 ? cfg.spinner.penRange : [1.2, cfg.build.penRange[1]];
+  const face = (f) => (f && typeof f === 'object' ? { design: cleanStrokes(f.design, lim, 400, 4000, range), image: sanitizeImage(f.image) } : null);
   const top = face(body?.faces?.top) || { design: [], image: null };
   const bottom = body?.sameBothSides === false ? face(body?.faces?.bottom) : null;
   return {
@@ -591,9 +593,9 @@ function cleanPoints(pts, maxX, maxY, maxN = 4000) {
 }
 
 // Strokes arrive as { w, pts:[{x,y}] }; legacy flat arrays are accepted too.
-function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000) {
+function cleanStrokes(strokes, lim, maxStrokes = 400, maxPts = 4000, range = cfg.build.penRange) {
   if (!Array.isArray(strokes)) return [];
-  const [pLo, pHi] = cfg.build.penRange;
+  const [pLo, pHi] = range;
   const out = [];
   for (const s of strokes.slice(0, maxStrokes)) {
     const pts = Array.isArray(s?.pts) ? s.pts : Array.isArray(s) ? s : null;

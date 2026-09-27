@@ -115,6 +115,8 @@
     "_amsFraming_comment": "Whether M620/M621 carry the \"A\" suffix. It is NOT AMS addressing, which is what we assumed for a long time: the no-AMS export writes S1A / S0A on every change. Leave it true. false only exists to reproduce the old behaviour when comparing against an earlier print.",
     "_flush_comment": "flushTemp is the nozzle temperature the purge runs at. Bambu uses the HIGHEST of the two filaments rather than the printing temperature, so the old colour clears instead of leaving a plug behind. flushLenMm is the L parameter on M620.10 — the slicer computes it per change from its flush-volume matrix; 342 is what it used for a black-to-light change.",
     "amsFraming": true,
+    "_confirm_comment": "Only in mode bambu. The printer’s own change already stops for the new spool, loads it and flushes; our M400 U1 after it is a second Resume press. Once the change has been WATCHED working on your machine, set this false to drop it. Leave true until then: a printer that skips the block would then never stop at all.",
+    "confirmAfterChange": true,
     "tool": 1,
     "flushTemp": 240,
     "flushLenMm": 342.471,
@@ -164,6 +166,11 @@
       "_colourLayers_comment": "How many layers deep the drawing is inlaid into EACH face. 2 is what the original uses (Bambu's colour-penetration setting). Every layer past 1 costs an extra filament swap on an external spool: 1 layer is 3 swaps for two faces, 2 layers is 4. With an AMS the swaps are automatic.",
       "colourLayers": 2,
       "_margin_comment": "The drawing keeps this far inside the disc's edge, clear of the walls.",
+      "_penRange_comment": "The pens offered for the spinner, mm. Its lines are inlaid slots in the body, and under 1.2 mm the slot walls and the line’s own bead fight for the same space.",
+      "penRange": [
+        1.2,
+        2.6
+      ],
       "designEdgeMargin": 1.5,
       "pin": {
         "_comment": "The pivot: a peg on the disc at +Y and -Y, a cylinder of 'radius' for 'neckLen' past the disc edge, then a cone to a flat tip of 'tipRadius' at 'reach' from the centre. The pocket in the ring is the matching cone: 'pocketRadius' at the ring's inner face down to 'pocketTipRadius' at 'pocketReach'. Half a millimetre of axial clearance and about 0.3 radial, which is what flips freely in PLA. 'foot' grows the disc down to the bed under each pin's nose (its first-layer footprint, kept 'footClearance' from the ring) in place of the tree support the slicer put there.",
@@ -176,12 +183,12 @@
         "pocketReach": 20.8,
         "_extraClearance_comment": "Added to the pocket all round, on top of the modelled 0.34 radial / 0.5 axial. The first print at the modelled numbers fused: the pin’s lower cone droops outward as it grows and the pocket’s roof sags as it closes. 0.3 spun but rattled; 0.2 is the next step down. Lower in steps of 0.1 if the disc rattles, raise it if it sticks.",
         "extraClearance": 0.2,
-        "_support_comment": "support puts a short arc of loose lines in the clearance gap under each pin nose on the layers below the pin, then leaves supportGapLayers empty so the pin sags onto it without fusing, as the slicer’s tree support did. supportClearance keeps it off the disc and the ring; supportWidth is its length along the gap. It breaks away on the first flip. foot is the alternative: the disc itself grows down under the pin (no support to remove, but a stub on the disc). One or the other; foot wins if both are on.",
-        "support": true,
+        "_support_comment": "support puts a short arc of loose lines in the clearance gap under each pin nose on the layers below the pin, then leaves supportGapLayers empty so the pin sags onto it without fusing, as the slicer’s tree support did. supportClearance keeps it off the disc and the ring; supportWidth is its length along the gap. It breaks away on the first flip. foot is the other way, and the one in use: the disc itself grows down under the pin, so there is nothing to break off. One or the other; foot wins if both are on.",
+        "support": false,
         "supportClearance": 0.25,
         "supportWidth": 7,
         "supportGapLayers": 1,
-        "foot": false,
+        "foot": true,
         "footClearance": 0.35
       },
       "loop": {

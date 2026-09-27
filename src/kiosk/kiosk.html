@@ -740,11 +740,21 @@ function updateLayerDots(){$('#dot1').style.background=COLOUR_HEX[state.colours.
 
 /* ---- pen ---- */
 function wirePen(){
+  // The spinner's lines are inlaid slots, so its thinnest pen is wider than
+  // the keychain's raised bead. The range is swapped in here, once, so every
+  // clamp and control below follows it.
+  if(SPINNER){
+    const r=Array.isArray(CFG.spinner?.penRange)&&CFG.spinner.penRange.length===2?CFG.spinner.penRange:[1.2,CFG.build.penRange[1]];
+    CFG.build.penRange=r;
+    $('#pen-range').min=r[0];$('#pen-range').max=r[1];
+    const presets=[r[0],+(Math.round(((r[0]+2.4)/2)*10)/10).toFixed(1),Math.min(r[1],2.4)];
+    $$('#pen-seg button').forEach((b,i)=>{b.dataset.pen=presets[i];});
+  }
   $$('#pen-seg button').forEach(b=>b.addEventListener('click',()=>setPen(+b.dataset.pen)));
   $('#pen-range').addEventListener('input',e=>setPen(+e.target.value,true));
   $$('#tool-seg button').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
   $('#eraser-range').addEventListener('input',e=>setEraser(e.target.value));
-  setPen(0.8);setEraser(6);setTool('pen');
+  setPen(CFG.build.penRange[0]);setEraser(6);setTool('pen');
 }
 function setTool(t){
   state.tool=t;
@@ -1929,7 +1939,7 @@ function resetAll(){state.contact={name:'',phone:''};state.shape=SPINNER?'spinne
   state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;history=[[]];hi=0;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
   $('#f-name').value='';$('#f-phone').value='';$('#f-cc').value=DEFAULT_CC;syncPhonePlaceholder();$('#f-consent').checked=false;$('#submit').disabled=false;
-  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(0.8);selectShape(state.shape);setStep(STEPS[0].id);show('welcome');}
+  $$('#layerpick button').forEach((x,i)=>x.classList.toggle('sel',i===0));updateLayerDots();setPen(CFG.build.penRange[0]);selectShape(state.shape);setStep(STEPS[0].id);show('welcome');}
 
 /* ---- utils ---- */
 function nextSeq(){let n=0;try{n=(parseInt(localStorage.getItem('3dipad_seq')||'0',10)||0)+1;localStorage.setItem('3dipad_seq',String(n));}catch{n=1;}return n;}

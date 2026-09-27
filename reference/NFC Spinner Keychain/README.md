@@ -66,9 +66,9 @@ The body is generated from those; only the drawings change per child.
 - Colour order: body L1 → drawing L1–2 → body L2–24 → drawing L24–25 →
   body L25. Four swaps, the same as the slicer needs. `colourLayers: 1`
   makes it three.
-- Support under the pins as the slicer did it: two layers of loose lines in
-  the gap under each pin nose, a gap layer, then the pin. Breaks away on the
-  first flip. (`pin.foot` is an alternative that grows the disc down instead.)
+- Under the pins the disc grows a small foot down to the bed (`pin.foot`),
+  so there is nothing to break off. The slicer's support is kept as
+  `pin.support`; both were printed and the foot was preferred.
 - The back face is mirrored so it reads correctly when the disc is flipped;
   a different back drawing is optional.
 - First print (2026-09-26): pins fused to the pockets at the modelled
