@@ -44,7 +44,7 @@ import { prepareStrokes, totalLength } from './strokes.js';
 import { dilate, fillPolygon } from './outline.js';
 import {
   makeEmitter, drawSpanRegions, designLayer, unionCoverage, bambuBlocks, colourChangeBlock,
-  applyTemplate, startupMinutes, spliceProgress, printConstants, changeStopsItself,
+  applyTemplate, startupMinutes, spliceProgress, printConstants, changeStopsItself, levelArea,
 } from './engine.js';
 
 /** The resolved numbers for the spinner body. config.example.json documents them. */
@@ -76,9 +76,9 @@ export function spinnerSpec(cfg) {
     colourLayers: Math.max(1, s.colourLayers ?? 2),
     designEdgeMargin: s.designEdgeMargin ?? 1.5,
     // The thinnest pen: an inlaid line is a slot in the body filled with the
-    // other colour, and under about 1.2 mm the slot's walls and the line's
+    // other colour, and under about 1.5 mm the slot's walls and the line's
     // own bead fight for the same space.
-    penRange: Array.isArray(s.penRange) && s.penRange.length === 2 ? s.penRange : [1.2, cfg.build?.penRange?.[1] ?? 2.6],
+    penRange: Array.isArray(s.penRange) && s.penRange.length === 2 ? s.penRange : [1.5, cfg.build?.penRange?.[1] ?? 2.6],
     pin: {
       r: pin.radius ?? 2.0, neckLen: pin.neckLen ?? 0.8, tipR: pin.tipRadius ?? 0.3, reach: pin.reach ?? 20.3,
       // The pocket as modelled, opened up by extraClearance all round. The
@@ -439,7 +439,7 @@ export function generateSpinner(design, cfg) {
   const _eff = (col, base) => Math.max(base ?? 0, _ov[col] ?? 0);
   const tempFor = (colour) => _eff(colour === 1 ? design.colours?.layer1 : design.colours?.layer2, cfg.temp?.nozzle);
   const bedT = sp.bedTemp ?? cfg.temp?.bed, bedT1 = sp.bedTemp ?? cfg.temp?.bedFirst;
-  const cfgStart = { ...cfgD, temp: { ...cfg.temp, bed: bedT, bedFirst: bedT1, nozzle: tempFor(1), nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) } };
+  const cfgStart = { ...cfgD, temp: { ...cfg.temp, bed: bedT, bedFirst: bedT1, nozzle: tempFor(1), nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) }, calibration: { ...cfg.calibration, area: levelArea(bbox, cfgD) } };
   // The change block takes the colour it changes INTO: its temperature, and
   // the filament index (0 = body, 1 = drawing) for the printer's own sequence.
   const cfgFor = (colour) => ({ ...cfgD, temp: { ...cfg.temp, nozzle: tempFor(colour) }, colourChange: { ...(cfg.colourChange || {}), tool: colour - 1 } });

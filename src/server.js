@@ -565,7 +565,7 @@ function sanitizeSpinner(body) {
   const { bbox } = shapePolygon('spinner', cfg, null);
   const lim = Math.max(bbox.w, bbox.h);
   // the spinner's own pen range: its lines are inlaid, and thinner than that does not print
-  const range = Array.isArray(cfg.spinner?.penRange) && cfg.spinner.penRange.length === 2 ? cfg.spinner.penRange : [1.2, cfg.build.penRange[1]];
+  const range = Array.isArray(cfg.spinner?.penRange) && cfg.spinner.penRange.length === 2 ? cfg.spinner.penRange : [1.5, cfg.build.penRange[1]];
   const face = (f) => (f && typeof f === 'object' ? { design: cleanStrokes(f.design, lim, 400, 4000, range), image: sanitizeImage(f.image) } : null);
   const top = face(body?.faces?.top) || { design: [], image: null };
   const bottom = body?.sameBothSides === false ? face(body?.faces?.bottom) : null;

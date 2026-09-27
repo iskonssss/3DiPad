@@ -752,7 +752,7 @@ function wirePen(){
   // the keychain's raised bead. The range is swapped in here, once, so every
   // clamp and control below follows it.
   if(SPINNER){
-    const r=Array.isArray(CFG.spinner?.penRange)&&CFG.spinner.penRange.length===2?CFG.spinner.penRange:[1.2,CFG.build.penRange[1]];
+    const r=Array.isArray(CFG.spinner?.penRange)&&CFG.spinner.penRange.length===2?CFG.spinner.penRange:[1.5,CFG.build.penRange[1]];
     CFG.build.penRange=r;
     $('#pen-range').min=r[0];$('#pen-range').max=r[1];
     const presets=[r[0],+(Math.round(((r[0]+2.4)/2)*10)/10).toFixed(1),Math.min(r[1],2.4)];

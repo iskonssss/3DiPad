@@ -346,9 +346,13 @@ test('bed levelling is skipped unless the config asks for it', () => {
   // A G29 mesh probe costs over a minute on a 12-minute keychain — a tenth of
   // the booth's throughput, per kid.
   const off = generate(design('rectangle'), cfg);
-  assert.ok(!/^G29\b/m.test(off.gcode), 'no bed levelling by default');
+  assert.ok(!/^G29\b/m.test(off.gcode), 'no unconditional bed levelling by default');
+  // ...but the printer's own flag may ask for one: the dashboard's one-shot
+  // level sets bed_leveling in the print command, and the G29 sits behind
+  // Bambu's judge_flag/M622 guard, indented, never bare.
+  assert.ok(off.gcode.includes('judge_flag g29_before_print_flag') && /^\s+G29 A1\b/m.test(off.gcode), 'the flag-guarded G29 is there for the one-shot button');
   assert.ok(/^G28\b/m.test(off.gcode), 'still homes — that part is not optional');
-  assert.ok(off.gcode.includes('bed levelling skipped'), 'and says so in the file');
+  assert.ok(off.gcode.includes('only when the print command asked'), 'and says so in the file');
 
   const levelled = { ...cfg, calibration: { ...cfg.calibration, bedLevel: true } };
   const on = generate(design('rectangle'), levelled);
@@ -466,7 +470,13 @@ test('no move asks the hotend for more plastic than it can melt', () => {
   const area = Math.PI * (cfg.build.filamentDiameter / 2) ** 2;
 
   let x = 0, y = 0, feed = 0, worst = 0, worstLine = '';
+  // The printer's own flow-calibration line (behind its flag, run only when
+  // asked) deliberately pushes hard — that is what it measures. Not ours to cap.
+  let inCali = false;
   for (const raw of gcode.split('\n')) {
+    if (raw.includes('judge_flag extrude_cali_flag')) inCali = true;
+    if (raw.includes('end of flow calibration')) { inCali = false; continue; }
+    if (inCali) continue;
     const line = raw.split(';')[0].trim();
     if (!/^G[01]\b/.test(line)) continue;
     const g = Object.fromEntries([...line.matchAll(/([XYZEF])(-?[\d.]+)/g)].map((m) => [m[1], +m[2]]));

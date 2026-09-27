@@ -82,7 +82,7 @@ export function generate(design, cfg) {
   const _eff = (col, base) => Math.max(base ?? 0, _ov[col] ?? 0);
   const _baseT = _eff(design.colours?.layer1, cfg.temp?.nozzle);
   const _designT = _eff(design.colours?.layer2, cfg.temp?.nozzle);
-  const cfgStart = { ...cfg, temp: { ...cfg.temp, nozzle: _baseT, nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) } };
+  const cfgStart = { ...cfg, temp: { ...cfg.temp, nozzle: _baseT, nozzleFirst: _eff(design.colours?.layer1, cfg.temp?.nozzleFirst) }, calibration: { ...cfg.calibration, area: levelArea(bbox, cfg) } };
   const cfgSwap = { ...cfg, temp: { ...cfg.temp, nozzle: _designT } };   // the colour change restores THIS for the drawing
   em.raw(applyTemplate(cfgStart.template.startResolved, cfgStart));
   em.raw('G90'); em.raw('M83');
@@ -1225,11 +1225,110 @@ export function bambuChangeBlock(cfg, atZ = 0, opts = {}) {
 function calibrationBlock(cfg) {
   const c = cfg.calibration || {};
   const out = [];
-  if (c.bedLevel) out.push('G29 ; auto bed levelling (probes at reduced nozzle temp)');
-  else out.push('; bed levelling skipped — using the mesh stored on the printer');
+  if (c.bedLevel) {
+    out.push('G29 ; auto bed levelling (probes at reduced nozzle temp)');
+  } else {
+    // The printer's own switch. The dashboard's "level on the next print"
+    // sends `bed_leveling: true` in the print command, and the printer turns
+    // that into a flag the start g-code is expected to ask about. Ours never
+    // asked: it homed and carried on, so the button lit up, the command went
+    // out, and nothing was ever levelled — the operator ended up stopping the
+    // print and levelling from the printer's screen. These lines are Bambu's
+    // own, read off a real A1 mini file: with the flag off they cost a
+    // re-home, with it on they probe the print's own patch and save the mesh.
+    const a = c.area;
+    const g29 = a ? `G29 A1 X${a.x.toFixed(2)} Y${a.y.toFixed(2)} I${a.w.toFixed(2)} J${a.h.toFixed(2)}` : 'G29';
+    out.push(
+      '; ---- bed levelling, only when the print command asked for it ----',
+      'M1002 judge_flag g29_before_print_flag',
+      'M622 J1',
+      '    M1002 gcode_claim_action : 1',
+      `    ${g29}`,
+      '    M400',
+      '    M500 ; save cali data',
+      'M623',
+      'M1002 judge_flag g29_before_print_flag',
+      'M622 J0',
+      '    M1002 gcode_claim_action : 13',
+      '    G28 T145',
+      'M623',
+    );
+  }
   if (c.flow) out.push('M900 ; flow dynamics calibration');
   for (const line of asLines(c.extra || [])) if (line && line.trim()) out.push(line);
   return out.join('\n');
+}
+
+/**
+ * Flow dynamics calibration, the printer's own way — the cali line by the
+ * front edge, then the wipe-and-shake — and only when the print command asked
+ * for it (`flow_cali: true`, which the dashboard's one-shot button sends
+ * alongside the bed level). Transcribed from a real A1 mini file for PLA on a
+ * 0.4 nozzle; it extrudes, so it sits after the nozzle is at print temperature.
+ */
+function flowCalibrationBlock() {
+  return [
+    '; ---- flow dynamics calibration, only when the print command asked for it ----',
+    'M1002 judge_flag extrude_cali_flag',
+    'M622 J1',
+    '    M1002 gcode_claim_action : 8',
+    '    M400',
+    '    M900 K0.0 L1000.0 M1.0',
+    '    G90',
+    '    M83',
+    '    G0 X68 Y-4 F30000',
+    '    G0 Z0.3 F18000 ;Move to start position',
+    '    M400',
+    '    G0 X88 E10  F720',
+    '    G0 X93 E.3742  F1200',
+    '    G0 X98 E.3742  F4800',
+    '    G0 X103 E.3742  F1200',
+    '    G0 X108 E.3742  F4800',
+    '    G0 X113 E.3742  F1200',
+    '    G0 Y0 Z0 F20000',
+    '    M400',
+    '    G1 X-13.5 Y0 Z10 F10000',
+    '    M400',
+    '    G1 E10 F300',
+    '    M983 F5 A0.3 H0.4; cali dynamic extrusion compensation',
+    '    M106 P1 S178',
+    '    M400 S7',
+    '    G1 X0 F18000',
+    '    G1 X-13.5 F3000',
+    '    G1 X0 F18000 ;wipe and shake',
+    '    G1 X-13.5 F3000',
+    '    G1 X0 F12000 ;wipe and shake',
+    '    G1 X-13.5 F3000',
+    '    M400',
+    '    M106 P1 S0',
+    '    M1002 judge_last_extrude_cali_success',
+    '    M622 J0',
+    '        M983 F5 A0.3 H0.4; cali dynamic extrusion compensation',
+    '        M106 P1 S178',
+    '        M400 S7',
+    '        G1 X0 F18000',
+    '        G1 X-13.5 F3000',
+    '        G1 X0 F18000 ;wipe and shake',
+    '        G1 X-13.5 F3000',
+    '        G1 X0 F12000 ;wipe and shake',
+    '        M400',
+    '        M106 P1 S0',
+    '    M623',
+    '    G1 X-13.5 F3000',
+    '    M400',
+    '    M984 A0.1 E1 S1 F5 H0.4',
+    '    M106 P1 S178',
+    '    M400 S7',
+    '    G1 X0 F18000',
+    '    G1 X-13.5 F3000',
+    '    G1 X0 F18000 ;wipe and shake',
+    '    G1 X-13.5 F3000',
+    '    G1 X0 F12000 ;wipe and shake',
+    '    G1 X-13.5 F3000',
+    '    M400',
+    '    M106 P1 S0',
+    'M623 ; end of flow calibration',
+  ].join('\n');
 }
 
 /** Minutes before the first extrusion: heat soak, homing, and any calibration. */
@@ -1242,5 +1341,12 @@ export function applyTemplate(text, cfg) {
   if (!text) return '';
   return text.replaceAll('{nozzle}', cfg.temp.nozzle).replaceAll('{bed}', cfg.temp.bed)
     .replaceAll('{nozzleFirst}', cfg.temp.nozzleFirst).replaceAll('{bedFirst}', cfg.temp.bedFirst)
-    .replaceAll('{calibration}', calibrationBlock(cfg));
+    .replaceAll('{calibration}', calibrationBlock(cfg))
+    .replaceAll('{flowCalibration}', flowCalibrationBlock());
+}
+
+/** The first layer's patch of the bed, for the printer to level just that: {x, y, w, h} in bed mm. */
+export function levelArea(bbox, cfg) {
+  const [bx, by] = cfg.build.bedCenter;
+  return { x: bx - bbox.w / 2, y: by - bbox.h / 2, w: bbox.w, h: bbox.h };
 }

@@ -102,6 +102,7 @@ M106 P1 S0
 {calibration}
 M104 S{nozzleFirst}
 M109 S{nozzleFirst} ; wait for full print temp before any extrusion
+{flowCalibration}
 M106 S0 ; part fan off for the first layer
 G1 Z5 F1200
 ; Filament sensors NOT enabled. The Bambu start these were copied from turns on

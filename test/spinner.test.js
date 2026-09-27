@@ -254,6 +254,21 @@ test('NFC off: a solid spinner — no pocket, no bridge, no pause, still four sw
   assert.ok(out.meta.estMinutes < meta.estMinutes, 'and it is quicker without the pause');
 });
 
+test("the start asks the printer's own flags, so the dashboard's one-shot level and flow cali actually run", () => {
+  // the printer sets these flags from the print command (bed_leveling / flow_cali)
+  assert.ok(gcode.includes('M1002 judge_flag g29_before_print_flag'), 'asks about the level flag');
+  assert.ok(gcode.includes('G29 A1 X67.50 Y65.25 I45.00 J49.50'), "levels the spinner's own patch, the same numbers as the slicer's file");
+  assert.ok(gcode.includes('M1002 judge_flag extrude_cali_flag'), 'asks about the flow flag');
+  // the flow cali extrudes, so it must come after the nozzle is at print temperature
+  const heat = gcode.indexOf('wait for full print temp'), flow = gcode.indexOf('judge_flag extrude_cali_flag');
+  assert.ok(heat > 0 && flow > heat, 'flow cali after the nozzle is hot');
+  assert.ok(flow < gcode.indexOf('; layer 1/25'), 'and before the first layer');
+  // forced from config: a plain G29 every print, as before
+  const forced = generate(design(), { ...cfg, calibration: { ...cfg.calibration, bedLevel: true } }).gcode;
+  assert.ok(/^G29 ;/m.test(forced));
+  assert.ok(!forced.includes('judge_flag g29_before_print_flag'));
+});
+
 test('mirrorCoverage flips a mask about the plate centre', () => {
   const cell = 0.12, pad = 25, w = Math.ceil(45 / cell) + 2 * pad;
   const cov = { w, h: 4, cell, pad, mask: new Uint8Array(w * 4), toMm: (p) => ({ x: (p.x - pad) * cell, y: 0 }) };

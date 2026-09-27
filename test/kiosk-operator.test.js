@@ -109,7 +109,11 @@ test('holding shows itself working, and there are two ways in', () => {
   // The moment an operator wants to place a job is the moment a design lands,
   // so the done screen offers the same way in as the corner.
   assert.ok(kiosk.includes('id="done-send"'), 'the done screen has no way to send');
-  assert.equal((kiosk.match(/class="[^"]*\badm-hold\b/g) || []).length, 2, 'expected exactly two ways in');
+  // Four held ways in: the corner and the done screen open the send panel;
+  // the event name opens recent designs; the done screen's edit reopens the
+  // design just sent. Every one of them is a hold, never a tap.
+  assert.equal((kiosk.match(/class="[^"]*\badm-hold\b/g) || []).length, 4, 'expected exactly four held ways in');
+  for (const id of ['adm-dot', 'done-send', 'tagline', 'done-edit']) assert.ok(new RegExp(`class="[^"]*\\badm-hold\\b[^>]*id="${id}"`).test(kiosk), `${id} is held`);
 });
 
 test('the built kiosk carries the panel, and the standalone build carries no server calls', () => {

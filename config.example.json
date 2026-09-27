@@ -166,9 +166,9 @@
       "_colourLayers_comment": "How many layers deep the drawing is inlaid into EACH face. 2 is what the original uses (Bambu's colour-penetration setting). Every layer past 1 costs an extra filament swap on an external spool: 1 layer is 3 swaps for two faces, 2 layers is 4. With an AMS the swaps are automatic.",
       "colourLayers": 2,
       "_margin_comment": "The drawing keeps this far inside the disc's edge, clear of the walls.",
-      "_penRange_comment": "The pens offered for the spinner, mm. Its lines are inlaid slots in the body, and under 1.2 mm the slot walls and the line’s own bead fight for the same space.",
+      "_penRange_comment": "The pens offered for the spinner, mm. Its lines are inlaid slots in the body, and under 1.5 mm the slot walls and the line’s own bead fight for the same space.",
       "penRange": [
-        1.2,
+        1.5,
         2.6
       ],
       "designEdgeMargin": 1.5,

@@ -290,6 +290,19 @@ so `designLayer` now takes an angle and the spinner passes the body's own
 
 ## Traps that have bitten before
 
+- **The dashboard's "level bed on the next print" never levelled (until
+  2026-09-27).** The button set `bed_leveling: true` / `flow_cali: true` in
+  the print command, and the printer duly set its flags — but our start
+  g-code never asked about them. Bambu's own start wraps the G29 and the
+  flow-cali line in `M1002 judge_flag …` / `M622 J1 … M623` blocks that run
+  only when the print command asked; ours had replaced that with a plain
+  `{calibration}` that was a comment unless config forced a G29. So the
+  operator saw the button light up, got a bad first layer, and levelled from
+  the printer's screen. `calibrationBlock()` now emits Bambu's flag-driven
+  blocks (and `{flowCalibration}` sits after the nozzle is at print
+  temperature, since the cali line extrudes). `calibration.bedLevel: true`
+  in config still forces a plain G29 on every print.
+
 - **A print cancelling at a random point (HMS 0300_400C) was a bad SD card —
   reformatting it fixed it.** The same file cancelled at 11%, then re-sent at
   33%, while its siblings printed clean: random stop points are SD read
