@@ -238,6 +238,22 @@ test('the spinner pen never goes under its own minimum', () => {
   assert.ok(Math.max(...ys) - Math.min(...ys) >= sp.penRange[0] - sp.lineWidth - 0.1, `drawn ${(Math.max(...ys) - Math.min(...ys)).toFixed(2)} across`);
 });
 
+test('NFC off: a solid spinner — no pocket, no bridge, no pause, still four swaps', () => {
+  const out = generate(design({ nfc: false }), cfg);
+  assert.equal(out.meta.nfc, false);
+  assert.equal(out.meta.nfcPauseLayer, -1);
+  assert.equal(out.meta.cavityLayers, null);
+  assert.equal(out.meta.swaps, 4);
+  assert.equal((out.gcode.match(/^M400 U1\b/gm) || []).length, 4, 'only the filament stops');
+  assert.ok(!out.gcode.includes('NFC PAUSE'));
+  assert.ok(!out.gcode.includes('bridge over the NFC cavity'));
+  // where the pocket used to be, layer 13 is filled
+  const inside = segments(out.gcode).filter((s) => s.layer === 13 && s.part === 'disc').flatMap((s) => samples(s))
+    .filter((p) => Math.abs(p.x) < 8 && Math.abs(p.y) < 4);
+  assert.ok(inside.length > 100, 'the middle of the disc prints');
+  assert.ok(out.meta.estMinutes < meta.estMinutes, 'and it is quicker without the pause');
+});
+
 test('mirrorCoverage flips a mask about the plate centre', () => {
   const cell = 0.12, pad = 25, w = Math.ceil(45 / cell) + 2 * pad;
   const cov = { w, h: 4, cell, pad, mask: new Uint8Array(w * 4), toMm: (p) => ({ x: (p.x - pad) * cell, y: 0 }) };

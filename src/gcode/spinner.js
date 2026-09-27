@@ -389,6 +389,11 @@ export function mirrorCoverage(cov, bboxW) {
 // ---------------------------------------------------------------------------
 
 export function generateSpinner(design, cfg) {
+  // NFC off for this job: no pocket, no bridge, no pause — a solid spinner.
+  // The design says so; the config's nfc.enabled is only the default.
+  if (design.nfc === false && cfg.spinner?.nfc?.enabled !== false) {
+    cfg = { ...cfg, spinner: { ...cfg.spinner, nfc: { ...cfg.spinner.nfc, enabled: false } } };
+  }
   const plan = spinnerLayerPlan(cfg);
   const sp = plan.spec;
   const N = sp.layers;
@@ -721,7 +726,7 @@ export function generateSpinner(design, cfg) {
       faces: { top: !!topCov, bottom: !!bottomCov }, sameBothSides: sameBoth,
       hasDesign: !!(topCov || bottomCov), fromImage: !!(top.bitmap || (!sameBoth && bottomSrc.bitmap)),
       strokeCount, drawnLengthMm: Math.round(totalLength(top.strokes) + (sameBoth ? 0 : totalLength(bottomSrc.strokes))),
-      swaps, nfcPauseLayer: plan.nfcPauseLayer, cavityLayers: plan.cavityLayers,
+      swaps, nfc: !!plan.cavityLayers, nfcPauseLayer: plan.nfcPauseLayer, cavityLayers: plan.cavityLayers,
       pauses: plan.nfcPauseLayer > 0 ? [{ layer: plan.nfcPauseLayer }] : [],
       pinSupport: plan.layers.filter((L) => L.support).map((L) => L.i),
       filamentLayerLists,

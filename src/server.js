@@ -572,6 +572,8 @@ function sanitizeSpinner(body) {
   return {
     product: 'spinner', shape: 'spinner', colours,
     faces: { top, bottom }, sameBothSides: !bottom,
+    // the operator's NFC switch: off means a solid spinner with no pause
+    nfc: body?.nfc !== false,
     design: top.design, image: top.image, customOutline: null, hole: null, holePos: 'none',
   };
 }

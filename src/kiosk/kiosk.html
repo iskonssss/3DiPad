@@ -445,6 +445,14 @@
         </div>
         <div class="swatches" id="swatches"></div>
       </div>
+      <!-- Spinner setup, operator only: the tile is locked until the PIN is
+           entered, and locks again for the next child. The choice itself is
+           remembered on the tablet, so an event is set up once. -->
+      <div class="ctl" id="setup-ctl" style="display:none">
+        <h4>Setup <span class="mini" id="setup-lock">🔒 operator</span></h4>
+        <div class="seg"><button id="nfc-tile">📡 NFC tag · On</button></div>
+        <p class="mini imgnote" id="nfc-note"></p>
+      </div>
       <ul class="summary" id="summary"></ul>
     </div>
     <div class="nav">
@@ -1084,6 +1092,7 @@ async function loadJobDesign(url){
   if(SPINNER){
     state.faces={top:faceStoreFrom(d.faces?.top),bottom:d.faces?.bottom?faceStoreFrom(d.faces.bottom):null};
     state.sameBack=d.sameBothSides!==false||!d.faces?.bottom; $('#same-back').checked=state.sameBack;
+    state.nfc=d.nfc!==false; updateSetupTile();
     state.face='top'; switchFace('top', true);   // the stores are the truth, not the empty globals
     show('studio'); setStep('front');
     if(imgInk)refreshImagePreview();
@@ -1496,7 +1505,7 @@ function designObj(){
   if(SPINNER){
     stashFace();
     const f=face=>{const s=state.faces[face];return s?{design:s.strokes,image:facePayload(s)}:{design:[],image:null};};
-    return {product:'spinner',shape:'spinner',colours:state.colours,faces:{top:f('top'),bottom:state.sameBack?null:f('bottom')},sameBothSides:state.sameBack};
+    return {product:'spinner',shape:'spinner',colours:state.colours,faces:{top:f('top'),bottom:state.sameBack?null:f('bottom')},sameBothSides:state.sameBack,nfc:state.nfc};
   }
   return {shape:state.shape,customOutline:state.customOutline,colours:state.colours,hole:state.hole,holePos:state.holePos,design:state.strokes,image:imagePayload()};
 }
@@ -1506,7 +1515,8 @@ function enterReview(){if(imgInk)refreshImagePreview();drawPreview();lastGen=gen
   const what=SPINNER
     ?li('Product','NFC spinner')+li('Faces',state.sameBack?'same both sides':'different each side')
     :li('Shape',cap(state.shape));
-  const extra=SPINNER?li('Filament swaps',m.swaps)+li('NFC tag pause',m.nfcPauseLayer>0?`before layer ${m.nfcPauseLayer}`:'none'):'';
+  const extra=SPINNER?li('Filament swaps',m.swaps)+li('NFC tag',m.nfc?`pocket + pause before layer ${m.nfcPauseLayer}`:'off — solid spinner'):'';
+  if(SPINNER)updateSetupTile();
   $('#summary').innerHTML=li('Name',esc(state.contact.name))+what+li('Base',chip(c.layer1))+li('Drawing',chip(c.layer2))
     +li('Print time',`~${m.estMinutes} min`,cls)+li('Material',`~${m.estGrams} g`)+extra;
   state.approved=false; state.overBudget=!!m.overBudget;
@@ -1934,7 +1944,33 @@ async function submit(){
   $('#done-msg').textContent=`Your keychain file (${filename}) is ready — about ${meta.estMinutes} minutes to print.`;
   $('#done-foot').textContent='At the booth this sends straight to a printer and we WhatsApp you when it’s done.';show('done');}
 function savePicture(){const cv=$('#preview');try{cv.toBlob(b=>downloadBlob((state.contact.name.split(' ')[0]||'keychain')+'-keychain.png',b));}catch{toast('Could not save the picture',true);}}
+/* ---- setup tile (spinner, operator) ----
+   NFC on: a pocket inside the disc and a pause to drop the tag in. Off: a
+   solid spinner, no pause. Locked behind the operator PIN, re-locked for every
+   child; the setting itself is remembered on the tablet across children. */
+function nfcDefault(){ try{ const v=localStorage.getItem('3dipad_nfc'); if(v==='on')return true; if(v==='off')return false; }catch{} return CFG.spinner?.nfc?.enabled!==false; }
+function updateSetupTile(){
+  const t=$('#nfc-tile'); if(!t)return;
+  t.textContent=`📡 NFC tag · ${state.nfc?'On':'Off'}`;
+  t.classList.toggle('sel',state.nfc);
+  t.style.opacity=state.setupLocked?'.75':'';
+  $('#setup-lock').textContent=state.setupLocked?'🔒 operator':'🔓 unlocked';
+  $('#nfc-note').textContent=state.nfc?'A pocket inside and a pause to drop the tag in.':'Solid spinner, no pocket, no pause.';
+}
+function wireSetup(){
+  if(!SPINNER)return;
+  $('#setup-ctl').style.display='';
+  state.nfc=nfcDefault(); state.setupLocked=true; updateSetupTile();
+  $('#nfc-tile').addEventListener('click',()=>{
+    const flip=()=>{ state.nfc=!state.nfc; try{localStorage.setItem('3dipad_nfc',state.nfc?'on':'off');}catch{}
+      lastGen=null; updateSetupTile(); if($('[data-screen="review"]').classList.contains('active'))enterReview(); toast(state.nfc?'NFC tag on — pocket and pause':'NFC tag off — solid spinner'); };
+    if(!state.setupLocked)return flip();
+    const unlock=()=>{ state.setupLocked=false; updateSetupTile(); flip(); };
+    if(window.__BOOTH_SERVER__) admRequire(unlock); else unlock();
+  });
+}
 function resetAll(){state.contact={name:'',phone:''};state.shape=SPINNER?'spinner':DEFAULT_SHAPE;state.customOutline=null;state.colours={layer1:'WHITE',layer2:'BLACK'};
+  state.setupLocked=true;state.nfc=nfcDefault();updateSetupTile();
   state.faces={top:null,bottom:null};state.face='top';state.sameBack=true;$('#same-back').checked=true;
   state.pen=0.8;state.tool='pen';state.eraser=6;state.hole=null;state.holePos=null;state.strokes=[];state.activeLayer='layer1';state.mode='design';penSeen=false;lastGen=null;history=[[]];hi=0;
   imgSrcCanvas=null;imgSrcPixels=null;imgInk=null;imgPacked=null;imgPreviewCanvas=null;imgPreviewRect=null;imgThreshold=128;imgInvert=false;state.imgArea=0;setImageUiActive(false);
@@ -1953,7 +1989,7 @@ const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
 if(CFG.eventName)$('#tagline').textContent=CFG.eventName;
 setupCanvas();buildCountries();buildShapeChips();buildSwatches();wireNav();wirePen();wireHole();wireImage();wireSteps();admInit();
 $('#submit').addEventListener('click',()=>{ if(submitHeld){ submitHeld=false; return; } submit(); });
-wireOverBudgetHold();
+wireOverBudgetHold();wireSetup();
 if(SPINNER){
   $('#welcome-h1').innerHTML='Draw it.<br /><span class="hl">Spin it.</span>';
   $('#welcome-sub').textContent='Design your own NFC spinner keychain — draw the front and the back, pick your colours, and we 3D-print it.';

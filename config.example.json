@@ -199,7 +199,7 @@
         "thickness": 4
       },
       "nfc": {
-        "_comment": "The tag pocket floating inside the disc: width (X) x height (Y) x thickness, its floor at zBottom. The print pauses (M400 U1) before the layer that roofs it; that layer bridges the short span at bridgeSpeed. floorSolidLayers/roofSolidLayers are the solid layers under and over the pocket.",
+        "_comment": "The tag pocket floating inside the disc: width (X) x height (Y) x thickness, its floor at zBottom. enabled is the DEFAULT for the operator’s NFC tile on the tablet (locked behind the PIN); off means a solid spinner with no pocket and no pause. The print pauses (M400 U1) before the layer that roofs it; that layer bridges the short span at bridgeSpeed. floorSolidLayers/roofSolidLayers are the solid layers under and over the pocket.",
         "enabled": true,
         "width": 22,
         "height": 12,
