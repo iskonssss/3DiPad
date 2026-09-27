@@ -158,7 +158,7 @@
       "wallLoops": 2,
       "infillWallOverlap": 0.15,
       "bottomSolidLayers": 3,
-      "topSolidLayers": 3,
+      "topSolidLayers": 4,
       "_sparse_comment": "Line spacing of the sparse infill in the middle of the ring and the disc, alternating 45/135 degrees per layer. The original uses a 15% grid, which is about this.",
       "sparseSpacing": 2.5,
       "_colourLayers_comment": "How many layers deep the drawing is inlaid into EACH face. 2 is what the original uses (Bambu's colour-penetration setting). Every layer past 1 costs an extra filament swap on an external spool: 1 layer is 3 swaps for two faces, 2 layers is 4. With an AMS the swaps are automatic.",
@@ -174,8 +174,8 @@
         "pocketRadius": 1.95,
         "pocketTipRadius": 0.35,
         "pocketReach": 20.8,
-        "_extraClearance_comment": "Added to the pocket all round, on top of the modelled 0.34 radial / 0.5 axial. The first print at the modelled numbers fused: the pin’s lower cone droops outward as it grows and the pocket’s roof sags as it closes. 0.3 spins; lower it in steps of 0.1 if the disc rattles, raise it if it sticks.",
-        "extraClearance": 0.3,
+        "_extraClearance_comment": "Added to the pocket all round, on top of the modelled 0.34 radial / 0.5 axial. The first print at the modelled numbers fused: the pin’s lower cone droops outward as it grows and the pocket’s roof sags as it closes. 0.3 spun but rattled; 0.2 is the next step down. Lower in steps of 0.1 if the disc rattles, raise it if it sticks.",
+        "extraClearance": 0.2,
         "_support_comment": "support puts a short arc of loose lines in the clearance gap under each pin nose on the layers below the pin, then leaves supportGapLayers empty so the pin sags onto it without fusing, as the slicer’s tree support did. supportClearance keeps it off the disc and the ring; supportWidth is its length along the gap. It breaks away on the first flip. foot is the alternative: the disc itself grows down under the pin (no support to remove, but a stub on the disc). One or the other; foot wins if both are on.",
         "support": true,
         "supportClearance": 0.25,
@@ -203,7 +203,11 @@
         "bridgeAnchorMm": 1
       },
       "_speeds_comment": "mm/min. bridgeSpeed is the cavity roof (the original was slowed from 50 to 20 mm/s and that is what works). overhangWallSpeed is the wall where the pin's lower cone grows past the layer below and where the pocket's roof closes over air, the parts of the wall the slicer calls a floating shell; 600 (10 mm/s) is the slicer's own speed for a wall that is mostly in the air. Everything else uses the speed block; a \"speed\" object here overrides it for the spinner only.",
-      "bridgeSpeed": 1200,
+      "_topSpeed_comment": "The top layer of the ring is a band of short 45-degree lines, and at the keychain top-surface speed the nozzle never settles between turns: the first print came out ridged. Slower there, and one more solid layer under it, is the smoothest a lines pattern gets.",
+    "speed": {
+      "topSurface": 2400
+    },
+    "bridgeSpeed": 1200,
       "overhangWallSpeed": 600,
       "_time_comment": "swapMinutes/nfcPauseMinutes only feed the estimate: real minutes an operator spends at each stop. The budget is the spinner's own; a two-faced spinner takes about 30 minutes, well over the keychain's limit.",
       "swapMinutes": 1,

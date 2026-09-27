@@ -39,7 +39,7 @@
 // original pin untouched.)
 
 import { toBed } from './geometry.js';
-import { buildCoverage } from './fill.js';
+import { buildCoverage, maskRowsAngle } from './fill.js';
 import { imageCoverage, decodeBitmap } from './image.js';
 import { prepareStrokes, totalLength } from './strokes.js';
 import { dilate, fillPolygon } from './outline.js';
@@ -82,9 +82,9 @@ export function spinnerSpec(cfg) {
       // first hardware print at the modelled 0.34/0.5 fused: the pin's lower
       // cone droops as it grows and the pocket's roof sags as it closes, and
       // a third of a millimetre was not enough for both.
-      pocketR: (pin.pocketRadius ?? 1.95) + (pin.extraClearance ?? 0.3),
-      pocketTipR: (pin.pocketTipRadius ?? 0.35) + (pin.extraClearance ?? 0.3),
-      pocketReach: (pin.pocketReach ?? 20.8) + (pin.extraClearance ?? 0.3),
+      pocketR: (pin.pocketRadius ?? 1.95) + (pin.extraClearance ?? 0.2),
+      pocketTipR: (pin.pocketTipRadius ?? 0.35) + (pin.extraClearance ?? 0.2),
+      pocketReach: (pin.pocketReach ?? 20.8) + (pin.extraClearance ?? 0.2),
       foot: pin.foot ?? false, footClearance: pin.footClearance ?? 0.35,
       support: pin.support ?? true, supportClearance: pin.supportClearance ?? 0.25, supportWidth: pin.supportWidth ?? 7,
       supportGapLayers: Math.max(0, pin.supportGapLayers ?? 1),
@@ -355,35 +355,6 @@ function regionRows(polys, spacing, phase, angleDeg, minLen) {
     xs.sort((p, q) => p - q);
     const spans = [];
     for (let k = 0; k + 1 < xs.length; k += 2) if (xs[k + 1] - xs[k] > minLen) spans.push([xs[k], xs[k + 1]]);
-    if (spans.length) rows.push({ y, spans });
-  }
-  return { rows, fromScan };
-}
-
-/** Rows of a raster mask along lines at `angleDeg`, in mm of the mask's plate frame. */
-function maskRowsAngle(mask, g, angleDeg, spacing, phase, minLen) {
-  const a = (angleDeg * Math.PI) / 180;
-  const ca = Math.cos(a), sa = Math.sin(a);
-  const toScan = (p) => ({ x: p.x * ca + p.y * sa, y: -p.x * sa + p.y * ca });
-  const fromScan = (p) => ({ x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca });
-  const corners = [g.toMm({ x: 0, y: 0 }), g.toMm({ x: g.w, y: 0 }), g.toMm({ x: 0, y: g.h }), g.toMm({ x: g.w, y: g.h })].map(toScan);
-  const xMin = Math.min(...corners.map((c) => c.x)), xMax = Math.max(...corners.map((c) => c.x));
-  const yMin = Math.min(...corners.map((c) => c.y)), yMax = Math.max(...corners.map((c) => c.y));
-  const step = g.cell * 0.7;
-  const at = (p) => {
-    const i = Math.round(p.x / g.cell + g.pad), j = Math.round(p.y / g.cell + g.pad);
-    return i >= 0 && j >= 0 && i < g.w && j < g.h && mask[j * g.w + i];
-  };
-  const rows = [];
-  for (let y = yMin + spacing * 0.5 + phase; y <= yMax; y += spacing) {
-    const spans = [];
-    let start = null, lastOn = null;
-    for (let x = xMin; x <= xMax + step; x += step) {
-      const on = x <= xMax && at(fromScan({ x, y }));
-      if (on && start == null) start = x;
-      if (on) lastOn = x;
-      if (!on && start != null) { if (lastOn - start > minLen) spans.push([start, lastOn]); start = null; }
-    }
     if (spans.length) rows.push({ y, spans });
   }
   return { rows, fromScan };
@@ -708,7 +679,8 @@ export function generateSpinner(design, cfg) {
       const cov = seg.face === 'top' ? topCov : bottomCov;
       const k = seg.face === 'top' ? Li.i - topStart : Li.i - 1;
       em.comment(`drawing (${seg.face} face) layer ${k + 1}/${cL}`);
-      designLayer(em, lay.cfg, bbox, cov, s.bead, layerH, k % 2 === 1);
+      // the same 45/135 the body runs at on this layer, so face and drawing read as one surface
+      designLayer(em, lay.cfg, bbox, cov, s.bead, layerH, k % 2 === 1, Li.i % 2 ? 45 : 135);
     }
   }
   tally();

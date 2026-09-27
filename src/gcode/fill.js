@@ -371,3 +371,41 @@ export function contourToMm(loop, cov, smoothIters = 1) {
   pts = smooth(pts, smoothIters, false);
   return decimate(pts, cov.cell * 2.5);
 }
+
+/**
+ * Rows of a mask along lines at `angleDeg`, `spacing` mm apart, in the mask's
+ * own mm frame (`g` is any coverage-like object: w, h, cell, pad, toMm).
+ *
+ * maskRows above walks cells and so only knows horizontal and vertical. This
+ * walks the plane: a scanline is rotated into place and sampled every part of
+ * a cell, so a fill can run at 45° across a drawing the way it does across
+ * the body around it — a face whose drawing runs one way and whose backing
+ * runs another reads as two different textures.
+ */
+export function maskRowsAngle(mask, g, angleDeg, spacing, phase = 0, minLen = 0.2) {
+  const a = (angleDeg * Math.PI) / 180;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const toScan = (p) => ({ x: p.x * ca + p.y * sa, y: -p.x * sa + p.y * ca });
+  const fromScan = (p) => ({ x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca });
+  const corners = [g.toMm({ x: 0, y: 0 }), g.toMm({ x: g.w, y: 0 }), g.toMm({ x: 0, y: g.h }), g.toMm({ x: g.w, y: g.h })].map(toScan);
+  const xMin = Math.min(...corners.map((c) => c.x)), xMax = Math.max(...corners.map((c) => c.x));
+  const yMin = Math.min(...corners.map((c) => c.y)), yMax = Math.max(...corners.map((c) => c.y));
+  const step = g.cell * 0.7;
+  const at = (p) => {
+    const i = Math.round(p.x / g.cell + g.pad), j = Math.round(p.y / g.cell + g.pad);
+    return i >= 0 && j >= 0 && i < g.w && j < g.h && mask[j * g.w + i];
+  };
+  const rows = [];
+  for (let y = yMin + spacing * 0.5 + phase; y <= yMax; y += spacing) {
+    const spans = [];
+    let start = null, lastOn = null;
+    for (let x = xMin; x <= xMax + step; x += step) {
+      const on = x <= xMax && at(fromScan({ x, y }));
+      if (on && start == null) start = x;
+      if (on) lastOn = x;
+      if (!on && start != null) { if (lastOn - start > minLen) spans.push([start, lastOn]); start = null; }
+    }
+    if (spans.length) rows.push({ y, spans });
+  }
+  return { rows, fromScan };
+}

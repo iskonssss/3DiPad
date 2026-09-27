@@ -20,7 +20,7 @@ import {
 } from './geometry.js';
 import { prepareStrokes, totalLength, simplify } from './strokes.js';
 import { insetPolygon, erode, dilate, smooth, decimate, distanceTo } from './outline.js';
-import { buildCoverage, maskContours, maskRows, contourToMm, skeletonize, skeletonPaths, pruneSpurs } from './fill.js';
+import { buildCoverage, maskContours, maskRows, maskRowsAngle, contourToMm, skeletonize, skeletonPaths, pruneSpurs } from './fill.js';
 import { imageCoverage, decodeBitmap } from './image.js';
 import { generateSpinner } from './spinner.js';
 
@@ -465,7 +465,7 @@ export function drawSpanRegions(em, cfg, bbox, rows, spacing, feed, layerH, toPl
  * up one side of the ribbon and back the other — which is the right two passes
  * for a pen line and costs nothing extra to fall out of the same code.
  */
-export function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
+export function designLayer(em, cfg, bbox, cov, feed, layerH, vertical, angleDeg = null) {
   if (!cov) return;
   const b = cfg.build;
   const lw = b.lineWidth;
@@ -517,7 +517,7 @@ export function designLayer(em, cfg, bbox, cov, feed, layerH, vertical) {
   const { thin, wide, anyThin, anyWide } = splitByBlob(cov.mask, opened, cov.w, cov.h);
 
   if (anyThin) drawThinRuns(em, cfg, bbox, cov, thin, feed, layerH, oneBead);
-  if (anyWide) drawWideArea(em, cfg, bbox, cov, wide, feed, layerH, vertical);
+  if (anyWide) drawWideArea(em, cfg, bbox, cov, wide, feed, layerH, vertical, angleDeg);
 }
 
 
@@ -675,7 +675,7 @@ function drawThinRuns(em, cfg, bbox, cov, thin, feed, layerH, oneBead) {
 }
 
 /** Perimeter plus fill — the right way to cover a shape wider than a bead. */
-function drawWideArea(em, cfg, bbox, cov, mask, feed, layerH, vertical) {
+function drawWideArea(em, cfg, bbox, cov, mask, feed, layerH, vertical, angleDeg = null) {
   const b = cfg.build;
   const lw = b.lineWidth;
   const overlap = lw * (b.infillWallOverlap ?? 0.15);
@@ -690,6 +690,16 @@ function drawWideArea(em, cfg, bbox, cov, mask, feed, layerH, vertical) {
   // fill starts a line width in from the perimeter's centreline, overlapping it
   // by the same fraction the backing uses
   const inner = erode(mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
+  // An angle given: the fill runs that way (the spinner matches its drawing to
+  // the body around it). Otherwise the keychain's horizontal/vertical, as ever.
+  if (angleDeg != null) {
+    const { rows, fromScan } = maskRowsAngle(inner, cov, angleDeg, lw, 0, lw * 0.5);
+    if (rows.length) {
+      em.comment('design fill');
+      drawSpanRegions(em, cfg, bbox, rows, lw, feed, layerH, fromScan);
+    }
+    return;
+  }
   const step = Math.max(1, Math.round(lw / cov.cell));
   const rows = maskRows(inner, cov.w, cov.h, step, vertical ? step / 2 : 0, vertical);
   if (rows.length) {

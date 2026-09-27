@@ -266,9 +266,17 @@ wrong and were fixed from what was seen, not reasoned:
    pin's lower cone droops outward as it grows, the pocket roof sags as it
    closes, and the modelled clearance (0.34 radial, 0.5 axial) absorbed
    neither. Now: `pin.extraClearance` opens the pocket 0.3 all round, and the
-   floating walls run at the slicer's 10 mm/s instead of 25. Next print
-   decides whether 0.3 is right; the test "the disc never touches the ring"
-   prints the closest approach if it ever needs reading.
+   floating walls run at the slicer's 10 mm/s instead of 25. The test "the
+   disc never touches the ring" prints the closest approach if it ever needs
+   reading.
+
+**Second print, 2026-09-27**: flips freely. Three things adjusted from it:
+the disc rattled, so `extraClearance` came down from 0.3 to 0.2; the ring's
+top surface was ridged (a band of short 45° lines at the keychain's top
+speed), so the spinner's top surface runs at 40 mm/s with four solid layers
+under it; and the drawing's fill ran horizontal/vertical against a 45° body,
+so `designLayer` now takes an angle and the spinner passes the body's own
+(`maskRowsAngle` in fill.js — the keychain is untouched).
 
 ## Traps that have bitten before
 
