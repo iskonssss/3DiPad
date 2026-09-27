@@ -835,10 +835,11 @@ export function makeEmitter(cfg, crossSection) {
       if (s.zHopMm > 0) lines.push(`G1 Z${pos.z.toFixed(3)} F${Math.round(s.travel)}`);
       pos.x = x; pos.y = y; this.unretract(); tick();
     },
-    extrudeTo(x, y, feed, width, h) {
+    /** `flow` scales the plastic for this one move (a seam ramp); the path and speed are unchanged. */
+    extrudeTo(x, y, feed, width, h, flow = 1) {
       const L = Math.hypot(x - pos.x, y - pos.y);
       if (L < 1e-4) return;
-      const e = eFor(L, width, h);
+      const e = eFor(L, width, h) * flow;
       const f = capFeed(feed, width, h, L);
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(f)}`);
       last = { x: pos.x, y: pos.y };

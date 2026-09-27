@@ -69,9 +69,9 @@ export function spinnerSpec(cfg) {
     // around the pocket reaches into the drawing's edge. Seen on a print at the
     // old 0.06: a clear groove all round the drawing.
     inlayOverlap: s.inlayOverlapMm ?? 0.15,
-    // A wall loop runs this far past its own start before stopping, so the
-    // seam is a small overlap and not the gap a fresh start leaves.
-    seamOverlap: s.seamOverlapMm ?? 0.4,
+    // The seam crossfade: a wall loop's first stretch this long ramps the
+    // flow up, and it runs this far over its own start again ramping down.
+    seamOverlap: s.seamOverlapMm ?? 2.5,
     firstLineWidth: s.firstLayerLineWidth ?? 0.5,
     firstFlow: s.firstLayerFlow ?? 1.0,
     firstZOffset: s.firstLayerZOffsetMm ?? 0,
@@ -523,26 +523,51 @@ export function generateSpinner(design, cfg) {
     const anchorInset = wallD(sp.walls) - ov;
     return { lw: w, eW, pitch, wallD, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW, lineSpacing: pitch } }, anchorInset, fillInset: anchorInset + (pitch / 2 - ov) };
   };
+  /**
+   * A closed wall loop with a crossfaded seam. The first `seamOverlap` mm
+   * ramp the flow up from nothing, and after closing the loop runs that far
+   * again over its own start with the flow ramping down — the two add up to
+   * one full bead everywhere, and there is no start to starve and no end to
+   * blob. A plain overlap was tried first (0.4 mm past the start, full flow)
+   * and the nick simply moved with the seam: the starved stretch after a
+   * travel is longer than that. This is what the slicer's scarf seam does,
+   * minus the Z ramp; its file has "scarf seam on circles" on for this part.
+   */
   const wallLoop = (poly, feed, layerH, zone) => {
     if (!poly || poly.length < 3) return;
+    let total = 0;
+    for (let k = 0; k < poly.length; k++) { const a = poly[k], b = poly[(k + 1) % poly.length]; total += Math.hypot(b.x - a.x, b.y - a.y); }
+    const S = Math.min(sp.seamOverlap, total * 0.25);
     const p0 = toBedC(poly[0]);
     em.travelTo(p0.x, p0.y);
-    for (let k = 1; k <= poly.length; k++) {
-      const q = poly[k % poly.length];
-      const p = toBedC(q);
-      em.extrudeTo(p.x, p.y, zone && zone(q) ? sp.overhangWallSpeed : feed, lay.eW, layerH);
+    // walk the loop, subdividing inside the two ramps so they are smooth
+    const step = 0.3;
+    const walk = (from, to, dist, flowAt) => {
+      const L = Math.hypot(to.x - from.x, to.y - from.y);
+      if (L < 1e-6) return dist;
+      const n = flowAt ? Math.max(1, Math.ceil(L / step)) : 1;
+      for (let j = 1; j <= n; j++) {
+        const t = j / n;
+        const q = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+        const p = toBedC(q);
+        const f = flowAt ? flowAt(dist + L * (t - 0.5 / n)) : 1;
+        em.extrudeTo(p.x, p.y, zone && zone(q) ? sp.overhangWallSpeed : feed, lay.eW, layerH, f);
+      }
+      return dist + L;
+    };
+    let d = 0;
+    for (let k = 0; k < poly.length; k++) {
+      const a = poly[k], b = poly[(k + 1) % poly.length];
+      d = walk(a, b, d, d < S ? (x) => Math.min(1, x / S) : null);
     }
-    // Past the start by a little: the first millimetre after a travel is
-    // starved while pressure builds, and closing exactly on it left a radial
-    // nick at the same angle on every layer of the ring.
-    let left = sp.seamOverlap;
-    for (let k = 1; k < poly.length && left > 0; k++) {
-      const a = poly[k - 1], b = poly[k];
+    // ...and over the start again, fading out
+    let over = 0;
+    for (let k = 0; k < poly.length && over < S; k++) {
+      const a = poly[k], b = poly[(k + 1) % poly.length];
       const L = Math.hypot(b.x - a.x, b.y - a.y);
-      const t = Math.min(1, left / Math.max(L, 1e-6));
-      const p = toBedC({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-      em.extrudeTo(p.x, p.y, feed, lay.eW, layerH);
-      left -= L;
+      const t = Math.min(1, (S - over) / Math.max(L, 1e-6));
+      const end = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      over = walk(a, end, over, (x) => Math.max(0, 1 - x / S));
     }
   };
   // The ring's loops start at the bottom, where a seam hides under the part in

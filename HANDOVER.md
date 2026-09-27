@@ -294,6 +294,15 @@ calibration block now does too. Round beads sitting high explain gaps in a
 first layer whose volume was, if anything, generous. Both land in the same
 print, so judge the first layer after a levelled print, not before.
 
+**Sixth look, 2026-09-27**, bottom layers of the next print: the ring's nick
+moved from top left to the bottom, exactly where the seam had been moved to —
+so it was the seam's starved start, and 0.4 mm of plain overlap did not cover
+it. Wall loops now crossfade their seam: the first 2.5 mm ramp the flow up
+from nothing, and the loop runs 2.5 mm over its own start again ramping down
+(`seamOverlapMm`; `extrudeTo` grew a `flow` multiplier for it). The slicer's
+file has "scarf seam on circles" on for this part; this is that without the Z
+ramp.
+
 **Fifth look, 2026-09-27**, the top of the fourth print: better, still ridged
 on the ring, with black hairs across it. The ridges: a rounded bead of width
 w only covers w minus its shoulders, and the slicer lays lines closer than w
