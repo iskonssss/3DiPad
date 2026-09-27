@@ -64,6 +64,7 @@ export function spinnerSpec(cfg) {
     thickness, layerH, first, layers,
     edgeRound: s.edgeRoundMm ?? 0.5,
     lineWidth: s.lineWidth ?? 0.42,
+    beadModel: s.beadModel ?? 'rounded',
     firstLineWidth: s.firstLayerLineWidth ?? 0.5,
     firstFlow: s.firstLayerFlow ?? 1.0,
     firstZOffset: s.firstLayerZOffsetMm ?? 0,
@@ -403,7 +404,7 @@ export function generateSpinner(design, cfg) {
   const bbox = spinnerBBox(cfg);
   // Everything the shared drawing code reads from cfg.build, with the
   // spinner's own numbers over the keychain's.
-  const cfgD = { ...cfg, build: { ...cfg.build, lineWidth: sp.lineWidth, layerHeight: sp.layerH, firstLayerHeight: sp.first, wallLoops: sp.walls, infillWallOverlap: sp.overlapFrac, designEdgeMargin: sp.designEdgeMargin, penRange: sp.penRange }, speed: { ...cfg.speed, ...(cfg.spinner?.speed || {}) } };
+  const cfgD = { ...cfg, build: { ...cfg.build, lineWidth: sp.lineWidth, layerHeight: sp.layerH, firstLayerHeight: sp.first, wallLoops: sp.walls, infillWallOverlap: sp.overlapFrac, designEdgeMargin: sp.designEdgeMargin, penRange: sp.penRange, beadModel: sp.beadModel }, speed: { ...cfg.speed, ...(cfg.spinner?.speed || {}) } };
   const s = cfgD.speed;
   const lw = sp.lineWidth;
   // body-centred mm -> bed. The body's centre sits at (outerR, outerR) of the

@@ -280,6 +280,20 @@ wrong and were fixed from what was seen, not reasoned:
    disc never touches the ring" prints the closest approach if it ever needs
    reading.
 
+**Third look, 2026-09-27**, side by side with the slicer's own print of the
+same part: our first layer showed gaps between lines and our top was ridged,
+with the drawing's fill not closing; the slicer's were smooth. Two causes, one
+of them certain: (1) the emitter's bead is a plain rectangle, and at
+0.42 × 0.2 that is 11% more plastic per line than the slicer's rounded bead —
+a ridged top and fat, rough fills. The spinner now uses `beadModel:
+"rounded"` (matching the file it was copied from); the keychain keeps `rect`
+until a keychain print says otherwise. (2) Z: the old start homed once, at
+140 °C, before purging 100 mm of filament, and never again; the slicer's
+re-homes after the purge and wipe (`G28 T145`), which the flag-driven
+calibration block now does too. Round beads sitting high explain gaps in a
+first layer whose volume was, if anything, generous. Both land in the same
+print, so judge the first layer after a levelled print, not before.
+
 **Second print, 2026-09-27**: flips freely. Three things adjusted from it:
 the disc rattled, so `extraClearance` came down from 0.3 to 0.2; the ring's
 top surface was ridged (a band of short 45° lines at the keychain's top

@@ -269,6 +269,23 @@ test("the start asks the printer's own flags, so the dashboard's one-shot level 
   assert.ok(!forced.includes('judge_flag g29_before_print_flag'));
 });
 
+test("the spinner extrudes what the slicer's file does: a rounded bead, 11% less than a rectangle", () => {
+  // a plain wall move on a mid layer: 0.42 wide, 0.2 tall
+  const area = Math.PI * (cfg.build.filamentDiameter / 2) ** 2;
+  const rounded = (0.2 * (0.42 - 0.2) + Math.PI * 0.1 * 0.1) / area;   // mm of filament per mm of line
+  const rect = (0.42 * 0.2) / area;
+  const wall = segs.find((s) => s.layer === 13 && s.part === 'ring' && Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y) > 0.5);
+  const line = gcode.split('\n').find((l) => l.startsWith('G1 ') && l.includes(`X${(wall.b.x + 90).toFixed(3)}`) && /E[0-9.]+/.test(l));
+  assert.ok(line, 'found the move');
+  const e = num(line, 'E'), L = Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y);
+  assert.ok(Math.abs(e / L - rounded) < 0.0005, `E/mm ${(e / L).toFixed(4)}, rounded ${rounded.toFixed(4)}, rect would be ${rect.toFixed(4)}`);
+  // and the keychain is untouched: still the rectangle it was tuned on
+  const k = generate({ shape: 'circle', colours: { layer1: 'BLACK', layer2: 'WHITE' }, holePos: 'top', design: F }, cfg).gcode;
+  const kLine = k.split('\n').find((l) => /^G1 X.* E[0-9.]+ F/.test(l) && l.includes('E0.0'));
+  assert.ok(kLine);
+  assert.ok(!k.includes('rounded'), 'no bead-model note in a keychain file');
+});
+
 test('mirrorCoverage flips a mask about the plate centre', () => {
   const cell = 0.12, pad = 25, w = Math.ceil(45 / cell) + 2 * pad;
   const cov = { w, h: 4, cell, pad, mask: new Uint8Array(w * 4), toMm: (p) => ({ x: (p.x - pad) * cell, y: 0 }) };

@@ -54,6 +54,8 @@
     "solidLayers": 2,
     "sparseSpacing": 3.5,
     "filamentDiameter": 1.75,
+    "_beadModel_comment": "How much plastic a line takes. rect is width x height, what the keychain has always printed with. rounded takes the round sides off the bead the way every slicer does; at 0.42 x 0.2 that is 11% less plastic than rect, and it is what Bambu Studio put in the file the spinner was copied from. The spinner sets rounded in its own block; change this one only after a keychain print says to.",
+    "beadModel": "rect",
     "bedCenter": [
       90,
       90
@@ -152,6 +154,7 @@
       "layerHeight": 0.2,
       "firstLayerHeight": 0.2,
       "lineWidth": 0.42,
+      "beadModel": "rounded",
     "_firstLayer_comment": "The first layer, transcribed from the slicer profile that prints the original: a wider line (initial_layer_line_width 0.5) and the textured plate at 65. firstLayerFlow is an extrusion multiplier for that layer only, 1.0 = nominal; raise to 1.1 if the first layer shows gaps between lines AFTER a bed level. firstLayerZOffsetMm is the G29.1 nudge Bambu applies for the Textured PEI plate (-0.02): a 0.2 mm first layer needs the squish a 0.28 one forgives. bedTemp overrides the booth bed temperature for the spinner (null = booth setting).",
     "firstLayerLineWidth": 0.5,
     "firstLayerFlow": 1.0,

@@ -749,7 +749,16 @@ export function makeEmitter(cfg, crossSection) {
     if (timeMin >= nextTick) { progress.push({ at: lines.length, t: timeMin }); nextTick = timeMin + TICK_MIN; }
   };
 
-  const eFor = (len, width, h) => (width * h * len) / crossSection;
+  // How much filament a bead of `width` x `h` takes. The keychain has always
+  // used a plain rectangle, and its prints are tuned around that. A real bead
+  // has rounded sides, and every slicer — Bambu Studio for the spinner's own
+  // file included — takes them off: at 0.42 x 0.2 a rectangle asks for 11%
+  // more plastic than the slicer does, which is a ridged top surface and
+  // rough, fat fills. The spinner selects 'rounded' to match the file that
+  // prints well; the keychain keeps 'rect' until a print says otherwise.
+  const rounded = cfg.build.beadModel === 'rounded';
+  const beadArea = (width, h) => (rounded && width > h ? h * (width - h) + Math.PI * (h / 2) ** 2 : width * h);
+  const eFor = (len, width, h) => (beadArea(width, h) * len) / crossSection;
 
   /**
    * The hotend's melt rate, not the motion system's speed, is what actually
@@ -774,7 +783,7 @@ export function makeEmitter(cfg, crossSection) {
   let clamped = 0, clampedMm = 0;
   function capFeed(feed, width, h, len) {
     if (!(maxVol > 0)) return feed;
-    const limit = (maxVol * 60) / (width * h);   // mm/min at this cross-section
+    const limit = (maxVol * 60) / beadArea(width, h);   // mm/min at this cross-section
     if (feed <= limit) return feed;
     clamped++; clampedMm += len;
     return limit;
