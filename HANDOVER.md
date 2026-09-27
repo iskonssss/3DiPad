@@ -294,6 +294,16 @@ calibration block now does too. Round beads sitting high explain gaps in a
 first layer whose volume was, if anything, generous. Both land in the same
 print, so judge the first layer after a levelled print, not before.
 
+**Seventh look, 2026-09-27**, the top of the print with the tighter pitch:
+worse — the ring's top fuzzy and over-full, the disc's edge smeared. Exact
+volume per area plus the keychain's habits along every boundary (an anchor
+loop between walls and fill, welded turns on top of it, 15% overlap) is too
+much on a band six lines wide. The spinner drops the anchor loop
+(`anchorLoop: false`) and ends its fill half a pitch past the innermost wall,
+which is how the slicer's file is built. Untested as of this note; if the
+next top is still heavy, `infillWallOverlap` in the spinner block is the next
+knob down, not the pitch.
+
 **Sixth look, 2026-09-27**, bottom layers of the next print: the ring's nick
 moved from top left to the bottom, exactly where the seam had been moved to —
 so it was the seam's starved start, and 0.4 mm of plain overlap did not cover

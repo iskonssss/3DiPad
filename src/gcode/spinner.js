@@ -72,6 +72,12 @@ export function spinnerSpec(cfg) {
     // The seam crossfade: a wall loop's first stretch this long ramps the
     // flow up, and it runs this far over its own start again ramping down.
     seamOverlap: s.seamOverlapMm ?? 2.5,
+    // The keychain lays one extra loop between its walls and a solid fill,
+    // and welds every fill turn on top of that. On the spinner's narrow ring
+    // that put three helpings of plastic along every boundary of a band six
+    // lines wide, and the top came out fuzzy; the slicer's file has walls,
+    // then fill overlapping the inner wall, nothing between.
+    anchorLoop: s.anchorLoop ?? false,
     firstLineWidth: s.firstLayerLineWidth ?? 0.5,
     firstFlow: s.firstLayerFlow ?? 1.0,
     firstZOffset: s.firstLayerZOffsetMm ?? 0,
@@ -521,7 +527,10 @@ export function generateSpinner(design, cfg) {
     // the outer wall sits half a bead inside the edge; every line after it is a pitch further in
     const wallD = (k) => w / 2 + k * pitch;
     const anchorInset = wallD(sp.walls) - ov;
-    return { lw: w, eW, pitch, wallD, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW, lineSpacing: pitch } }, anchorInset, fillInset: anchorInset + (pitch / 2 - ov) };
+    // Solid fill ends: half a pitch past the last loop it meets, less the
+    // overlap — the anchor loop when there is one, the innermost wall when not.
+    const fillInset = sp.anchorLoop ? anchorInset + (pitch / 2 - ov) : wallD(sp.walls - 1) + pitch / 2 - ov;
+    return { lw: w, eW, pitch, wallD, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW, lineSpacing: pitch } }, anchorInset, fillInset };
   };
   /**
    * A closed wall loop with a crossfaded seam. The first `seamOverlap` mm
@@ -602,7 +611,7 @@ export function generateSpinner(design, cfg) {
       wallLoop(fromBottom(ringInnerOutline(sp, Li, d)), perimFeed, layerH, Li.pocketShrinking ? pinZone : null);
     }
     const dFill = solid ? fillInset : anchorInset;
-    if (solid) {
+    if (solid && sp.anchorLoop) {
       em.comment('solid infill boundary');
       wallLoop(fromBottom(ringOuterOutline(sp, Li, anchorInset)), infillFeed, layerH);
       wallLoop(loopHole(sp, Li, anchorInset), infillFeed, layerH);
@@ -628,7 +637,7 @@ export function generateSpinner(design, cfg) {
       wallLoop(cachedDisc(Li.i, d), perimFeed, layerH, Li.pinGrowing ? pinZone : null);
       if (cav) wallLoop(rectPoly(cav.w, cav.h, d), perimFeed, layerH);
     }
-    if (solid) {
+    if (solid && sp.anchorLoop) {
       em.comment('solid infill boundary');
       wallLoop(cachedDisc(Li.i, anchorInset), infillFeed, layerH);
       if (cav) wallLoop(rectPoly(cav.w, cav.h, anchorInset), infillFeed, layerH);
