@@ -216,9 +216,11 @@
         "bridgeAnchorMm": 1
       },
       "_speeds_comment": "mm/min. bridgeSpeed is the cavity roof (the original was slowed from 50 to 20 mm/s and that is what works). overhangWallSpeed is the wall where the pin's lower cone grows past the layer below and where the pocket's roof closes over air, the parts of the wall the slicer calls a floating shell; 600 (10 mm/s) is the slicer's own speed for a wall that is mostly in the air. Everything else uses the speed block; a \"speed\" object here overrides it for the spinner only.",
-      "_topSpeed_comment": "The top layer of the ring is a band of short 45-degree lines, and at the keychain top-surface speed the nozzle never settles between turns: the first print came out ridged. Slower there, and one more solid layer under it, is the smoothest a lines pattern gets.",
+      "_topSpeed_comment": "The top layer of the ring is a band of short 45-degree lines, and at the keychain top-surface speed the nozzle never settles between turns: the first print came out ridged. Slower there, and one more solid layer under it, is the smoothest a lines pattern gets. travel 30000 (500 mm/s; the slicer uses 700) and wipeMm 2 (retract while backing up 2 mm along the line just laid, as the slicer’s filament profile does) are against the hairs left across the top by the drawing’s travels and the colour change.",
     "speed": {
-      "topSurface": 2400
+      "topSurface": 2400,
+      "travel": 30000,
+      "wipeMm": 2
     },
     "bridgeSpeed": 1200,
       "overhangWallSpeed": 600,

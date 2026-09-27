@@ -294,6 +294,19 @@ calibration block now does too. Round beads sitting high explain gaps in a
 first layer whose volume was, if anything, generous. Both land in the same
 print, so judge the first layer after a levelled print, not before.
 
+**Fifth look, 2026-09-27**, the top of the fourth print: better, still ridged
+on the ring, with black hairs across it. The ridges: a rounded bead of width
+w only covers w minus its shoulders, and the slicer lays lines closer than w
+for exactly that reason — 0.377 for a 0.42 line at 0.2 — while we were laying
+them a full width apart, so the same beads left a ridge between every pair.
+The spinner now lays every wall and fill on that pitch (`lay.pitch`; the
+drawing's fill takes it through `build.lineSpacing`), which is why the print
+takes a minute longer. The hairs: travels now wipe (`speed.wipeMm`, retract
+while backing 2 mm along the line just laid, as the slicer's filament profile
+does) and run at 500 mm/s for the spinner. No prime tower: the change block's
+own purge and wipe already do its job, and a tower is a minute of filament per
+swap on a part that has four.
+
 **Fourth print, 2026-09-27**, after the rounded bead and the re-home: the
 first layer closed up. Two things left, both at joins: a groove all round the
 drawing where the body's fill lines ended on its edge (the body now walls

@@ -689,14 +689,19 @@ function drawWideArea(em, cfg, bbox, cov, mask, feed, layerH, vertical, angleDeg
 
   // fill starts a line width in from the perimeter's centreline, overlapping it
   // by the same fraction the backing uses
-  const inner = erode(mask, cov.w, cov.h, (lw * 1.5 - overlap) / cov.cell);
+  // The pitch the fill lines sit on: the line width, unless the product
+  // says its beads are rounded and lays them closer (build.lineSpacing).
+  const pitch = b.lineSpacing ?? lw;
+  // fill starts one pitch in from the perimeter's centreline, overlapping it
+  // by the same fraction the backing uses (lw * 1.5 - overlap when pitch = lw)
+  const inner = erode(mask, cov.w, cov.h, (lw / 2 + pitch - overlap) / cov.cell);
   // An angle given: the fill runs that way (the spinner matches its drawing to
   // the body around it). Otherwise the keychain's horizontal/vertical, as ever.
   if (angleDeg != null) {
-    const { rows, fromScan } = maskRowsAngle(inner, cov, angleDeg, lw, 0, lw * 0.5);
+    const { rows, fromScan } = maskRowsAngle(inner, cov, angleDeg, pitch, 0, lw * 0.5);
     if (rows.length) {
       em.comment('design fill');
-      drawSpanRegions(em, cfg, bbox, rows, lw, feed, layerH, fromScan);
+      drawSpanRegions(em, cfg, bbox, rows, pitch, feed, layerH, fromScan);
     }
     return;
   }
@@ -737,6 +742,7 @@ export function makeEmitter(cfg, crossSection) {
   const lines = [];
   const pos = { x: 0, y: 0, z: 0 };
   let timeMin = 0, filamentMm = 0;
+  let last = null;   // where the last extruded line started, for the wipe
 
   // Progress reports were only emitted at layer boundaries, and the first layer
   // is slow enough to be ~40% of a keychain — so the printer's bar sat at 0%
@@ -808,7 +814,21 @@ export function makeEmitter(cfg, crossSection) {
     retract() { if (s.retractMm > 0) lines.push(`G1 E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
     unretract() { if (s.retractMm > 0) lines.push(`G1 E${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`); },
     travelTo(x, y) {
-      this.retract();
+      // A wipe: retract while backing up along the line just laid, so the
+      // string that would follow the nozzle is left on the part instead.
+      // What Bambu's profile does (wipe, 2 mm); off unless speed.wipeMm says.
+      const wipe = s.wipeMm > 0 && s.retractMm > 0 && last && Math.hypot(pos.x - last.x, pos.y - last.y) > 0.05;
+      if (wipe) {
+        const L = Math.hypot(pos.x - last.x, pos.y - last.y);
+        const t = Math.min(1, s.wipeMm / L);
+        const wx = pos.x + (last.x - pos.x) * t, wy = pos.y + (last.y - pos.y) * t;
+        lines.push(`G1 X${wx.toFixed(3)} Y${wy.toFixed(3)} E-${s.retractMm.toFixed(3)} F${Math.round(s.retractSpeed)}`);
+        timeMin += (L * t) / s.retractSpeed;
+        pos.x = wx; pos.y = wy;
+      } else {
+        this.retract();
+      }
+      last = null;
       if (s.zHopMm > 0) lines.push(`G1 Z${(pos.z + s.zHopMm).toFixed(3)} F${Math.round(s.travel)}`);
       const L = Math.hypot(x - pos.x, y - pos.y);
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} F${Math.round(s.travel)}`); timeMin += L / s.travel;
@@ -821,6 +841,7 @@ export function makeEmitter(cfg, crossSection) {
       const e = eFor(L, width, h);
       const f = capFeed(feed, width, h, L);
       lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E${e.toFixed(5)} F${Math.round(f)}`);
+      last = { x: pos.x, y: pos.y };
       timeMin += L / f; filamentMm += e; pos.x = x; pos.y = y; tick();
     },
   };

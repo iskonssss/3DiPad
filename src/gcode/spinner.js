@@ -510,9 +510,18 @@ export function generateSpinner(design, cfg) {
   const layFor = (Li) => {
     const w = Li.i === 1 ? sp.firstLineWidth : lw;
     const eW = w * (Li.i === 1 ? sp.firstFlow : 1);
-    const ov = w * sp.overlapFrac;
-    const anchorInset = w * (sp.walls + 0.5) - ov;
-    return { lw: w, eW, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW } }, anchorInset, fillInset: anchorInset + (w / 2 - ov) };
+    // The pitch lines sit on. A rounded bead of width w only covers w minus
+    // the two rounded shoulders, so the slicer lays them closer than w —
+    // 0.377 for a 0.42 line at 0.2 — and that is what fills a top surface
+    // flat. Laid a full width apart, the same beads leave a ridge between
+    // every pair.
+    const h = Li.h;
+    const pitch = sp.beadModel === 'rounded' && w > h ? w - h * (1 - Math.PI / 4) : w;
+    const ov = pitch * sp.overlapFrac;
+    // the outer wall sits half a bead inside the edge; every line after it is a pitch further in
+    const wallD = (k) => w / 2 + k * pitch;
+    const anchorInset = wallD(sp.walls) - ov;
+    return { lw: w, eW, pitch, wallD, cfg: { ...cfgD, build: { ...cfgD.build, lineWidth: eW, lineSpacing: pitch } }, anchorInset, fillInset: anchorInset + (pitch / 2 - ov) };
   };
   const wallLoop = (poly, feed, layerH, zone) => {
     if (!poly || poly.length < 3) return;
@@ -559,9 +568,9 @@ export function generateSpinner(design, cfg) {
     const infillFeed = feedFor(Li, isFace ? 'top' : solid ? 'solid' : 'sparse');
     em.comment(`ring ${solid ? 'solid' : 'sparse'}${Li.loop ? ' +loop' : ''}${Li.pocket ? ' pocket' : ''}`);
     // walls: inner loops first, outer last, the order Bambu Studio uses
-    const { lw: lwL, anchorInset, fillInset } = lay;
+    const { lw: lwL, pitch, anchorInset, fillInset } = lay;
     for (let w = sp.walls - 1; w >= 0; w--) {
-      const d = lwL * (w + 0.5);
+      const d = lay.wallD(w);
       em.comment(w === 0 ? 'outer wall' : 'inner wall');
       wallLoop(fromBottom(ringOuterOutline(sp, Li, d)), perimFeed, layerH);
       wallLoop(loopHole(sp, Li, d), perimFeed, layerH);
@@ -575,7 +584,7 @@ export function generateSpinner(design, cfg) {
       wallLoop(fromBottom(ringInnerOutline(sp, Li, anchorInset)), infillFeed, layerH, Li.pocketShrinking ? pinZone : null);
     }
     em.comment(solid ? 'solid infill' : 'sparse infill');
-    const spacing = solid ? lwL : sp.sparseSpacing;
+    const spacing = solid ? pitch : sp.sparseSpacing;
     fillRegion([ringOuterOutline(sp, Li, dFill), loopHole(sp, Li, dFill), ringInnerOutline(sp, Li, dFill)],
       spacing, infillFeed, layerH, Li.i % 2 ? 45 : 135, (Li.i % 2) * (spacing / 2));
   }
@@ -587,9 +596,9 @@ export function generateSpinner(design, cfg) {
     const infillFeed = feedFor(Li, isFace ? 'top' : solid ? 'solid' : 'sparse');
     const cav = Li.cavity ? { w: sp.nfc.w, h: sp.nfc.h } : null;
     em.comment(`disc ${solid ? 'solid' : 'sparse'}${Li.pin ? ' pin' : Li.foot ? ' pin-foot' : ''}${cav ? ' NFC-cavity' : ''}${Li.bridge ? ' bridge' : ''}${Li.colour ? ` ${Li.colour}-face` : ''}`);
-    const { lw: lwL, anchorInset, fillInset } = lay;
+    const { lw: lwL, pitch, anchorInset, fillInset } = lay;
     for (let w = sp.walls - 1; w >= 0; w--) {
-      const d = lwL * (w + 0.5);
+      const d = lay.wallD(w);
       em.comment(w === 0 ? 'outer wall' : 'inner wall');
       wallLoop(cachedDisc(Li.i, d), perimFeed, layerH, Li.pinGrowing ? pinZone : null);
       if (cav) wallLoop(rectPoly(cav.w, cav.h, d), perimFeed, layerH);
@@ -622,12 +631,12 @@ export function generateSpinner(design, cfg) {
           const pts = contourToMm(loop, cov).map((p) => ({ x: p.x - R0, y: p.y - R0 }));
           if (pts.length >= 6) wallLoop(pts, perimFeed, layerH);
         }
-        const keep = dilate(cov.mask, cov.w, cov.h, (wallR + lwL / 2 - lwL * sp.overlapFrac) / cov.cell);
+        const keep = dilate(cov.mask, cov.w, cov.h, (wallR + pitch / 2 - pitch * sp.overlapFrac) / cov.cell);
         for (let k = 0; k < mask.length; k++) if (keep[k]) mask[k] = 0;
       }
       em.comment('solid infill (around the drawing)');
-      const { rows, fromScan } = maskRowsAngle(mask, grid, angle, lwL, 0, lwL * 0.5);
-      if (rows.length) drawSpanRegions(em, lay.cfg, bbox, rows, lwL, infillFeed, layerH, fromScan);
+      const { rows, fromScan } = maskRowsAngle(mask, grid, angle, pitch, 0, lwL * 0.5);
+      if (rows.length) drawSpanRegions(em, lay.cfg, bbox, rows, pitch, infillFeed, layerH, fromScan);
       return;
     }
     if (Li.bridge) {
@@ -635,16 +644,16 @@ export function generateSpinner(design, cfg) {
       // millimetre onto the walls either side. The rest of the layer is normal.
       const a = sp.nfc.anchorMm;
       em.comment('solid infill');
-      fillRegion([outline, rectPoly(sp.nfc.w, sp.nfc.h, a)], lwL, infillFeed, layerH, angle, 0);
+      fillRegion([outline, rectPoly(sp.nfc.w, sp.nfc.h, a)], pitch, infillFeed, layerH, angle, 0);
       em.comment(`bridge over the NFC cavity @ ${Math.round(sp.bridgeSpeed / 60)} mm/s`);
       em.raw('M106 S255 ; full fan for the bridge');
       const along = sp.nfc.w >= sp.nfc.h ? 90 : 0;   // lines cross the shorter span
-      fillRegion([rectPoly(sp.nfc.w, sp.nfc.h, a)], lwL, sp.bridgeSpeed, layerH, along, 0);
+      fillRegion([rectPoly(sp.nfc.w, sp.nfc.h, a)], pitch, sp.bridgeSpeed, layerH, along, 0);
       em.raw(`M106 S${Math.round(cfg.fan?.other ?? 255)}`);
       return;
     }
     em.comment(solid ? 'solid infill' : 'sparse infill');
-    const spacing = solid ? lwL : sp.sparseSpacing;
+    const spacing = solid ? pitch : sp.sparseSpacing;
     fillRegion([outline, cav ? rectPoly(cav.w, cav.h, dFill) : null], spacing, infillFeed, layerH, angle, (Li.i % 2) * (spacing / 2));
   }
 
@@ -655,14 +664,14 @@ export function generateSpinner(design, cfg) {
    */
   function emitPinSupport(Li, layerH) {
     const c = sp.pin.supportClearance;
-    const lwL = lay.lw;
+    const lwL = lay.lw, pitch = lay.pitch;
     const r0 = sp.discR + c + lwL / 2, r1 = sp.ringInnerR - c - lwL / 2;
     if (r1 < r0) return;
     const half = sp.pin.supportWidth / 2;
     em.comment('support under the pins');
     for (const dir of [1, -1]) {
       let k = 0;
-      for (let r = r0; r <= r1 + 1e-6; r += lwL, k++) {
+      for (let r = r0; r <= r1 + 1e-6; r += pitch, k++) {
         const a0 = Math.PI / 2 * dir - half / r, a1 = Math.PI / 2 * dir + half / r;
         const n = 16;
         const pts = [];
