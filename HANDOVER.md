@@ -294,6 +294,14 @@ calibration block now does too. Round beads sitting high explain gaps in a
 first layer whose volume was, if anything, generous. Both land in the same
 print, so judge the first layer after a levelled print, not before.
 
+**Fourth print, 2026-09-27**, after the rounded bead and the re-home: the
+first layer closed up. Two things left, both at joins: a groove all round the
+drawing where the body's fill lines ended on its edge (the body now walls
+each pocket, `inlayOverlapMm` into the drawing, and fills up to that wall),
+and a radial nick on the ring at top left on every layer — the wall loops'
+seam, which sat where the outline is built from, the loop's junction. Loops
+now start at the bottom and run `seamOverlapMm` past their start.
+
 **Second print, 2026-09-27**: flips freely. Three things adjusted from it:
 the disc rattled, so `extraClearance` came down from 0.3 to 0.2; the ring's
 top surface was ridged (a band of short 45° lines at the keychain's top

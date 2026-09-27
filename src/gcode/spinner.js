@@ -38,7 +38,7 @@
 // owner prefers. `pin.support` is the slicer's way, kept as the alternative.
 
 import { toBed } from './geometry.js';
-import { buildCoverage, maskRowsAngle } from './fill.js';
+import { buildCoverage, maskRowsAngle, maskContours, contourToMm } from './fill.js';
 import { imageCoverage, decodeBitmap } from './image.js';
 import { prepareStrokes, totalLength } from './strokes.js';
 import { dilate, fillPolygon } from './outline.js';
@@ -65,6 +65,13 @@ export function spinnerSpec(cfg) {
     edgeRound: s.edgeRoundMm ?? 0.5,
     lineWidth: s.lineWidth ?? 0.42,
     beadModel: s.beadModel ?? 'rounded',
+    // Where the body meets the inlaid drawing: how far the body's own wall
+    // around the pocket reaches into the drawing's edge. Seen on a print at the
+    // old 0.06: a clear groove all round the drawing.
+    inlayOverlap: s.inlayOverlapMm ?? 0.15,
+    // A wall loop runs this far past its own start before stopping, so the
+    // seam is a small overlap and not the gap a fresh start leaves.
+    seamOverlap: s.seamOverlapMm ?? 0.4,
     firstLineWidth: s.firstLayerLineWidth ?? 0.5,
     firstFlow: s.firstLayerFlow ?? 1.0,
     firstZOffset: s.firstLayerZOffsetMm ?? 0,
@@ -516,6 +523,27 @@ export function generateSpinner(design, cfg) {
       const p = toBedC(q);
       em.extrudeTo(p.x, p.y, zone && zone(q) ? sp.overhangWallSpeed : feed, lay.eW, layerH);
     }
+    // Past the start by a little: the first millimetre after a travel is
+    // starved while pressure builds, and closing exactly on it left a radial
+    // nick at the same angle on every layer of the ring.
+    let left = sp.seamOverlap;
+    for (let k = 1; k < poly.length && left > 0; k++) {
+      const a = poly[k - 1], b = poly[k];
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      const t = Math.min(1, left / Math.max(L, 1e-6));
+      const p = toBedC({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      em.extrudeTo(p.x, p.y, feed, lay.eW, layerH);
+      left -= L;
+    }
+  };
+  // The ring's loops start at the bottom, where a seam hides under the part in
+  // the hand. Built as they are, the outline starts where the loop's arc
+  // meets the ring — top left, the most looked-at spot on the thing.
+  const fromBottom = (poly) => {
+    if (!poly || poly.length < 3) return poly;
+    let best = 0, bestD = Infinity;
+    for (let k = 0; k < poly.length; k++) { const d = Math.hypot(poly[k].x, poly[k].y + 100); if (d < bestD) { bestD = d; best = k; } }
+    return poly.slice(best).concat(poly.slice(0, best));
   };
   const fillRegion = (polys, spacing, feed, layerH, angle, phase) => {
     const { rows, fromScan } = regionRows(polys, spacing, phase, angle, 0.2);
@@ -535,16 +563,16 @@ export function generateSpinner(design, cfg) {
     for (let w = sp.walls - 1; w >= 0; w--) {
       const d = lwL * (w + 0.5);
       em.comment(w === 0 ? 'outer wall' : 'inner wall');
-      wallLoop(ringOuterOutline(sp, Li, d), perimFeed, layerH);
+      wallLoop(fromBottom(ringOuterOutline(sp, Li, d)), perimFeed, layerH);
       wallLoop(loopHole(sp, Li, d), perimFeed, layerH);
-      wallLoop(ringInnerOutline(sp, Li, d), perimFeed, layerH, Li.pocketShrinking ? pinZone : null);
+      wallLoop(fromBottom(ringInnerOutline(sp, Li, d)), perimFeed, layerH, Li.pocketShrinking ? pinZone : null);
     }
     const dFill = solid ? fillInset : anchorInset;
     if (solid) {
       em.comment('solid infill boundary');
-      wallLoop(ringOuterOutline(sp, Li, anchorInset), infillFeed, layerH);
+      wallLoop(fromBottom(ringOuterOutline(sp, Li, anchorInset)), infillFeed, layerH);
       wallLoop(loopHole(sp, Li, anchorInset), infillFeed, layerH);
-      wallLoop(ringInnerOutline(sp, Li, anchorInset), infillFeed, layerH, Li.pocketShrinking ? pinZone : null);
+      wallLoop(fromBottom(ringInnerOutline(sp, Li, anchorInset)), infillFeed, layerH, Li.pocketShrinking ? pinZone : null);
     }
     em.comment(solid ? 'solid infill' : 'sparse infill');
     const spacing = solid ? lwL : sp.sparseSpacing;
@@ -583,7 +611,18 @@ export function generateSpinner(design, cfg) {
       const cells = outline.map((p) => grid.toCell({ x: p.x + R0, y: p.y + R0 }));
       const mask = fillPolygon(cells, grid.w, grid.h);
       if (cov) {
-        const keep = dilate(cov.mask, cov.w, cov.h, Math.max(0, lwL / 2 - lwL * sp.overlapFrac) / cov.cell);
+        // The pocket gets a wall of its own in the body colour, the way a
+        // slicer walls any hole, and the fill ends against that wall instead
+        // of against thin air. Fill lines ending on the drawing's edge left a
+        // groove all the way round it on the first print with a drawing.
+        const wallR = Math.max(0, lwL / 2 - sp.inlayOverlap);          // centreline, outside the drawing's edge
+        const wallMask = dilate(cov.mask, cov.w, cov.h, wallR / cov.cell);
+        em.comment('pocket walls around the drawing');
+        for (const loop of maskContours(wallMask, cov.w, cov.h)) {
+          const pts = contourToMm(loop, cov).map((p) => ({ x: p.x - R0, y: p.y - R0 }));
+          if (pts.length >= 6) wallLoop(pts, perimFeed, layerH);
+        }
+        const keep = dilate(cov.mask, cov.w, cov.h, (wallR + lwL / 2 - lwL * sp.overlapFrac) / cov.cell);
         for (let k = 0; k < mask.length; k++) if (keep[k]) mask[k] = 0;
       }
       em.comment('solid infill (around the drawing)');
