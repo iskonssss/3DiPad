@@ -512,3 +512,39 @@ never *reached*.
 The user is technical, tests on real hardware quickly, and will say plainly when
 something does not work. Give them the fastest path to unstick a printer first,
 and the explanation second.
+
+## The name maze — a third product, in progress
+
+A square tray with a 5 mm ball-bearing maze, a centre chamber whose floor
+carries the customer's initial in the second colour (a colour swap), a start
+dimple in the bottom-left corner, and four corner holes for a laser-cut
+clear acrylic lid (a standard part, so tray size and holes change together).
+Version 2, later, is the customer's whole name with the maze inside the
+letters.
+
+**Built so far (2026-09-29): the layout only, no g-code yet.**
+`src/gcode/maze.js` — `mazeSpec`, `mazeLayout` (a seeded perfect maze: every
+cell reachable by exactly one route, the chamber hung off it by one opening
+chosen as the hardest cell to reach, and therefore NO floating wall — every
+wall connects to the rim, which is what will let the wall layers print as one
+continuous loop), `mazeMask` (floor / floorTop / wall layers as coverage
+masks in the engine's grid), `letterRect`, `mazeRoughMinutes`, `mazeSvg`.
+Config in `config.example.json` under `maze`, set for a 0.8 nozzle
+(0.4 layers, 0.9 lines). `test/maze.test.js` covers it.
+
+`npm run maze -- --letter K --seed 7` writes `output/maze_K_7.svg`;
+`npm run maze -- --sizes 80,100,120 --cells 7` prints a table of rough times.
+
+**Print time is the hotend, not the nozzle.** The A1 mini melts ~12 mm³/s
+whatever nozzle is fitted, so the first estimate is plastic volume over that
+flow. The 120 mm tray is about 40 g and an hour; 80 mm with 7 cells is about
+20 g and 33 minutes; the floor alone is half of it. The levers are tray size,
+floor thickness and wall height, in that order. A 0.8 nozzle buys fewer
+turns and taller layers, not less plastic.
+
+Next parts, in order: (3) `generateMaze()` — floor layers, the colour swap
+for the letter in the chamber floor, then wall layers drawn as one loop
+(rim inner face + every wall, both sides) plus the rim's outer loops;
+(4) the letter: the kiosk renders the typed initial in the chosen font to a
+bitmap, exactly as the picture import does, and it arrives as `design.image`
+placed in `letterRect`; (5) kiosk steps for `product: "maze"`; (6) version 2.

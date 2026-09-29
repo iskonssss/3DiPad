@@ -16,7 +16,8 @@
     "clear-printer": "node tools/clear-printer.mjs",
     "pretest": "npm run build",
     "clear-data": "node tools/clear-test-data.mjs",
-    "music": "node tools/make-music.mjs"
+    "music": "node tools/make-music.mjs",
+    "maze": "node tools/maze-preview.mjs"
   },
   "engines": {
     "node": ">=20"
