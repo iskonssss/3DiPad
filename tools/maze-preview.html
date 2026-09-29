@@ -16,16 +16,17 @@
     color-scheme: dark;
     --bg: #12151a; --panel: #1b2027; --ink: #eef1f5; --muted: #98a2b1; --line: #2c333d; --btn: #eef1f5; --btn-ink: #12151a;
   }
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; }
   .app { display: grid; grid-template-columns: 1fr 300px; height: 100%; }
   .view { position: relative; min-width: 0; min-height: 320px; }
-  canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  canvas.gl { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
   .stats { position: absolute; left: 16px; top: 16px; display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-variant-numeric: tabular-nums; }
   .stat b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
   .stat span { font-size: 16px; font-weight: 600; }
-  .rail { background: var(--panel); border-left: 1px solid var(--line); padding: 20px 16px; padding-block: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+  .rail { background: var(--panel); border-left: 1px solid var(--line); padding: 20px 16px; padding-block: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
   h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: -.01em; text-wrap: balance; }
   .sub { color: var(--muted); margin: 4px 0 0; line-height: 1.4; }
   label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
@@ -33,6 +34,9 @@
   input[type=text]:focus, select:focus, button:focus-visible { outline: 2px solid var(--tray); outline-offset: 1px; }
   .row { display: flex; gap: 8px; align-items: center; }
   .row > * { flex: 1; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { flex: 1; background: transparent; color: var(--ink); border: 0; border-radius: 0; padding: 9px 6px; font-weight: 600; }
+  .seg button[aria-pressed="true"] { background: var(--btn); color: var(--btn-ink); }
   .toggles { display: flex; flex-direction: column; gap: 8px; }
   .toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); text-transform: none; letter-spacing: 0; font-weight: 500; cursor: pointer; }
   .toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--tray); }
@@ -43,7 +47,7 @@
   .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
   .sw[aria-pressed="true"] { border-color: var(--ink); }
   .note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
-  .note code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  .warn { font-size: 12px; color: #b5471b; line-height: 1.5; margin: 0; }
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; grid-template-rows: minmax(340px, 55vh) auto; height: auto; min-height: 100%; }
     .rail { border-left: 0; border-top: 1px solid var(--line); }
@@ -53,17 +57,52 @@
 
 <div class="app">
   <div class="view">
-    <canvas id="c" tabindex="0" aria-label="3D view of the maze tray. Drag to rotate, pinch or scroll to zoom."></canvas>
+    <canvas id="c" class="gl" tabindex="0" aria-label="3D view of the maze tray. Drag to rotate, pinch or scroll to zoom."></canvas>
     <div class="stats" id="stats"></div>
   </div>
   <aside class="rail">
     <div>
       <h1>Name Maze Tray</h1>
-      <p class="sub">Drag to turn it, pinch or scroll to zoom. Numbers are the layout's rough estimate, not a sliced file.</p>
+      <p class="sub">Drag to turn it, pinch or scroll to zoom. Times are the layout's rough estimate, not a sliced file.</p>
     </div>
-    <label>Letter
-      <input type="text" id="letter" maxlength="3" autocomplete="off" spellcheck="false">
+    <label>Version
+      <div class="seg" id="modeSeg">
+        <button type="button" data-mode="name">Name in the walls</button>
+        <button type="button" data-mode="square">Square with initial</button>
+      </div>
     </label>
+
+    <div id="nameCtl" class="toggles" style="gap:16px">
+      <label>Name
+        <input type="text" id="name" maxlength="10" autocomplete="off" spellcheck="false">
+      </label>
+      <label>Tray
+        <div class="seg" id="sizeSeg">
+          <button type="button" data-size="80,40">80 × 40</button>
+          <button type="button" data-size="100,50">100 × 50</button>
+          <button type="button" data-size="120,60">120 × 60</button>
+        </div>
+      </label>
+      <label>Ball
+        <div class="seg" id="ballSeg">
+          <button type="button" data-ball="3">3 mm</button>
+          <button type="button" data-ball="4">4 mm</button>
+          <button type="button" data-ball="5">5 mm</button>
+        </div>
+      </label>
+      <button id="shuffle" type="button">Shuffle the maze</button>
+    </div>
+
+    <div id="squareCtl" class="toggles" style="gap:16px" hidden>
+      <label>Letter
+        <input type="text" id="letter" maxlength="3" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="row">
+        <button id="prev" class="quiet" type="button">Previous maze</button>
+        <button id="next" type="button">Next maze</button>
+      </div>
+    </div>
+
     <label>Font
       <select id="font">
         <option value="'Arial Black', 'Archivo', sans-serif" data-w="900">Arial Black</option>
@@ -76,28 +115,32 @@
         <option value="'Trebuchet MS', sans-serif" data-w="700">Trebuchet</option>
       </select>
     </label>
-    <div class="row">
-      <button id="prev" class="quiet" type="button">Previous maze</button>
-      <button id="next" type="button">Next maze</button>
-    </div>
+    <label>Hotend flow cap for the estimate
+      <select id="flow">
+        <option value="12">12 mm³/s (Bambu's PLA default)</option>
+        <option value="16">16 mm³/s (0.8 nozzle, to be tested)</option>
+        <option value="20">20 mm³/s (0.8 nozzle, optimistic)</option>
+        <option value="9">9 mm³/s (PETG)</option>
+      </select>
+    </label>
     <div class="colours">
       <label>Tray
         <div class="swatches" id="traySw"></div>
       </label>
-      <label>Letter
+      <label id="inkLabel">Letter
         <div class="swatches" id="inkSw"></div>
       </label>
     </div>
     <div class="toggles">
       <label class="toggle"><input type="checkbox" id="showLid"> Acrylic lid</label>
-      <label class="toggle"><input type="checkbox" id="showBall" checked> Ball in the start dimple</label>
+      <label class="toggle"><input type="checkbox" id="showBall" checked> Ball at the start</label>
       <label class="toggle"><input type="checkbox" id="showPath"> Show the solution</label>
     </div>
     <div class="row">
       <button id="viewTop" class="quiet" type="button">Top view</button>
       <button id="viewIso" class="quiet" type="button">Angled view</button>
     </div>
-    <p class="note">The four corner holes take the laser-cut lid. The letter is a colour swap in the chamber floor. Start is the dimple bottom-left; finish is the chamber.</p>
+    <p class="warn" id="warn" hidden></p>
     <p class="note" id="meta"></p>
   </aside>
 </div>
@@ -116,13 +159,17 @@ const LAYOUTS = /*__LAYOUTS__*/null;
 const TRAYS = ['#3b8fd9', '#e8443a', '#f2c230', '#2fbf71', '#f06aa8', '#8e5bd6', '#f4f4f4', '#1f2329'];
 const INKS = ['#171b22', '#ffffff', '#e8443a', '#f2c230', '#3b8fd9', '#2fbf71'];
 
-const state = { i: 0, letter: '', font: null, weight: '900', tray: TRAYS[0], ink: INKS[0], lid: false, ball: true, path: false };
-try { const saved = JSON.parse(localStorage.getItem('maze-preview') || '{}'); Object.assign(state, saved); } catch {}
-state.i = Math.min(Math.max(0, state.i | 0), LAYOUTS.length - 1);
+const state = {
+  mode: 'name', i: 0, letter: '', name: 'KIARA', size: '100,50', ballD: 4, seed: 1,
+  font: null, weight: '900', tray: TRAYS[0], ink: INKS[0], lid: false, ball: true, path: false, flow: 12,
+};
+try { Object.assign(state, JSON.parse(localStorage.getItem('maze-preview-v2') || '{}')); } catch {}
+if (LAYOUTS && LAYOUTS.length) state.i = Math.min(Math.max(0, state.i | 0), LAYOUTS.length - 1);
 const fontSel = document.getElementById('font');
 if (!state.font) { state.font = fontSel.options[0].value; state.weight = fontSel.options[0].dataset.w; }
-if (!state.letter) state.letter = LAYOUTS[0].letter || 'M';
-function save() { try { localStorage.setItem('maze-preview', JSON.stringify(state)); } catch {} }
+if (!state.letter) state.letter = (LAYOUTS && LAYOUTS[0] && LAYOUTS[0].letter) || 'M';
+if (!LAYOUTS || !LAYOUTS.length) state.mode = 'name';
+function save() { try { localStorage.setItem('maze-preview-v2', JSON.stringify(state)); } catch {} }
 
 // ---- scene -----------------------------------------------------------------
 const canvas = document.getElementById('c');
@@ -135,7 +182,6 @@ const camera = new THREE.PerspectiveCamera(35, 1, 1, 2000);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
-
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-90, 160, 110);
@@ -146,18 +192,16 @@ sun.shadow.camera.right = sun.shadow.camera.top = 120;
 sun.shadow.camera.near = 10; sun.shadow.camera.far = 500;
 sun.shadow.bias = -0.0005;
 scene.add(sun);
-
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.ShadowMaterial({ opacity: 0.18 }));
 ground.rotation.x = -Math.PI / 2; ground.position.y = -0.01; ground.receiveShadow = true;
 scene.add(ground);
-
-// The tray is built in XY with Z up (mm, as the layout is), then this group
-// turns it so three.js's Y is up.
+// The tray is built in XY with Z up (mm), then this group turns it so three.js's Y is up.
 const world = new THREE.Group();
 world.rotation.x = -Math.PI / 2;
 scene.add(world);
 let tray = null;
 
+// ---- shape helpers ---------------------------------------------------------
 function roundedRect(x0, y0, x1, y1, r) {
   const s = new THREE.Shape();
   s.moveTo(x0 + r, y0);
@@ -175,121 +219,366 @@ function extrude(shape, depth, z, mat, shadow = true) {
   m.position.z = z; m.castShadow = shadow; m.receiveShadow = true;
   return m;
 }
+function box(cx, cy, w, h, z0, height, mat) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, height), mat);
+  m.position.set(cx, cy, z0 + height / 2); m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+function disposeTray() {
+  if (!tray) return;
+  world.remove(tray);
+  tray.traverse((o) => { o.geometry?.dispose?.(); o.material?.map?.dispose?.(); if (o.material && !o.material.__shared) o.material.dispose?.(); });
+  tray = null;
+}
+function trayMaterial() { return new THREE.MeshStandardMaterial({ color: state.tray, roughness: 0.55, metalness: 0 }); }
+function addCommon(L, half, mat) {
+  // ball, lid: shared by both versions. L: { W, H, cornerR, floor, wallH, holes, startPocket, pocketDepth, ballD, solution }
+  if (state.ball) {
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(L.ballD / 2, 32, 24), new THREE.MeshStandardMaterial({ color: 0xd9dde3, metalness: 0.9, roughness: 0.25 }));
+    ball.position.set(L.startPocket.x, L.startPocket.y, L.floor - L.pocketDepth + L.ballD / 2);
+    ball.castShadow = true;
+    tray.add(ball);
+  }
+  if (state.path && L.solution && L.solution.length > 1) {
+    const pts = L.solution.map((p) => new THREE.Vector3(p.x, p.y, L.floor + 0.9));
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
+    tray.add(new THREE.Mesh(new THREE.TubeGeometry(curve, pts.length * 4, 0.5, 8, false), new THREE.MeshStandardMaterial({ color: 0xe9b929, roughness: 0.5 })));
+  }
+  if (state.lid) {
+    const lid = roundedRect(-half.x, -half.y, half.x, half.y, L.cornerR);
+    for (const h of L.holes) lid.holes.push(circlePath(h.x, h.y, h.r));
+    const acrylic = new THREE.MeshPhysicalMaterial({ color: 0xdff3ff, transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0, transmission: 0.4, thickness: 3, side: THREE.DoubleSide });
+    tray.add(extrude(lid, 3, L.floor + L.wallH + 0.1, acrylic, false));
+  }
+}
 
-function letterTexture(L, text, font, weight, ink) {
-  const w = L.letterRect.x1 - L.letterRect.x0, h = L.letterRect.y1 - L.letterRect.y0;
-  const px = 24;   // texels per mm
+// ---- the seeded maze -------------------------------------------------------
+function rng(seed) {
+  let a = (seed >>> 0) || 0x9e3779b9;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// ---- version 2: the name in the walls --------------------------------------
+//
+// A rectangle. The name is rendered in the chosen font, and its letters ARE
+// walls: they stand at wall height and the maze is generated around them on
+// a grid whose pitch is the ball plus a wall. A cell is usable only if the
+// ball fits at its centre clear of the letters, and a passage between two
+// cells only if the ball can roll centre to centre without touching a letter.
+// Cells the maze cannot reach are filled solid. Start is the left edge,
+// finish the cell on the right edge that the maze makes hardest to reach.
+function buildName() {
+  const [W, H] = state.size.split(',').map(Number);
+  const ballD = state.ballD;
+  const wallT = 1.0, rimT = 2.0, floor = 0.8, cornerR = 4;
+  const wallH = Math.max(2.5, ballD - 0.5);
+  const clear = 1.5;                      // corridor = ball + this
+  const pocketDepth = 0.4;
+  const innerW = W - 2 * rimT, innerH = H - 2 * rimT;
+  const pitchMin = ballD + clear + wallT;
+  const cols = Math.max(4, Math.floor((innerW + wallT) / pitchMin));
+  const rows = Math.max(3, Math.floor((innerH + wallT) / pitchMin));
+  const corrX = (innerW - (cols - 1) * wallT) / cols, corrY = (innerH - (rows - 1) * wallT) / rows;
+  const pitchX = corrX + wallT, pitchY = corrY + wallT;
+  const x0 = -innerW / 2, y0 = -innerH / 2;
+  const cellC = (c, r) => ({ x: x0 + c * pitchX + corrX / 2, y: y0 + r * pitchY + corrY / 2 });
+
+  // The name as ink on a raster over the inner area, 0.2 mm per pixel.
+  const res = 0.2;
+  const pw = Math.ceil(innerW / res), ph = Math.ceil(innerH / res);
+  const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pw, ph);
+  const text = (state.name || '').trim().toUpperCase();
+  const bandW = innerW - 2 * pitchX, bandH = innerH - 2 * pitchY;   // a corridor stays free all round the name
+  if (text) {
+    ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let size = bandH / res;
+    ctx.font = `${state.weight} ${size}px ${state.font}`;
+    const m = ctx.measureText(text);
+    const gw = Math.max(1, m.width), gh = Math.max(1, (m.actualBoundingBoxAscent || size * 0.7) + (m.actualBoundingBoxDescent || 0));
+    size *= Math.min((bandW / res) / gw, (bandH / res) / gh);
+    ctx.font = `${state.weight} ${size}px ${state.font}`;
+    const m2 = ctx.measureText(text);
+    const yOff = ((m2.actualBoundingBoxAscent || 0) - (m2.actualBoundingBoxDescent || 0)) / 2;
+    ctx.fillText(text, pw / 2, ph / 2 + yOff);
+  }
+  const img = ctx.getImageData(0, 0, pw, ph).data;
+  const ink = new Uint8Array(pw * ph);
+  let inkPx = 0;
+  for (let i = 0; i < pw * ph; i++) if (img[i * 4] < 128) { ink[i] = 1; inkPx++; }
+  // Flip so row 0 is the bottom (canvas y is down, the tray's y is up).
+  const inkUp = new Uint8Array(pw * ph);
+  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) inkUp[y * pw + x] = ink[(ph - 1 - y) * pw + x];
+  const toPx = (p) => ({ x: (p.x - x0) / res, y: (p.y - y0) / res });
+  const inkAt = (p) => { const q = toPx(p); const x = Math.round(q.x), y = Math.round(q.y); return x >= 0 && y >= 0 && x < pw && y < ph && inkUp[y * pw + x]; };
+  // The ball's keep-out: anything within ball/2 + a little of the ink.
+  const keepR = ballD / 2 + 0.4;
+  const keepPx = Math.ceil(keepR / res);
+  const keep = new Uint8Array(pw * ph);
+  const offs = [];
+  for (let dy = -keepPx; dy <= keepPx; dy++) for (let dx = -keepPx; dx <= keepPx; dx++) if (dx * dx + dy * dy <= keepPx * keepPx) offs.push([dx, dy]);
+  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+    if (!inkUp[y * pw + x]) continue;
+    // only edge pixels need to stamp
+    if (x > 0 && x < pw - 1 && y > 0 && y < ph - 1 && inkUp[y * pw + x - 1] && inkUp[y * pw + x + 1] && inkUp[(y - 1) * pw + x] && inkUp[(y + 1) * pw + x]) { keep[y * pw + x] = 1; continue; }
+    for (const [dx, dy] of offs) { const nx = x + dx, ny = y + dy; if (nx >= 0 && ny >= 0 && nx < pw && ny < ph) keep[ny * pw + nx] = 1; }
+  }
+  const keepAt = (p) => { const q = toPx(p); const x = Math.round(q.x), y = Math.round(q.y); return x >= 0 && y >= 0 && x < pw && y < ph && keep[y * pw + x]; };
+  const segClear = (a, b) => { const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (res * 2)); for (let i = 0; i <= n; i++) if (keepAt({ x: a.x + (b.x - a.x) * i / n, y: a.y + (b.y - a.y) * i / n })) return false; return true; };
+
+  // Cells and passages.
+  const key = (c, r) => c + ',' + r;
+  const usable = new Set();
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (!keepAt(cellC(c, r))) usable.add(key(c, r));
+  const canPass = (a, b) => usable.has(key(a.c, a.r)) && usable.has(key(b.c, b.r)) && segClear(cellC(a.c, a.r), cellC(b.c, b.r));
+  const wkey = (a, b) => (a.c < b.c || (a.c === b.c && a.r < b.r)) ? `${a.c},${a.r}|${b.c},${b.r}` : `${b.c},${b.r}|${a.c},${a.r}`;
+  const DIRS = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
+  // Start: the left column, nearest the middle row.
+  let start = null;
+  for (let d = 0; d < rows && !start; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(0, r))) { start = { c: 0, r }; break; }
+  if (!start) start = { c: 0, r: 0 };
+  const random = rng(state.seed);
+  const open = new Set(), reached = new Set([key(start.c, start.r)]);
+  const stack = [start];
+  while (stack.length) {
+    const cur = stack[stack.length - 1];
+    const next = DIRS.map((d) => ({ c: cur.c + d.dc, r: cur.r + d.dr })).filter((n) => n.c >= 0 && n.r >= 0 && n.c < cols && n.r < rows && !reached.has(key(n.c, n.r)) && canPass(cur, n));
+    if (!next.length) { stack.pop(); continue; }
+    const n = next[Math.floor(random() * next.length)];
+    open.add(wkey(cur, n)); reached.add(key(n.c, n.r)); stack.push(n);
+  }
+  // Finish: on the right edge, the hardest to reach; else the hardest anywhere.
+  const dist = new Map([[key(start.c, start.r), 0]]), prev = new Map();
+  const q = [start];
+  while (q.length) {
+    const cur = q.shift();
+    for (const d of DIRS) {
+      const n = { c: cur.c + d.dc, r: cur.r + d.dr };
+      if (!open.has(wkey(cur, n)) || dist.has(key(n.c, n.r))) continue;
+      dist.set(key(n.c, n.r), dist.get(key(cur.c, cur.r)) + 1); prev.set(key(n.c, n.r), cur); q.push(n);
+    }
+  }
+  let finish = null, best = -1;
+  for (const [k, d] of dist) { const [c, r] = k.split(',').map(Number); if (c === cols - 1 && d > best) { best = d; finish = { c, r }; } }
+  if (!finish) for (const [k, d] of dist) { const [c, r] = k.split(',').map(Number); if (d > best) { best = d; finish = { c, r }; } }
+  const solution = [];
+  for (let at = finish; at; at = prev.get(key(at.c, at.r))) solution.push(cellC(at.c, at.r));
+  solution.reverse();
+
+  // ---- meshes
+  disposeTray();
+  tray = new THREE.Group();
+  const mat = trayMaterial();
+  const half = { x: W / 2, y: H / 2 };
+  const inset = 3.5, bossR = 3.0, holeR = 1.6;
+  const holes = [{ x: -half.x + inset, y: -half.y + inset }, { x: half.x - inset, y: -half.y + inset }, { x: half.x - inset, y: half.y - inset }, { x: -half.x + inset, y: half.y - inset }].map((p) => ({ ...p, r: holeR }));
+  const sc = cellC(start.c, start.r), fc = cellC(finish.c, finish.r);
+  const pocketR = (ballD + 1) / 2;
+  const floorShape = roundedRect(-half.x, -half.y, half.x, half.y, cornerR);
+  for (const h of holes) floorShape.holes.push(circlePath(h.x, h.y, h.r));
+  floorShape.holes.push(circlePath(sc.x, sc.y, pocketR));
+  floorShape.holes.push(circlePath(fc.x, fc.y, pocketR));
+  tray.add(extrude(floorShape, floor, 0, mat));
+  for (const p of [sc, fc]) { const d = new THREE.Shape(); d.absarc(p.x, p.y, pocketR, 0, Math.PI * 2, false); tray.add(extrude(d, floor - pocketDepth, 0, mat, false)); }
+  const rim = roundedRect(-half.x, -half.y, half.x, half.y, cornerR);
+  rim.holes.push(roundedRect(-half.x + rimT, -half.y + rimT, half.x - rimT, half.y - rimT, Math.max(0.2, cornerR - rimT)));
+  tray.add(extrude(rim, wallH, floor, mat));
+  for (const h of holes) { const b = new THREE.Shape(); b.absarc(h.x, h.y, bossR, 0, Math.PI * 2, false); b.holes.push(circlePath(h.x, h.y, h.r)); tray.add(extrude(b, wallH - 0.03, floor, mat)); }
+
+  // Grid walls: between two reached cells, stand unless opened. Between a
+  // reached cell and anything else, stand unless a letter already sits there.
+  // Between two unreached cells, nothing: the letter, or solid fill, is there.
+  let wallLen = 0;
+  const wallSeg = (a, b, vertical) => {
+    const ka = reached.has(key(a.c, a.r)), kb = reached.has(key(b.c, b.r));
+    if (!ka && !kb) return;
+    if (ka && kb && open.has(wkey(a, b))) return;
+    const ca = cellC(a.c, a.r), cb = cellC(b.c, b.r);
+    const mid = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
+    if ((!ka || !kb) && inkAt(mid)) return;
+    if (vertical) { tray.add(box(mid.x, mid.y, wallT, corrY + wallT, floor, wallH, mat)); wallLen += corrY + wallT; }
+    else { tray.add(box(mid.x, mid.y, corrX + wallT, wallT, floor, wallH, mat)); wallLen += corrX + wallT; }
+  };
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (c + 1 < cols) wallSeg({ c, r }, { c: c + 1, r }, true);
+    if (r + 1 < rows) wallSeg({ c, r }, { c, r: r + 1 }, false);
+  }
+  // Unreached cells away from the letters: filled solid, so there is no
+  // pocket. Cells the letters block are left as floor under and around them.
+  let fillArea = 0;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (reached.has(key(c, r))) continue;
+    const p = cellC(c, r);
+    if (keepAt(p)) continue;
+    tray.add(box(p.x, p.y, corrX + wallT + 0.02, corrY + wallT + 0.02, floor, wallH, mat));
+    fillArea += (corrX + wallT) * (corrY + wallT);
+  }
+  // The letters, traced from the raster and smoothed.
+  const loops = maskContours(inkUp, pw, ph).map((loop) => decimate(smooth(loop.map((p) => ({ x: x0 + (p.x + 0.5) * res, y: y0 + (p.y + 0.5) * res })), 2), 0.3));
+  const outers = [], holesL = [];
+  for (const lp of loops) { if (lp.length < 3) continue; (loops.some((o) => o !== lp && o.length >= 3 && pointIn(lp[0], o) && area(o) > area(lp)) ? holesL : outers).push(lp); }
+  for (const o of outers) {
+    const s = new THREE.Shape(o.map((p) => new THREE.Vector2(p.x, p.y)));
+    for (const h of holesL) if (pointIn(h[0], o)) s.holes.push(new THREE.Path(h.map((p) => new THREE.Vector2(p.x, p.y))));
+    tray.add(extrude(s, wallH, floor, mat));
+  }
+  const L = { W, H, cornerR, floor, wallH, holes, startPocket: { x: sc.x, y: sc.y, r: pocketR }, pocketDepth, ballD, solution };
+  addCommon(L, half, mat);
+  world.add(tray);
+
+  // ---- the estimate
+  const trayArea = W * H - (4 - Math.PI) * cornerR * cornerR;
+  const floorVol = trayArea * floor;
+  const letterArea = inkPx * res * res;
+  const rimLen = 2 * (W + H) - 8 * cornerR + 2 * Math.PI * (cornerR - rimT / 2);
+  const wallVol = (rimLen * rimT + wallLen * wallT + letterArea + fillArea) * wallH;
+  const flow = state.flow, overhead = 1.3, startup = 2.5;
+  const fMin = floorVol / flow / 60 * overhead, wMin = wallVol / flow / 60 * overhead;
+  const minutes = fMin + wMin + startup, grams = (floorVol + wallVol) * 1.24 / 1000;
+  stats([['Tray', `${W} × ${H} mm`], ['Corridor', `${Math.min(corrX, corrY).toFixed(1)} mm`], ['Rough print', `~${Math.round(minutes)} min`], ['Plastic', `~${grams.toFixed(0)} g`]]);
+  const stroke = strokeEstimate(inkUp, pw, ph) * res;
+  const warn = document.getElementById('warn');
+  const problems = [];
+  if (text && stroke < 1.0) problems.push(`The letters' thinnest strokes are about ${stroke.toFixed(1)} mm, under the 1 mm a wall needs. Try a heavier font.`);
+  if (!finish || finish.c !== cols - 1) problems.push('The maze cannot reach the right edge; the finish is the farthest cell it can reach.');
+  if (reached.size < usable.size * 0.6) problems.push('The name blocks most of the tray. A shorter name or a bigger tray gives more maze.');
+  warn.hidden = !problems.length; warn.textContent = problems.join(' ');
+  document.getElementById('meta').textContent = `Single colour. ${cols}×${rows} cells on a ${pitchX.toFixed(1)} mm pitch, corridors ${corrX.toFixed(1)} × ${corrY.toFixed(1)} mm for a ${ballD} mm ball, walls ${wallT} mm thick × ${wallH} mm high on a ${floor} mm floor. ${reached.size} cells in play, route ${solution.length} cells. Seed ${state.seed}. Floor ~${fMin.toFixed(1)} min, walls and letters ~${wMin.toFixed(1)} min, start-up ~${startup} min at ${flow} mm³/s.`;
+}
+
+// ---- version 1: the square with the initial in the chamber -----------------
+function buildSquare() {
+  const L = LAYOUTS[state.i];
+  disposeTray();
+  tray = new THREE.Group();
+  const mat = trayMaterial();
+  const half = { x: L.outer / 2, y: L.outer / 2 };
+  const floorShape = roundedRect(-half.x, -half.y, half.x, half.y, L.cornerR);
+  if (L.lid.throughFloor) for (const h of L.holes) floorShape.holes.push(circlePath(h.x, h.y, h.r));
+  floorShape.holes.push(circlePath(L.startPocket.x, L.startPocket.y, L.startPocket.r));
+  tray.add(extrude(floorShape, L.floor, 0, mat));
+  const dimpleFloor = new THREE.Shape(); dimpleFloor.absarc(L.startPocket.x, L.startPocket.y, L.startPocket.r, 0, Math.PI * 2, false);
+  tray.add(extrude(dimpleFloor, Math.max(0.2, L.floor - L.pocketDepth), 0, mat, false));
+  const rim = roundedRect(-half.x, -half.y, half.x, half.y, L.cornerR);
+  rim.holes.push(roundedRect(-half.x + L.rimT, -half.y + L.rimT, half.x - L.rimT, half.y - L.rimT, Math.max(0.2, L.cornerR - L.rimT)));
+  tray.add(extrude(rim, L.wallH, L.floor, mat));
+  for (const h of L.holes) { const b = new THREE.Shape(); b.absarc(h.x, h.y, L.lid.bossR, 0, Math.PI * 2, false); b.holes.push(circlePath(h.x, h.y, h.r)); tray.add(extrude(b, L.wallH - 0.03, L.floor, mat)); }
+  for (const w of L.walls) {
+    const len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+    tray.add(box((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2, w.dir === 'v' ? L.wallT : len, w.dir === 'v' ? len : L.wallT, L.floor, L.wallH, mat));
+  }
+  const lr = L.letterRect;
+  const tex = letterTexture(lr.x1 - lr.x0, lr.y1 - lr.y0, state.letter, state.font, state.weight, state.ink);
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(lr.x1 - lr.x0, lr.y1 - lr.y0), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 }));
+  plane.position.set((lr.x0 + lr.x1) / 2, (lr.y0 + lr.y1) / 2, L.floor + 0.02);
+  plane.receiveShadow = true;
+  tray.add(plane);
+  addCommon({ ...L, W: L.outer, H: L.outer, ballD: L.ball }, half, mat);
+  world.add(tray);
+  const flowScale = L.rough.flow / state.flow;
+  const minutes = (L.rough.floorMinutes + L.rough.wallMinutes) * flowScale + (L.rough.minutes - L.rough.floorMinutes - L.rough.wallMinutes);
+  stats([['Tray', `${L.outer} mm`], ['Corridor', `${L.corridor.toFixed(1)} mm`], ['Rough print', `~${Math.round(minutes)} min`], ['Plastic', `~${Math.round(L.rough.grams)} g`]]);
+  document.getElementById('warn').hidden = true;
+  document.getElementById('meta').textContent = `Two colours: the letter is a swap in the chamber floor. Maze ${state.i + 1} of ${LAYOUTS.length}, seed ${L.seed}. ${L.cells}×${L.cells} cells, ${L.chamber}×${L.chamber} chamber, walls ${L.wallT} mm × ${L.wallH} mm high on a ${L.floor} mm floor. Chamber opens on the ${L.finishSide}. Estimate at ${state.flow} mm³/s.`;
+}
+
+function letterTexture(w, h, text, font, weight, ink) {
+  const px = 24;
   const cv = document.createElement('canvas');
   cv.width = Math.round(w * px); cv.height = Math.round(h * px);
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = ink;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  // Fit: the glyph box fills the chamber floor less its margin, whichever way is tighter.
+  ctx.fillStyle = ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   let size = cv.height;
   ctx.font = `${weight} ${size}px ${font}`;
   const m = ctx.measureText(text || ' ');
-  const glyphW = Math.max(1, m.width);
-  const glyphH = Math.max(1, (m.actualBoundingBoxAscent || size * 0.7) + (m.actualBoundingBoxDescent || 0));
-  size = size * Math.min(cv.width * 0.96 / glyphW, cv.height * 0.96 / glyphH);
+  const gw = Math.max(1, m.width), gh = Math.max(1, (m.actualBoundingBoxAscent || size * 0.7) + (m.actualBoundingBoxDescent || 0));
+  size *= Math.min(cv.width * 0.96 / gw, cv.height * 0.96 / gh);
   ctx.font = `${weight} ${size}px ${font}`;
   const m2 = ctx.measureText(text || ' ');
-  const yOff = ((m2.actualBoundingBoxAscent || 0) - (m2.actualBoundingBoxDescent || 0)) / 2;
-  ctx.fillText(text, cv.width / 2, cv.height / 2 + yOff);
+  ctx.fillText(text, cv.width / 2, cv.height / 2 + ((m2.actualBoundingBoxAscent || 0) - (m2.actualBoundingBoxDescent || 0)) / 2);
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   return tex;
 }
 
-function build() {
-  if (tray) { world.remove(tray); tray.traverse((o) => { o.geometry?.dispose?.(); o.material?.map?.dispose?.(); o.material?.dispose?.(); }); }
-  const L = LAYOUTS[state.i];
-  tray = new THREE.Group();
-  const trayMat = new THREE.MeshStandardMaterial({ color: state.tray, roughness: 0.55, metalness: 0.0 });
-  const half = L.outer / 2;
-
-  // floor, with the lid holes and the start dimple through its top
-  const floorShape = roundedRect(-half, -half, half, half, L.cornerR);
-  if (L.lid.throughFloor) for (const h of L.holes) floorShape.holes.push(circlePath(h.x, h.y, h.r));
-  floorShape.holes.push(circlePath(L.startPocket.x, L.startPocket.y, L.startPocket.r));
-  tray.add(extrude(floorShape, L.floor, 0, trayMat));
-  const dimpleFloor = new THREE.Shape(); dimpleFloor.absarc(L.startPocket.x, L.startPocket.y, L.startPocket.r, 0, Math.PI * 2, false);
-  tray.add(extrude(dimpleFloor, Math.max(0.2, L.floor - L.pocketDepth), 0, trayMat, false));
-
-  // rim
-  const rim = roundedRect(-half, -half, half, half, L.cornerR);
-  rim.holes.push(roundedRect(-half + L.rimT, -half + L.rimT, half - L.rimT, half - L.rimT, Math.max(0.2, L.cornerR - L.rimT)));
-  tray.add(extrude(rim, L.wallH, L.floor, trayMat));
-
-  // corner bosses with the lid holes
-  for (const h of L.holes) {
-    const b = new THREE.Shape(); b.absarc(h.x, h.y, L.lid.bossR, 0, Math.PI * 2, false);
-    b.holes.push(circlePath(h.x, h.y, h.r));
-    tray.add(extrude(b, L.wallH - 0.03, L.floor, trayMat));
+// ---- raster helpers (as the engine's fill.js / outline.js do them) ---------
+const RING = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+function maskContours(mask, w, h) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+  const edge = (x, y) => at(x, y) && (!at(x - 1, y) || !at(x + 1, y) || !at(x, y - 1) || !at(x, y + 1));
+  const seen = new Uint8Array(w * h);
+  const loops = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (seen[y * w + x] || !edge(x, y)) continue;
+    const loop = traceLoop(mask, w, h, x, y);
+    for (const p of loop) seen[p.y * w + p.x] = 1;
+    seen[y * w + x] = 1;
+    if (loop.length >= 8) loops.push(loop);
   }
-
-  // inner walls
-  const wallGeoV = new THREE.BoxGeometry(L.wallT, 1, L.wallH);
-  for (const w of L.walls) {
-    const len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
-    const g = new THREE.BoxGeometry(w.dir === 'v' ? L.wallT : len, w.dir === 'v' ? len : L.wallT, L.wallH);
-    const m = new THREE.Mesh(g, trayMat);
-    m.position.set((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2, L.floor + L.wallH / 2);
-    m.castShadow = true; m.receiveShadow = true;
-    tray.add(m);
+  return loops;
+}
+function traceLoop(mask, w, h, sx, sy) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? mask[y * w + x] : 0);
+  let from = null;
+  for (const [dx, dy] of RING) if (!at(sx + dx, sy + dy)) { from = { x: sx + dx, y: sy + dy }; break; }
+  if (!from) return [];
+  let bx = sx, by = sy, fx = from.x, fy = from.y;
+  const contour = [{ x: bx, y: by }];
+  const maxSteps = w * h * 4;
+  for (let step = 0; step < maxSteps; step++) {
+    let idx = RING.findIndex(([dx, dy]) => bx + dx === fx && by + dy === fy);
+    if (idx < 0) idx = 7;
+    let moved = false;
+    for (let k = 1; k <= 8; k++) {
+      const j = (idx + k) % 8;
+      const nx = bx + RING[j][0], ny = by + RING[j][1];
+      if (at(nx, ny)) { const p = RING[(j + 7) % 8]; fx = bx + p[0]; fy = by + p[1]; bx = nx; by = ny; moved = true; break; }
+    }
+    if (!moved) break;
+    if (bx === sx && by === sy) break;
+    contour.push({ x: bx, y: by });
   }
-  wallGeoV.dispose();
-
-  // the letter, inlaid flush in the chamber floor
-  const lr = L.letterRect;
-  const tex = letterTexture(L, state.letter, state.font, state.weight, state.ink);
-  const plane = new THREE.Mesh(new THREE.PlaneGeometry(lr.x1 - lr.x0, lr.y1 - lr.y0), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 }));
-  plane.position.set((lr.x0 + lr.x1) / 2, (lr.y0 + lr.y1) / 2, L.floor + 0.02);
-  plane.receiveShadow = true;
-  tray.add(plane);
-
-  // the ball
-  if (state.ball) {
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(L.ball / 2, 32, 24), new THREE.MeshStandardMaterial({ color: 0xd9dde3, metalness: 0.9, roughness: 0.25 }));
-    ball.position.set(L.startPocket.x, L.startPocket.y, L.floor - L.pocketDepth + L.ball / 2);
-    ball.castShadow = true;
-    tray.add(ball);
+  return contour;
+}
+function smooth(points, iterations = 2) {
+  let pts = points;
+  for (let it = 0; it < iterations; it++) {
+    if (pts.length < 3) return pts;
+    const out = [], n = pts.length;
+    for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % n]; out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 }, { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }); }
+    pts = out;
   }
-
-  // the solution, floating just above the floor
-  if (state.path && L.solution.length > 1) {
-    const pts = L.solution.map((p) => new THREE.Vector3(p.x, p.y, L.floor + 1.2));
-    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, pts.length * 4, 0.6, 8, false), new THREE.MeshStandardMaterial({ color: 0xe9b929, roughness: 0.5 }));
-    tray.add(tube);
-  }
-
-  // the acrylic lid
-  if (state.lid) {
-    const lid = roundedRect(-half, -half, half, half, L.cornerR);
-    for (const h of L.holes) lid.holes.push(circlePath(h.x, h.y, h.r));
-    const acrylic = new THREE.MeshPhysicalMaterial({ color: 0xdff3ff, transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0, transmission: 0.4, thickness: 3, side: THREE.DoubleSide });
-    tray.add(extrude(lid, 3, L.floor + L.wallH + 0.1, acrylic, false));
-  }
-
-  world.add(tray);
-  stats(L);
+  return pts;
+}
+function decimate(points, min) {
+  if (points.length < 3) return points;
+  const out = [points[0]];
+  for (let i = 1; i < points.length; i++) { const l = out[out.length - 1]; if (Math.hypot(points[i].x - l.x, points[i].y - l.y) >= min) out.push(points[i]); }
+  return out;
+}
+function area(poly) { let s = 0; for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; s += a.x * b.y - b.x * a.y; } return Math.abs(s / 2); }
+function pointIn(p, poly) { let inside = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside; } return inside; }
+/** The thinnest stroke in the ink, roughly: twice the largest inscribed radius's minimum over the ink's skeleton is costly, so sample: the smallest run length across ink in x and y, ignoring runs under 3 px. */
+function strokeEstimate(mask, w, h) {
+  let best = Infinity;
+  const scan = (len, at) => { let run = 0; for (let i = 0; i <= len; i++) { if (i < len && at(i)) run++; else { if (run >= 3 && run < best) best = run; run = 0; } } };
+  for (let y = 0; y < h; y += 2) scan(w, (x) => mask[y * w + x]);
+  for (let x = 0; x < w; x += 2) scan(h, (y) => mask[y * w + x]);
+  return best === Infinity ? 0 : best;
 }
 
-function stats(L) {
-  const el = document.getElementById('stats');
-  const s = (k, v) => `<div class="stat"><b>${k}</b><span>${v}</span></div>`;
-  el.innerHTML = s('Tray', `${L.outer} mm`) + s('Corridor', `${L.corridor.toFixed(1)} mm`) + s('Rough print', `~${Math.round(L.rough.minutes)} min`) + s('Plastic', `~${Math.round(L.rough.grams)} g`);
-  document.getElementById('meta').textContent = `Maze ${state.i + 1} of ${LAYOUTS.length}, seed ${L.seed}. ${L.cells}×${L.cells} cells, ${L.chamber}×${L.chamber} chamber, walls ${L.wallT} mm × ${L.wallH} mm high on a ${L.floor} mm floor, ${L.layerH} mm layers. Chamber opens on the ${L.finishSide}. Estimate assumes ${L.rough.flow} mm³/s.`;
+// ---- stats, views, resize ---------------------------------------------------
+function stats(list) {
+  document.getElementById('stats').innerHTML = list.map(([k, v]) => `<div class="stat"><b>${k}</b><span>${v}</span></div>`).join('');
 }
-
-// ---- views & resize --------------------------------------------------------
+function extent() { if (state.mode === 'square' && LAYOUTS) return LAYOUTS[state.i].outer; const [W] = state.size.split(',').map(Number); return W; }
 function view(kind) {
-  const L = LAYOUTS[state.i];
-  const d = L.outer;
-  if (kind === 'top') { camera.position.set(0, d * 2.1, 0.001); }
-  else { camera.position.set(-d * 0.9, d * 1.25, d * 1.35); }
+  const d = extent();
+  if (kind === 'top') camera.position.set(0, d * 1.9, 0.001);
+  else camera.position.set(-d * 0.7, d * 1.0, d * 1.15);
   controls.target.set(0, 3, 0);
   controls.update();
 }
@@ -301,37 +590,60 @@ function resize() {
 }
 new ResizeObserver(resize).observe(canvas.parentElement);
 resize();
-view('iso');
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 
+function build() {
+  const square = state.mode === 'square' && LAYOUTS && LAYOUTS.length;
+  document.getElementById('nameCtl').hidden = !!square;
+  document.getElementById('squareCtl').hidden = !square;
+  document.getElementById('inkLabel').hidden = !square;
+  for (const b of document.querySelectorAll('#modeSeg button')) b.setAttribute('aria-pressed', String(b.dataset.mode === (square ? 'square' : 'name')));
+  for (const b of document.querySelectorAll('#sizeSeg button')) b.setAttribute('aria-pressed', String(b.dataset.size === state.size));
+  for (const b of document.querySelectorAll('#ballSeg button')) b.setAttribute('aria-pressed', String(+b.dataset.ball === state.ballD));
+  try { if (square) buildSquare(); else buildName(); }
+  catch (e) { const w = document.getElementById('warn'); w.hidden = false; w.textContent = 'Could not build this one: ' + e.message; }
+}
+
 // ---- controls --------------------------------------------------------------
+const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
+for (const b of document.querySelectorAll('#modeSeg button')) b.addEventListener('click', () => { state.mode = b.dataset.mode; save(); build(); view('iso'); });
+for (const b of document.querySelectorAll('#sizeSeg button')) b.addEventListener('click', () => { state.size = b.dataset.size; save(); build(); view('iso'); });
+for (const b of document.querySelectorAll('#ballSeg button')) b.addEventListener('click', () => { state.ballD = +b.dataset.ball; save(); build(); });
+const nameIn = document.getElementById('name');
+nameIn.value = state.name;
+nameIn.addEventListener('input', () => { state.name = nameIn.value.toUpperCase().slice(0, 10); save(); build(); });
+on('shuffle', 'click', () => { state.seed = (state.seed + 1) | 0; save(); build(); });
 const letterIn = document.getElementById('letter');
 letterIn.value = state.letter;
-letterIn.addEventListener('input', () => { state.letter = letterIn.value.toUpperCase().slice(0, 3) || ' '; letterIn.value = state.letter.trim(); save(); build(); });
+letterIn.addEventListener('input', () => { state.letter = letterIn.value.toUpperCase().slice(0, 3) || ' '; save(); build(); });
 for (const o of fontSel.options) if (o.value === state.font) fontSel.value = o.value;
 fontSel.addEventListener('change', () => { const o = fontSel.selectedOptions[0]; state.font = o.value; state.weight = o.dataset.w; save(); build(); });
-document.getElementById('next').addEventListener('click', () => { state.i = (state.i + 1) % LAYOUTS.length; save(); build(); });
-document.getElementById('prev').addEventListener('click', () => { state.i = (state.i - 1 + LAYOUTS.length) % LAYOUTS.length; save(); build(); });
-function swatches(id, list, key) {
+const flowSel = document.getElementById('flow');
+flowSel.value = String(state.flow);
+flowSel.addEventListener('change', () => { state.flow = +flowSel.value; save(); build(); });
+on('next', 'click', () => { state.i = (state.i + 1) % LAYOUTS.length; save(); build(); });
+on('prev', 'click', () => { state.i = (state.i - 1 + LAYOUTS.length) % LAYOUTS.length; save(); build(); });
+function swatches(id, list, keyName) {
   const el = document.getElementById(id);
   el.innerHTML = '';
   for (const c of list) {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'sw'; b.style.background = c; b.setAttribute('aria-label', c); b.setAttribute('aria-pressed', String(state[key] === c));
-    b.addEventListener('click', () => { state[key] = c; save(); swatches(id, list, key); build(); });
+    b.type = 'button'; b.className = 'sw'; b.style.background = c; b.setAttribute('aria-label', c); b.setAttribute('aria-pressed', String(state[keyName] === c));
+    b.addEventListener('click', () => { state[keyName] = c; save(); swatches(id, list, keyName); build(); });
     el.appendChild(b);
   }
 }
 swatches('traySw', TRAYS, 'tray');
 swatches('inkSw', INKS, 'ink');
-for (const [id, key] of [['showLid', 'lid'], ['showBall', 'ball'], ['showPath', 'path']]) {
+for (const [id, k] of [['showLid', 'lid'], ['showBall', 'ball'], ['showPath', 'path']]) {
   const cb = document.getElementById(id);
-  cb.checked = !!state[key];
-  cb.addEventListener('change', () => { state[key] = cb.checked; save(); build(); });
+  cb.checked = !!state[k];
+  cb.addEventListener('change', () => { state[k] = cb.checked; save(); build(); });
 }
-document.getElementById('viewTop').addEventListener('click', () => view('top'));
-document.getElementById('viewIso').addEventListener('click', () => view('iso'));
+on('viewTop', 'click', () => view('top'));
+on('viewIso', 'click', () => view('iso'));
 
-document.fonts?.ready?.then(() => build());
 build();
+view('iso');
+document.fonts?.ready?.then(() => build());
 </script>
