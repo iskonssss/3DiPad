@@ -383,9 +383,104 @@ function buildName() {
   let start = null;
   for (let d = 0; d < rows && !start; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(0, r))) { start = { c: 0, r }; break; }
   if (!start) start = { c: 0, r: 0 };
+  let finish = null;
+  for (let d = 0; d < rows && !finish; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(cols - 1, r))) { finish = { c: cols - 1, r }; break; }
+  if (!finish) finish = { c: cols - 1, r: Math.floor(rows / 2) };
   const random = rng(state.seed);
-  const open = new Set(), reached = new Set([key(start.c, start.r)]), cuts = [];
-  const stack = [start];
+  const shuffle = (arr) => { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
+  const cellOf = (k) => { const [c, r] = k.split(',').map(Number); return { c, r }; };
+
+  // The letters as blobs of ink, left to right, and the usable cells inside
+  // each. The route is made to visit one cell inside every letter that has
+  // room for the ball, so the ball has to pass through the name.
+  const blob = new Int32Array(pw * ph).fill(-1);
+  let nBlobs = 0;
+  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+    if (!inkUp[idx(x, y)] || blob[idx(x, y)] >= 0) continue;
+    const st = [idx(x, y)]; blob[idx(x, y)] = nBlobs;
+    while (st.length) {
+      const i = st.pop(); const px = i % pw, py = (i - px) / pw;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = px + dx, ny = py + dy; if (inR(nx, ny) && inkUp[idx(nx, ny)] && blob[idx(nx, ny)] < 0) { blob[idx(nx, ny)] = nBlobs; st.push(idx(nx, ny)); } }
+    }
+    nBlobs++;
+  }
+  const inside = new Map();   // blob → usable cells whose centre is inside it
+  for (const k of usable) {
+    const cell = cellOf(k); const q = toPx(cellC(cell.c, cell.r)); const x = Math.round(q.x), y = Math.round(q.y);
+    if (!inR(x, y) || !inkUp[idx(x, y)]) continue;
+    const id = blob[idx(x, y)];
+    if (!inside.has(id)) inside.set(id, []);
+    inside.get(id).push(cell);
+  }
+  const letters = [...inside.entries()].map(([id, cells]) => ({ id, cells, x: cells.reduce((t, c) => t + c.c, 0) / cells.length })).sort((p, q) => p.x - q.x);
+
+  // A randomised walk from one cell to another, leaning towards the target,
+  // never through cells already on the route. Null if it cannot get there.
+  const walk = (from, to, taken) => {
+    const seen = new Set([key(from.c, from.r)]);
+    const path = [from];
+    while (path.length) {
+      const cur = path[path.length - 1];
+      if (cur.c === to.c && cur.r === to.r) return path;
+      const opts = [];
+      for (const d of DIRS) {
+        const n = { c: cur.c + d.dc, r: cur.r + d.dr };
+        const nk = key(n.c, n.r);
+        if (!inGrid(n) || seen.has(nk) || !usable.has(nk) || (taken.has(nk) && !(n.c === to.c && n.r === to.r))) continue;
+        const p = passage(cellC(cur.c, cur.r), cellC(n.c, n.r));
+        if (p) opts.push({ n, p, d: Math.abs(n.c - to.c) + Math.abs(n.r - to.r) });
+      }
+      if (!opts.length) { path.pop(); continue; }
+      shuffle(opts);
+      if (random() < 0.6) opts.sort((p, q) => p.d - q.d);
+      const pick = opts[0];
+      seen.add(key(pick.n.c, pick.n.r));
+      path.push(pick.n);
+    }
+    return null;
+  };
+
+  // The route: start, then inside each letter in turn, then the finish. A
+  // letter the walk cannot get into or out of is left out.
+  let open, reached, cuts, route, through;
+  const attempt = (letterList) => {
+    const taken = new Set([key(start.c, start.r)]);
+    const r = [start];
+    let cur = start;
+    let visited = 0;
+    for (const L of letterList) {
+      const target = L.cells[Math.floor(random() * L.cells.length)];
+      const seg = walk(cur, target, taken);
+      if (!seg) continue;
+      // must also be able to leave again: try the exit later, roll back if not
+      const snapshot = r.length, takenBefore = [...taken];
+      for (const c of seg.slice(1)) { taken.add(key(c.c, c.r)); r.push(c); }
+      const probe = walk(target, finish, taken);
+      if (!probe) { r.length = snapshot; taken.clear(); for (const k of takenBefore) taken.add(k); continue; }
+      cur = target; visited++;
+    }
+    const last = walk(cur, finish, taken);
+    if (!last) return null;
+    for (const c of last.slice(1)) { taken.add(key(c.c, c.r)); r.push(c); }
+    return { r, visited };
+  };
+  let made = attempt(letters);
+  if (!made) made = attempt([]);
+  if (!made) made = { r: [start], visited: 0 };
+  route = made.r; through = made.visited;
+
+  open = new Set(); reached = new Set(); cuts = [];
+  for (let i = 0; i < route.length; i++) {
+    reached.add(key(route[i].c, route[i].r));
+    if (i) {
+      open.add(wkey(route[i - 1], route[i]));
+      const p = passage(cellC(route[i - 1].c, route[i - 1].r), cellC(route[i].c, route[i].r));
+      if (p && p.cut) cuts.push([cellC(route[i - 1].c, route[i - 1].r), cellC(route[i].c, route[i].r)]);
+    }
+  }
+  // The rest of the maze grows off the route as dead ends, so the route
+  // stays the only way through.
+  const stack = shuffle(route.slice());
   while (stack.length) {
     const cur = stack[stack.length - 1];
     const next = [];
@@ -400,23 +495,8 @@ function buildName() {
     open.add(wkey(cur, pick.n)); reached.add(key(pick.n.c, pick.n.r)); stack.push(pick.n);
     if (pick.p.cut) cuts.push([cellC(cur.c, cur.r), cellC(pick.n.c, pick.n.r)]);
   }
-  // Finish: on the right edge, the hardest to reach; else the hardest anywhere.
-  const dist = new Map([[key(start.c, start.r), 0]]), prev = new Map();
-  const q = [start];
-  while (q.length) {
-    const cur = q.shift();
-    for (const d of DIRS) {
-      const n = { c: cur.c + d.dc, r: cur.r + d.dr };
-      if (!open.has(wkey(cur, n)) || dist.has(key(n.c, n.r))) continue;
-      dist.set(key(n.c, n.r), dist.get(key(cur.c, cur.r)) + 1); prev.set(key(n.c, n.r), cur); q.push(n);
-    }
-  }
-  let finish = null, best = -1;
-  for (const [k, d] of dist) { const [c, r] = k.split(',').map(Number); if (c === cols - 1 && d > best) { best = d; finish = { c, r }; } }
-  if (!finish) for (const [k, d] of dist) { const [c, r] = k.split(',').map(Number); if (d > best) { best = d; finish = { c, r }; } }
-  const solution = [];
-  for (let at = finish; at; at = prev.get(key(at.c, at.r))) solution.push(cellC(at.c, at.r));
-  solution.reverse();
+  if (!reached.has(key(finish.c, finish.r))) finish = route[route.length - 1];
+  const solution = route.map((c) => cellC(c.c, c.r));
 
   // Openings in the letter walls where the maze crosses them.
   if (cuts.length) {
@@ -517,10 +597,12 @@ function buildName() {
   const warn = document.getElementById('warn');
   const problems = [];
   if (text && !hollow && stroke < 1.0) problems.push('The letters\u2019 thinnest strokes are about ' + stroke.toFixed(1) + ' mm, under the 1 mm a wall needs. Try a heavier font.');
-  if (!finish || finish.c !== cols - 1) problems.push('The maze cannot reach the right edge; the finish is the farthest cell it can reach.');
+  if (finish.c !== cols - 1) problems.push('The maze cannot reach the right edge; the finish is the farthest cell it can reach.');
+  if (hollow && letters.length && through < letters.length) problems.push('The route passes through ' + through + ' of ' + letters.length + ' letters that have room inside; the rest were too tight to get in and out of.');
+  if (hollow && !letters.length && text) problems.push('No letter has room inside for the ball. A bigger tray, a smaller ball or a heavier font opens them up.');
   if (reached.size < usable.size * 0.6) problems.push('The name blocks most of the tray. A shorter name or a bigger tray gives more maze.');
   warn.hidden = !problems.length; warn.textContent = problems.join(' ');
-  document.getElementById('meta').textContent = 'Single colour, ' + (hollow ? 'hollow letters with ' + cuts.length + ' openings' : 'solid letters') + '. ' + cols + '\u00d7' + rows + ' cells on a ' + pitchX.toFixed(1) + ' mm pitch, corridors ' + corrX.toFixed(1) + ' \u00d7 ' + corrY.toFixed(1) + ' mm for a ' + ballD + ' mm ball, walls ' + wallT + ' mm thick \u00d7 ' + wallH + ' mm high on a ' + floor + ' mm floor. ' + reached.size + ' cells in play, route ' + solution.length + ' cells. Seed ' + state.seed + '. Floor ~' + fMin.toFixed(1) + ' min, walls and letters ~' + wMin.toFixed(1) + ' min, start-up ~' + startup + ' min at ' + flow + ' mm\u00b3/s.';
+  document.getElementById('meta').textContent = 'Single colour, ' + (hollow ? 'hollow letters with ' + cuts.length + ' openings, the route passes through ' + through + ' letter' + (through === 1 ? '' : 's') : 'solid letters') + '. ' + cols + '\u00d7' + rows + ' cells on a ' + pitchX.toFixed(1) + ' mm pitch, corridors ' + corrX.toFixed(1) + ' \u00d7 ' + corrY.toFixed(1) + ' mm for a ' + ballD + ' mm ball, walls ' + wallT + ' mm thick \u00d7 ' + wallH + ' mm high on a ' + floor + ' mm floor. ' + reached.size + ' cells in play, route ' + solution.length + ' cells. Seed ' + state.seed + '. Floor ~' + fMin.toFixed(1) + ' min, walls and letters ~' + wMin.toFixed(1) + ' min, start-up ~' + startup + ' min at ' + flow + ' mm\u00b3/s.';
 }
 
 // ---- version 1: the square with the initial in the chamber -----------------
