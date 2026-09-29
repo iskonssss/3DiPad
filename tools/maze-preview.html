@@ -157,6 +157,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const LAYOUTS = /*__LAYOUTS__*/null;
+window.addEventListener('error', (e) => { const w = document.getElementById('warn'); if (w) { w.hidden = false; w.textContent = 'Page error: ' + (e.message || e.error) + ' @' + (e.lineno || '?'); } });
+window.addEventListener('unhandledrejection', (e) => { const w = document.getElementById('warn'); if (w) { w.hidden = false; w.textContent = 'Page error: ' + (e.reason && e.reason.message || e.reason); } });
 const TRAYS = ['#3b8fd9', '#e8443a', '#f2c230', '#2fbf71', '#f06aa8', '#8e5bd6', '#f4f4f4', '#1f2329'];
 const INKS = ['#171b22', '#ffffff', '#e8443a', '#f2c230', '#3b8fd9', '#2fbf71'];
 
@@ -240,8 +242,8 @@ function addCommon(L, half, mat) {
     ball.castShadow = true;
     tray.add(ball);
   }
-  if (state.path && L.solution && L.solution.length > 1) {
-    const pts = L.solution.map((p) => new THREE.Vector3(p.x, p.y, L.floor + 0.9));
+  if (state.path && L.solution && L.solution.length > 2) {
+    const pts = L.solution.filter((p, i, arr) => !i || Math.hypot(p.x - arr[i - 1].x, p.y - arr[i - 1].y) > 0.01).map((p) => new THREE.Vector3(p.x, p.y, L.floor + 0.9));
     const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
     tray.add(new THREE.Mesh(new THREE.TubeGeometry(curve, pts.length * 4, 0.5, 8, false), new THREE.MeshStandardMaterial({ color: 0xe9b929, roughness: 0.5 })));
   }
@@ -375,20 +377,23 @@ function buildName() {
 
   // Cells and the maze.
   const key = (c, r) => c + ',' + r;
+  const cellOf = (k) => { const [c, r] = k.split(',').map(Number); return { c, r }; };
   const usable = new Set();
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const p = cellC(c, r); if (!sampleAt(keepBand, p) && !sampleAt(keepBoss, p)) usable.add(key(c, r)); }
   const wkey = (a, b) => (a.c < b.c || (a.c === b.c && a.r < b.r)) ? a.c + ',' + a.r + '|' + b.c + ',' + b.r : b.c + ',' + b.r + '|' + a.c + ',' + a.r;
   const DIRS = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
   const inGrid = (n) => n.c >= 0 && n.r >= 0 && n.c < cols && n.r < rows;
-  let start = null;
-  for (let d = 0; d < rows && !start; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(0, r))) { start = { c: 0, r }; break; }
-  if (!start) start = { c: 0, r: 0 };
-  let finish = null;
-  for (let d = 0; d < rows && !finish; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(cols - 1, r))) { finish = { c: cols - 1, r }; break; }
-  if (!finish) finish = { c: cols - 1, r: Math.floor(rows / 2) };
+  // One lap: start top-left, across the top through the letters, down the
+  // right side, back along the bottom through them again, finish bottom-left.
+  let start = null, finish = null;
+  for (let r = rows - 1; r >= 0 && !start; r--) if (usable.has(key(0, r))) start = { c: 0, r };
+  for (let r = 0; r < rows && !finish; r++) if (usable.has(key(0, r)) && !(start && start.r === r)) finish = { c: 0, r };
+  if (!start) start = { c: 0, r: rows - 1 };
+  if (!finish) finish = { c: 0, r: 0 };
+  const upperHalf = (x) => x.r >= rows / 2, lowerHalf = (x) => x.r < rows / 2;
+  const colCells = (c, pred) => [...usable].map((k) => cellOf(k)).filter((x) => x.c === c && pred(x));
   const random = rng(state.seed);
   const shuffle = (arr) => { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
-  const cellOf = (k) => { const [c, r] = k.split(',').map(Number); return { c, r }; };
 
   // The letters as blobs of ink, left to right, and the usable cells inside
   // each. The route is made to visit one cell inside every letter that has
@@ -444,12 +449,14 @@ function buildName() {
   // letter the walk cannot get into or out of is left out.
   let open, reached, cuts, route, through;
   const attempt = (letterList) => {
-    const taken = new Set([key(start.c, start.r)]);
+    const taken = new Set([key(start.c, start.r), key(finish.c, finish.r)]);   // the finish is only ever the last cell
     const r = [start];
     let cur = start;
-    let visited = 0;
+    const visitedIds = new Set();
     for (const L of letterList) {
-      const target = L.cells[Math.floor(random() * L.cells.length)];
+      const cands = L.cells.filter((c) => !taken.has(key(c.c, c.r)));
+      if (!cands.length) continue;
+      const target = cands[Math.floor(random() * cands.length)];
       const seg = walk(cur, target, taken);
       if (!seg) continue;
       // must also be able to leave again: try the exit later, roll back if not
@@ -457,14 +464,20 @@ function buildName() {
       for (const c of seg.slice(1)) { taken.add(key(c.c, c.r)); r.push(c); }
       const probe = walk(target, finish, taken);
       if (!probe) { r.length = snapshot; taken.clear(); for (const k of takenBefore) taken.add(k); continue; }
-      cur = target; visited++;
+      cur = target; if (L.id !== null) visitedIds.add(L.id);
     }
     const last = walk(cur, finish, taken);
     if (!last) return null;
     for (const c of last.slice(1)) { taken.add(key(c.c, c.r)); r.push(c); }
-    return { r, visited };
+    return { r, visited: visitedIds.size };
   };
-  let made = attempt(letters);
+  const lap = [];
+  for (const L of letters) { const up = L.cells.filter(upperHalf); lap.push({ id: L.id, cells: up.length ? up : L.cells }); }
+  lap.push({ id: null, cells: colCells(cols - 1, upperHalf) });
+  lap.push({ id: null, cells: colCells(cols - 1, lowerHalf) });
+  for (const L of letters.slice().reverse()) { const low = L.cells.filter(lowerHalf); if (low.length) lap.push({ id: L.id, cells: low }); }
+  let made = attempt(lap);
+  if (!made) made = attempt(lap.filter((w) => w.id === null));
   if (!made) made = attempt([]);
   if (!made) made = { r: [start], visited: 0 };
   route = made.r; through = made.visited;
