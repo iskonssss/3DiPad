@@ -90,6 +90,7 @@
           <button type="button" data-ball="5">5 mm</button>
         </div>
       </label>
+      <label class="toggle"><input type="checkbox" id="hollow"> Hollow letters, maze runs through them</label>
       <button id="shuffle" type="button">Shuffle the maze</button>
     </div>
 
@@ -161,7 +162,7 @@ const INKS = ['#171b22', '#ffffff', '#e8443a', '#f2c230', '#3b8fd9', '#2fbf71'];
 
 const state = {
   mode: 'name', i: 0, letter: '', name: 'KIARA', size: '100,50', ballD: 4, seed: 1,
-  font: null, weight: '900', tray: TRAYS[0], ink: INKS[0], lid: false, ball: true, path: false, flow: 12,
+  font: null, weight: '900', tray: TRAYS[0], ink: INKS[0], lid: false, ball: true, path: false, flow: 12, hollow: true,
 };
 try { Object.assign(state, JSON.parse(localStorage.getItem('maze-preview-v2') || '{}')); } catch {}
 if (LAYOUTS && LAYOUTS.length) state.i = Math.min(Math.max(0, state.i | 0), LAYOUTS.length - 1);
@@ -270,6 +271,7 @@ function rng(seed) {
 function buildName() {
   const [W, H] = state.size.split(',').map(Number);
   const ballD = state.ballD;
+  const hollow = !!state.hollow;
   const wallT = 1.0, rimT = 2.0, floor = 0.8, cornerR = 4;
   const wallH = Math.max(2.5, ballD - 0.5);
   const clear = 1.5;                      // corridor = ball + this
@@ -282,6 +284,9 @@ function buildName() {
   const pitchX = corrX + wallT, pitchY = corrY + wallT;
   const x0 = -innerW / 2, y0 = -innerH / 2;
   const cellC = (c, r) => ({ x: x0 + c * pitchX + corrX / 2, y: y0 + r * pitchY + corrY / 2 });
+  const half = { x: W / 2, y: H / 2 };
+  const inset = 3.5, bossR = 3.0, holeR = 1.6;
+  const holes = [{ x: -half.x + inset, y: -half.y + inset }, { x: half.x - inset, y: -half.y + inset }, { x: half.x - inset, y: half.y - inset }, { x: -half.x + inset, y: half.y - inset }].map((p) => ({ ...p, r: holeR }));
 
   // The name as ink on a raster over the inner area, 0.2 mm per pixel.
   const res = 0.2;
@@ -294,59 +299,106 @@ function buildName() {
   if (text) {
     ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     let size = bandH / res;
-    ctx.font = `${state.weight} ${size}px ${state.font}`;
+    ctx.font = state.weight + ' ' + size + 'px ' + state.font;
     const m = ctx.measureText(text);
     const gw = Math.max(1, m.width), gh = Math.max(1, (m.actualBoundingBoxAscent || size * 0.7) + (m.actualBoundingBoxDescent || 0));
     size *= Math.min((bandW / res) / gw, (bandH / res) / gh);
-    ctx.font = `${state.weight} ${size}px ${state.font}`;
+    ctx.font = state.weight + ' ' + size + 'px ' + state.font;
     const m2 = ctx.measureText(text);
     const yOff = ((m2.actualBoundingBoxAscent || 0) - (m2.actualBoundingBoxDescent || 0)) / 2;
     ctx.fillText(text, pw / 2, ph / 2 + yOff);
   }
   const img = ctx.getImageData(0, 0, pw, ph).data;
-  const ink = new Uint8Array(pw * ph);
-  let inkPx = 0;
-  for (let i = 0; i < pw * ph; i++) if (img[i * 4] < 128) { ink[i] = 1; inkPx++; }
-  // Flip so row 0 is the bottom (canvas y is down, the tray's y is up).
-  const inkUp = new Uint8Array(pw * ph);
-  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) inkUp[y * pw + x] = ink[(ph - 1 - y) * pw + x];
-  const toPx = (p) => ({ x: (p.x - x0) / res, y: (p.y - y0) / res });
-  const inkAt = (p) => { const q = toPx(p); const x = Math.round(q.x), y = Math.round(q.y); return x >= 0 && y >= 0 && x < pw && y < ph && inkUp[y * pw + x]; };
-  // The ball's keep-out: anything within ball/2 + a little of the ink.
-  const keepR = ballD / 2 + 0.4;
-  const keepPx = Math.ceil(keepR / res);
-  const keep = new Uint8Array(pw * ph);
-  const offs = [];
-  for (let dy = -keepPx; dy <= keepPx; dy++) for (let dx = -keepPx; dx <= keepPx; dx++) if (dx * dx + dy * dy <= keepPx * keepPx) offs.push([dx, dy]);
-  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
-    if (!inkUp[y * pw + x]) continue;
-    // only edge pixels need to stamp
-    if (x > 0 && x < pw - 1 && y > 0 && y < ph - 1 && inkUp[y * pw + x - 1] && inkUp[y * pw + x + 1] && inkUp[(y - 1) * pw + x] && inkUp[(y + 1) * pw + x]) { keep[y * pw + x] = 1; continue; }
-    for (const [dx, dy] of offs) { const nx = x + dx, ny = y + dy; if (nx >= 0 && ny >= 0 && nx < pw && ny < ph) keep[ny * pw + nx] = 1; }
-  }
-  const keepAt = (p) => { const q = toPx(p); const x = Math.round(q.x), y = Math.round(q.y); return x >= 0 && y >= 0 && x < pw && y < ph && keep[y * pw + x]; };
-  const segClear = (a, b) => { const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (res * 2)); for (let i = 0; i <= n; i++) if (keepAt({ x: a.x + (b.x - a.x) * i / n, y: a.y + (b.y - a.y) * i / n })) return false; return true; };
+  const inkUp = new Uint8Array(pw * ph);   // row 0 at the bottom, as the tray's y is up
+  for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) inkUp[y * pw + x] = img[((ph - 1 - y) * pw + x) * 4] < 128 ? 1 : 0;
+  const idx = (x, y) => y * pw + x;
+  const inR = (x, y) => x >= 0 && y >= 0 && x < pw && y < ph;
+  const discOffs = (rPx) => { const o = []; for (let dy = -rPx; dy <= rPx; dy++) for (let dx = -rPx; dx <= rPx; dx++) if (dx * dx + dy * dy <= rPx * rPx) o.push([dx, dy]); return o; };
+  const isEdgeOf = (m, x, y) => m[idx(x, y)] && (x === 0 || y === 0 || x === pw - 1 || y === ph - 1 || !m[idx(x - 1, y)] || !m[idx(x + 1, y)] || !m[idx(x, y - 1)] || !m[idx(x, y + 1)]);
 
-  // Cells and passages.
+  // Hollow letters: only a band one wall thick along each letter's edge
+  // stands; the inside is floor the maze can use. Solid letters: all the ink.
+  let band = inkUp;
+  if (hollow) {
+    band = new Uint8Array(pw * ph);
+    const offs = discOffs(Math.ceil(wallT / res));
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+      if (!isEdgeOf(inkUp, x, y)) continue;
+      for (const [dx, dy] of offs) { const nx = x + dx, ny = y + dy; if (inR(nx, ny) && inkUp[idx(nx, ny)]) band[idx(nx, ny)] = 1; }
+    }
+  }
+  const toPx = (p) => ({ x: (p.x - x0) / res, y: (p.y - y0) / res });
+  const sampleAt = (m, p) => { const q = toPx(p); const x = Math.round(q.x), y = Math.round(q.y); return inR(x, y) && m[idx(x, y)]; };
+
+  // The ball's keep-out: anything within ball/2 + a little of a letter wall,
+  // and the same around the lid bosses in the corners, which is what let the
+  // first version route the finish into a corner the ball cannot enter.
+  const keepR = ballD / 2 + 0.4;
+  const keepBand = new Uint8Array(pw * ph);
+  {
+    const offs = discOffs(Math.ceil(keepR / res));
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+      if (!band[idx(x, y)]) continue;
+      if (!isEdgeOf(band, x, y)) { keepBand[idx(x, y)] = 1; continue; }
+      for (const [dx, dy] of offs) { const nx = x + dx, ny = y + dy; if (inR(nx, ny)) keepBand[idx(nx, ny)] = 1; }
+    }
+  }
+  const keepBoss = new Uint8Array(pw * ph);
+  {
+    const rPx = Math.ceil((bossR + keepR) / res);
+    for (const h of holes) {
+      const q = toPx(h);
+      for (let dy = -rPx; dy <= rPx; dy++) for (let dx = -rPx; dx <= rPx; dx++) {
+        if (dx * dx + dy * dy > rPx * rPx) continue;
+        const nx = Math.round(q.x) + dx, ny = Math.round(q.y) + dy;
+        if (inR(nx, ny)) keepBoss[idx(nx, ny)] = 1;
+      }
+    }
+  }
+  // A passage between two cells: the ball rolls centre to centre. Clear of
+  // the bosses always. Clear of the letter walls, or (hollow letters) across
+  // one wall band exactly once, in which case that band gets an opening.
+  const maxRun = wallT + 2 * keepR + 0.8;
+  const passage = (a, b) => {
+    const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (res * 2));
+    let runs = 0, run = 0, longest = 0;
+    for (let i = 0; i <= n; i++) {
+      const p = { x: a.x + (b.x - a.x) * i / n, y: a.y + (b.y - a.y) * i / n };
+      if (sampleAt(keepBoss, p)) return null;
+      if (sampleAt(keepBand, p)) { if (!run) runs++; run++; longest = Math.max(longest, run); }
+      else run = 0;
+    }
+    if (!runs) return { cut: false };
+    if (hollow && runs === 1 && longest * res * 2 <= maxRun) return { cut: true };
+    return null;
+  };
+
+  // Cells and the maze.
   const key = (c, r) => c + ',' + r;
   const usable = new Set();
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (!keepAt(cellC(c, r))) usable.add(key(c, r));
-  const canPass = (a, b) => usable.has(key(a.c, a.r)) && usable.has(key(b.c, b.r)) && segClear(cellC(a.c, a.r), cellC(b.c, b.r));
-  const wkey = (a, b) => (a.c < b.c || (a.c === b.c && a.r < b.r)) ? `${a.c},${a.r}|${b.c},${b.r}` : `${b.c},${b.r}|${a.c},${a.r}`;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const p = cellC(c, r); if (!sampleAt(keepBand, p) && !sampleAt(keepBoss, p)) usable.add(key(c, r)); }
+  const wkey = (a, b) => (a.c < b.c || (a.c === b.c && a.r < b.r)) ? a.c + ',' + a.r + '|' + b.c + ',' + b.r : b.c + ',' + b.r + '|' + a.c + ',' + a.r;
   const DIRS = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
-  // Start: the left column, nearest the middle row.
+  const inGrid = (n) => n.c >= 0 && n.r >= 0 && n.c < cols && n.r < rows;
   let start = null;
   for (let d = 0; d < rows && !start; d++) for (const r of [Math.floor(rows / 2) - d, Math.floor(rows / 2) + d]) if (r >= 0 && r < rows && usable.has(key(0, r))) { start = { c: 0, r }; break; }
   if (!start) start = { c: 0, r: 0 };
   const random = rng(state.seed);
-  const open = new Set(), reached = new Set([key(start.c, start.r)]);
+  const open = new Set(), reached = new Set([key(start.c, start.r)]), cuts = [];
   const stack = [start];
   while (stack.length) {
     const cur = stack[stack.length - 1];
-    const next = DIRS.map((d) => ({ c: cur.c + d.dc, r: cur.r + d.dr })).filter((n) => n.c >= 0 && n.r >= 0 && n.c < cols && n.r < rows && !reached.has(key(n.c, n.r)) && canPass(cur, n));
+    const next = [];
+    for (const d of DIRS) {
+      const n = { c: cur.c + d.dc, r: cur.r + d.dr };
+      if (!inGrid(n) || reached.has(key(n.c, n.r)) || !usable.has(key(n.c, n.r))) continue;
+      const p = passage(cellC(cur.c, cur.r), cellC(n.c, n.r));
+      if (p) next.push({ n, p });
+    }
     if (!next.length) { stack.pop(); continue; }
-    const n = next[Math.floor(random() * next.length)];
-    open.add(wkey(cur, n)); reached.add(key(n.c, n.r)); stack.push(n);
+    const pick = next[Math.floor(random() * next.length)];
+    open.add(wkey(cur, pick.n)); reached.add(key(pick.n.c, pick.n.r)); stack.push(pick.n);
+    if (pick.p.cut) cuts.push([cellC(cur.c, cur.r), cellC(pick.n.c, pick.n.r)]);
   }
   // Finish: on the right edge, the hardest to reach; else the hardest anywhere.
   const dist = new Map([[key(start.c, start.r), 0]]), prev = new Map();
@@ -366,13 +418,27 @@ function buildName() {
   for (let at = finish; at; at = prev.get(key(at.c, at.r))) solution.push(cellC(at.c, at.r));
   solution.reverse();
 
+  // Openings in the letter walls where the maze crosses them.
+  if (cuts.length) {
+    const cutR = ballD / 2 + 0.75;
+    for (const [a, b] of cuts) {
+      const pa = toPx(a), pb = toPx(b), rPx = cutR / res;
+      const xMin = Math.max(0, Math.floor(Math.min(pa.x, pb.x) - rPx)), xMax = Math.min(pw - 1, Math.ceil(Math.max(pa.x, pb.x) + rPx));
+      const yMin = Math.max(0, Math.floor(Math.min(pa.y, pb.y) - rPx)), yMax = Math.min(ph - 1, Math.ceil(Math.max(pa.y, pb.y) + rPx));
+      const dx = pb.x - pa.x, dy = pb.y - pa.y, L2 = dx * dx + dy * dy || 1;
+      for (let y = yMin; y <= yMax; y++) for (let x = xMin; x <= xMax; x++) {
+        if (!band[idx(x, y)]) continue;
+        const t = Math.max(0, Math.min(1, ((x - pa.x) * dx + (y - pa.y) * dy) / L2));
+        const ex = pa.x + dx * t - x, ey = pa.y + dy * t - y;
+        if (ex * ex + ey * ey <= rPx * rPx) band[idx(x, y)] = 0;
+      }
+    }
+  }
+
   // ---- meshes
   disposeTray();
   tray = new THREE.Group();
   const mat = trayMaterial();
-  const half = { x: W / 2, y: H / 2 };
-  const inset = 3.5, bossR = 3.0, holeR = 1.6;
-  const holes = [{ x: -half.x + inset, y: -half.y + inset }, { x: half.x - inset, y: -half.y + inset }, { x: half.x - inset, y: half.y - inset }, { x: -half.x + inset, y: half.y - inset }].map((p) => ({ ...p, r: holeR }));
   const sc = cellC(start.c, start.r), fc = cellC(finish.c, finish.r);
   const pocketR = (ballD + 1) / 2;
   const floorShape = roundedRect(-half.x, -half.y, half.x, half.y, cornerR);
@@ -387,8 +453,8 @@ function buildName() {
   for (const h of holes) { const b = new THREE.Shape(); b.absarc(h.x, h.y, bossR, 0, Math.PI * 2, false); b.holes.push(circlePath(h.x, h.y, h.r)); tray.add(extrude(b, wallH - 0.03, floor, mat)); }
 
   // Grid walls: between two reached cells, stand unless opened. Between a
-  // reached cell and anything else, stand unless a letter already sits there.
-  // Between two unreached cells, nothing: the letter, or solid fill, is there.
+  // reached cell and anything else, stand unless a letter wall already sits
+  // there. Between two unreached cells, nothing.
   let wallLen = 0;
   const wallSeg = (a, b, vertical) => {
     const ka = reached.has(key(a.c, a.r)), kb = reached.has(key(b.c, b.r));
@@ -396,7 +462,7 @@ function buildName() {
     if (ka && kb && open.has(wkey(a, b))) return;
     const ca = cellC(a.c, a.r), cb = cellC(b.c, b.r);
     const mid = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
-    if ((!ka || !kb) && inkAt(mid)) return;
+    if ((!ka || !kb) && sampleAt(band, mid)) return;
     if (vertical) { tray.add(box(mid.x, mid.y, wallT, corrY + wallT, floor, wallH, mat)); wallLen += corrY + wallT; }
     else { tray.add(box(mid.x, mid.y, corrX + wallT, wallT, floor, wallH, mat)); wallLen += corrX + wallT; }
   };
@@ -404,25 +470,35 @@ function buildName() {
     if (c + 1 < cols) wallSeg({ c, r }, { c: c + 1, r }, true);
     if (r + 1 < rows) wallSeg({ c, r }, { c, r: r + 1 }, false);
   }
-  // Unreached cells away from the letters: filled solid, so there is no
-  // pocket. Cells the letters block are left as floor under and around them.
+  // Unreached cells away from the letters and bosses: filled solid, so there
+  // is no pocket. Cells the letters block are left as floor.
   let fillArea = 0;
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
     if (reached.has(key(c, r))) continue;
     const p = cellC(c, r);
-    if (keepAt(p)) continue;
+    if (sampleAt(keepBand, p) || sampleAt(keepBoss, p)) continue;
     tray.add(box(p.x, p.y, corrX + wallT + 0.02, corrY + wallT + 0.02, floor, wallH, mat));
     fillArea += (corrX + wallT) * (corrY + wallT);
   }
-  // The letters, traced from the raster and smoothed.
-  const loops = maskContours(inkUp, pw, ph).map((loop) => decimate(smooth(loop.map((p) => ({ x: x0 + (p.x + 0.5) * res, y: y0 + (p.y + 0.5) * res })), 2), 0.3));
-  const outers = [], holesL = [];
-  for (const lp of loops) { if (lp.length < 3) continue; (loops.some((o) => o !== lp && o.length >= 3 && pointIn(lp[0], o) && area(o) > area(lp)) ? holesL : outers).push(lp); }
-  for (const o of outers) {
+  // The letters, traced from the raster and smoothed. A loop inside an odd
+  // number of other loops is a hole (the inside of a hollow letter's band,
+  // the counter of an A).
+  const loops = maskContours(band, pw, ph).map((loop) => decimate(smooth(loop.map((p) => ({ x: x0 + (p.x + 0.5) * res, y: y0 + (p.y + 0.5) * res })), 2), 0.3)).filter((l) => l.length >= 3);
+  const areas = loops.map(area);
+  const depth = loops.map((lp, i) => loops.reduce((n, o, j) => n + (j !== i && areas[j] > areas[i] && pointIn(lp[0], o) ? 1 : 0), 0));
+  let bandPx = 0;
+  for (let i = 0; i < band.length; i++) bandPx += band[i];
+  loops.forEach((o, i) => {
+    if (depth[i] % 2) return;
     const s = new THREE.Shape(o.map((p) => new THREE.Vector2(p.x, p.y)));
-    for (const h of holesL) if (pointIn(h[0], o)) s.holes.push(new THREE.Path(h.map((p) => new THREE.Vector2(p.x, p.y))));
+    loops.forEach((h, j) => {
+      if (depth[j] !== depth[i] + 1 || !pointIn(h[0], o)) return;
+      // the hole belongs to the smallest outer that contains it
+      const smaller = loops.some((k, m) => m !== i && depth[m] === depth[i] && areas[m] < areas[i] && pointIn(h[0], k));
+      if (!smaller) s.holes.push(new THREE.Path(h.map((p) => new THREE.Vector2(p.x, p.y))));
+    });
     tray.add(extrude(s, wallH, floor, mat));
-  }
+  });
   const L = { W, H, cornerR, floor, wallH, holes, startPocket: { x: sc.x, y: sc.y, r: pocketR }, pocketDepth, ballD, solution };
   addCommon(L, half, mat);
   world.add(tray);
@@ -430,21 +506,21 @@ function buildName() {
   // ---- the estimate
   const trayArea = W * H - (4 - Math.PI) * cornerR * cornerR;
   const floorVol = trayArea * floor;
-  const letterArea = inkPx * res * res;
+  const letterArea = bandPx * res * res;
   const rimLen = 2 * (W + H) - 8 * cornerR + 2 * Math.PI * (cornerR - rimT / 2);
   const wallVol = (rimLen * rimT + wallLen * wallT + letterArea + fillArea) * wallH;
   const flow = state.flow, overhead = 1.3, startup = 2.5;
   const fMin = floorVol / flow / 60 * overhead, wMin = wallVol / flow / 60 * overhead;
   const minutes = fMin + wMin + startup, grams = (floorVol + wallVol) * 1.24 / 1000;
-  stats([['Tray', `${W} × ${H} mm`], ['Corridor', `${Math.min(corrX, corrY).toFixed(1)} mm`], ['Rough print', `~${Math.round(minutes)} min`], ['Plastic', `~${grams.toFixed(0)} g`]]);
+  stats([['Tray', W + ' \u00d7 ' + H + ' mm'], ['Corridor', Math.min(corrX, corrY).toFixed(1) + ' mm'], ['Rough print', '~' + Math.round(minutes) + ' min'], ['Plastic', '~' + grams.toFixed(0) + ' g']]);
   const stroke = strokeEstimate(inkUp, pw, ph) * res;
   const warn = document.getElementById('warn');
   const problems = [];
-  if (text && stroke < 1.0) problems.push(`The letters' thinnest strokes are about ${stroke.toFixed(1)} mm, under the 1 mm a wall needs. Try a heavier font.`);
+  if (text && !hollow && stroke < 1.0) problems.push('The letters\u2019 thinnest strokes are about ' + stroke.toFixed(1) + ' mm, under the 1 mm a wall needs. Try a heavier font.');
   if (!finish || finish.c !== cols - 1) problems.push('The maze cannot reach the right edge; the finish is the farthest cell it can reach.');
   if (reached.size < usable.size * 0.6) problems.push('The name blocks most of the tray. A shorter name or a bigger tray gives more maze.');
   warn.hidden = !problems.length; warn.textContent = problems.join(' ');
-  document.getElementById('meta').textContent = `Single colour. ${cols}×${rows} cells on a ${pitchX.toFixed(1)} mm pitch, corridors ${corrX.toFixed(1)} × ${corrY.toFixed(1)} mm for a ${ballD} mm ball, walls ${wallT} mm thick × ${wallH} mm high on a ${floor} mm floor. ${reached.size} cells in play, route ${solution.length} cells. Seed ${state.seed}. Floor ~${fMin.toFixed(1)} min, walls and letters ~${wMin.toFixed(1)} min, start-up ~${startup} min at ${flow} mm³/s.`;
+  document.getElementById('meta').textContent = 'Single colour, ' + (hollow ? 'hollow letters with ' + cuts.length + ' openings' : 'solid letters') + '. ' + cols + '\u00d7' + rows + ' cells on a ' + pitchX.toFixed(1) + ' mm pitch, corridors ' + corrX.toFixed(1) + ' \u00d7 ' + corrY.toFixed(1) + ' mm for a ' + ballD + ' mm ball, walls ' + wallT + ' mm thick \u00d7 ' + wallH + ' mm high on a ' + floor + ' mm floor. ' + reached.size + ' cells in play, route ' + solution.length + ' cells. Seed ' + state.seed + '. Floor ~' + fMin.toFixed(1) + ' min, walls and letters ~' + wMin.toFixed(1) + ' min, start-up ~' + startup + ' min at ' + flow + ' mm\u00b3/s.';
 }
 
 // ---- version 1: the square with the initial in the chamber -----------------
@@ -635,7 +711,7 @@ function swatches(id, list, keyName) {
 }
 swatches('traySw', TRAYS, 'tray');
 swatches('inkSw', INKS, 'ink');
-for (const [id, k] of [['showLid', 'lid'], ['showBall', 'ball'], ['showPath', 'path']]) {
+for (const [id, k] of [['showLid', 'lid'], ['showBall', 'ball'], ['showPath', 'path'], ['hollow', 'hollow']]) {
   const cb = document.getElementById(id);
   cb.checked = !!state[k];
   cb.addEventListener('change', () => { state[k] = cb.checked; save(); build(); });
