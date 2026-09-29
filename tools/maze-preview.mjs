@@ -21,9 +21,10 @@ const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0
 
 const cfg = loadConfig();
 cfg.maze = { ...(cfg.maze || {}) };
-for (const [flag, k] of [['size', 'outerSize'], ['cells', 'cells'], ['chamber', 'chamberCells'], ['wall', 'wallThickness'], ['rim', 'rimThickness'], ['height', 'wallHeight'], ['floor', 'floorThickness'], ['layer', 'layerHeight'], ['flow', 'maxVolumetricMmps']]) {
+for (const [flag, k] of [['size', 'outerSize'], ['cells', 'cells'], ['chamber', 'chamberCells'], ['wall', 'wallThickness'], ['rim', 'rimThickness'], ['height', 'wallHeight'], ['floor', 'floorThickness'], ['layer', 'layerHeight'], ['flow', 'maxVolumetricMmps'], ['ball', 'ballDiameter'], ['boss', 'lid.bossRadius'], ['inset', 'lid.holeInset']]) {
   const v = opt(flag, null);
-  if (v != null) cfg.maze[k] = parseFloat(v);
+  if (v == null) continue;
+  if (k.startsWith('lid.')) { cfg.maze.lid = { ...(cfg.maze.lid || {}), [k.slice(4)]: parseFloat(v) }; } else cfg.maze[k] = parseFloat(v);
 }
 
 const name = opt('name', null);
