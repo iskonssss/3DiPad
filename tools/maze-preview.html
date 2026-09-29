@@ -1,0 +1,337 @@
+<title>Name Maze Tray</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100,400;100,600;100,800&display=swap">
+<style>
+  :root {
+    --bg: #eef1f5; --panel: #ffffff; --ink: #171b22; --muted: #5d6675; --line: #d6dbe3;
+    --tray: #3b8fd9; --accent: #e9b929; --btn: #171b22; --btn-ink: #ffffff;
+    --font: "Archivo", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #12151a; --panel: #1b2027; --ink: #eef1f5; --muted: #98a2b1; --line: #2c333d; --btn: #eef1f5; --btn-ink: #12151a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #12151a; --panel: #1b2027; --ink: #eef1f5; --muted: #98a2b1; --line: #2c333d; --btn: #eef1f5; --btn-ink: #12151a;
+  }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; }
+  .app { display: grid; grid-template-columns: 1fr 300px; height: 100%; }
+  .view { position: relative; min-width: 0; min-height: 320px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  .stats { position: absolute; left: 16px; top: 16px; display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-variant-numeric: tabular-nums; }
+  .stat b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .stat span { font-size: 16px; font-weight: 600; }
+  .rail { background: var(--panel); border-left: 1px solid var(--line); padding: 20px 16px; padding-block: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: -.01em; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 4px 0 0; line-height: 1.4; }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  input[type=text], select { font: inherit; font-family: var(--font); font-size: 15px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; text-transform: none; letter-spacing: 0; }
+  input[type=text]:focus, select:focus, button:focus-visible { outline: 2px solid var(--tray); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .toggles { display: flex; flex-direction: column; gap: 8px; }
+  .toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; font-size: 14px; color: var(--ink); text-transform: none; letter-spacing: 0; font-weight: 500; cursor: pointer; }
+  .toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--tray); }
+  button { font: inherit; font-family: var(--font); font-weight: 700; font-size: 14px; padding: 10px 14px; border-radius: 8px; border: 0; background: var(--btn); color: var(--btn-ink); cursor: pointer; }
+  button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .colours { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+  .sw[aria-pressed="true"] { border-color: var(--ink); }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+  .note code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: minmax(340px, 55vh) auto; height: auto; min-height: 100%; }
+    .rail { border-left: 0; border-top: 1px solid var(--line); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <div class="view">
+    <canvas id="c" tabindex="0" aria-label="3D view of the maze tray. Drag to rotate, pinch or scroll to zoom."></canvas>
+    <div class="stats" id="stats"></div>
+  </div>
+  <aside class="rail">
+    <div>
+      <h1>Name Maze Tray</h1>
+      <p class="sub">Drag to turn it, pinch or scroll to zoom. Numbers are the layout's rough estimate, not a sliced file.</p>
+    </div>
+    <label>Letter
+      <input type="text" id="letter" maxlength="3" autocomplete="off" spellcheck="false">
+    </label>
+    <label>Font
+      <select id="font">
+        <option value="'Arial Black', 'Archivo', sans-serif" data-w="900">Arial Black</option>
+        <option value="Impact, 'Archivo', sans-serif" data-w="400">Impact</option>
+        <option value="'Archivo', sans-serif" data-w="800">Archivo Bold</option>
+        <option value="Georgia, 'Times New Roman', serif" data-w="700">Georgia</option>
+        <option value="'Comic Sans MS', 'Chalkboard SE', cursive" data-w="700">Comic Sans</option>
+        <option value="'Courier New', monospace" data-w="700">Courier</option>
+        <option value="Verdana, sans-serif" data-w="700">Verdana</option>
+        <option value="'Trebuchet MS', sans-serif" data-w="700">Trebuchet</option>
+      </select>
+    </label>
+    <div class="row">
+      <button id="prev" class="quiet" type="button">Previous maze</button>
+      <button id="next" type="button">Next maze</button>
+    </div>
+    <div class="colours">
+      <label>Tray
+        <div class="swatches" id="traySw"></div>
+      </label>
+      <label>Letter
+        <div class="swatches" id="inkSw"></div>
+      </label>
+    </div>
+    <div class="toggles">
+      <label class="toggle"><input type="checkbox" id="showLid"> Acrylic lid</label>
+      <label class="toggle"><input type="checkbox" id="showBall" checked> Ball in the start dimple</label>
+      <label class="toggle"><input type="checkbox" id="showPath"> Show the solution</label>
+    </div>
+    <div class="row">
+      <button id="viewTop" class="quiet" type="button">Top view</button>
+      <button id="viewIso" class="quiet" type="button">Angled view</button>
+    </div>
+    <p class="note">The four corner holes take the laser-cut lid. The letter is a colour swap in the chamber floor. Start is the dimple bottom-left; finish is the chamber.</p>
+    <p class="note" id="meta"></p>
+  </aside>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const LAYOUTS = /*__LAYOUTS__*/null;
+const TRAYS = ['#3b8fd9', '#e8443a', '#f2c230', '#2fbf71', '#f06aa8', '#8e5bd6', '#f4f4f4', '#1f2329'];
+const INKS = ['#171b22', '#ffffff', '#e8443a', '#f2c230', '#3b8fd9', '#2fbf71'];
+
+const state = { i: 0, letter: '', font: null, weight: '900', tray: TRAYS[0], ink: INKS[0], lid: false, ball: true, path: false };
+try { const saved = JSON.parse(localStorage.getItem('maze-preview') || '{}'); Object.assign(state, saved); } catch {}
+state.i = Math.min(Math.max(0, state.i | 0), LAYOUTS.length - 1);
+const fontSel = document.getElementById('font');
+if (!state.font) { state.font = fontSel.options[0].value; state.weight = fontSel.options[0].dataset.w; }
+if (!state.letter) state.letter = LAYOUTS[0].letter || 'M';
+function save() { try { localStorage.setItem('maze-preview', JSON.stringify(state)); } catch {} }
+
+// ---- scene -----------------------------------------------------------------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 1, 2000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI / 2 - 0.02;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(-90, 160, 110);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -120;
+sun.shadow.camera.right = sun.shadow.camera.top = 120;
+sun.shadow.camera.near = 10; sun.shadow.camera.far = 500;
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.ShadowMaterial({ opacity: 0.18 }));
+ground.rotation.x = -Math.PI / 2; ground.position.y = -0.01; ground.receiveShadow = true;
+scene.add(ground);
+
+// The tray is built in XY with Z up (mm, as the layout is), then this group
+// turns it so three.js's Y is up.
+const world = new THREE.Group();
+world.rotation.x = -Math.PI / 2;
+scene.add(world);
+let tray = null;
+
+function roundedRect(x0, y0, x1, y1, r) {
+  const s = new THREE.Shape();
+  s.moveTo(x0 + r, y0);
+  s.lineTo(x1 - r, y0); s.absarc(x1 - r, y0 + r, r, -Math.PI / 2, 0, false);
+  s.lineTo(x1, y1 - r); s.absarc(x1 - r, y1 - r, r, 0, Math.PI / 2, false);
+  s.lineTo(x0 + r, y1); s.absarc(x0 + r, y1 - r, r, Math.PI / 2, Math.PI, false);
+  s.lineTo(x0, y0 + r); s.absarc(x0 + r, y0 + r, r, Math.PI, Math.PI * 1.5, false);
+  s.closePath();
+  return s;
+}
+function circlePath(cx, cy, r) { const p = new THREE.Path(); p.absarc(cx, cy, r, 0, Math.PI * 2, true); return p; }
+function extrude(shape, depth, z, mat, shadow = true) {
+  const g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 24 });
+  const m = new THREE.Mesh(g, mat);
+  m.position.z = z; m.castShadow = shadow; m.receiveShadow = true;
+  return m;
+}
+
+function letterTexture(L, text, font, weight, ink) {
+  const w = L.letterRect.x1 - L.letterRect.x0, h = L.letterRect.y1 - L.letterRect.y0;
+  const px = 24;   // texels per mm
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(w * px); cv.height = Math.round(h * px);
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = ink;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // Fit: the glyph box fills the chamber floor less its margin, whichever way is tighter.
+  let size = cv.height;
+  ctx.font = `${weight} ${size}px ${font}`;
+  const m = ctx.measureText(text || ' ');
+  const glyphW = Math.max(1, m.width);
+  const glyphH = Math.max(1, (m.actualBoundingBoxAscent || size * 0.7) + (m.actualBoundingBoxDescent || 0));
+  size = size * Math.min(cv.width * 0.96 / glyphW, cv.height * 0.96 / glyphH);
+  ctx.font = `${weight} ${size}px ${font}`;
+  const m2 = ctx.measureText(text || ' ');
+  const yOff = ((m2.actualBoundingBoxAscent || 0) - (m2.actualBoundingBoxDescent || 0)) / 2;
+  ctx.fillText(text, cv.width / 2, cv.height / 2 + yOff);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+function build() {
+  if (tray) { world.remove(tray); tray.traverse((o) => { o.geometry?.dispose?.(); o.material?.map?.dispose?.(); o.material?.dispose?.(); }); }
+  const L = LAYOUTS[state.i];
+  tray = new THREE.Group();
+  const trayMat = new THREE.MeshStandardMaterial({ color: state.tray, roughness: 0.55, metalness: 0.0 });
+  const half = L.outer / 2;
+
+  // floor, with the lid holes and the start dimple through its top
+  const floorShape = roundedRect(-half, -half, half, half, L.cornerR);
+  if (L.lid.throughFloor) for (const h of L.holes) floorShape.holes.push(circlePath(h.x, h.y, h.r));
+  floorShape.holes.push(circlePath(L.startPocket.x, L.startPocket.y, L.startPocket.r));
+  tray.add(extrude(floorShape, L.floor, 0, trayMat));
+  const dimpleFloor = new THREE.Shape(); dimpleFloor.absarc(L.startPocket.x, L.startPocket.y, L.startPocket.r, 0, Math.PI * 2, false);
+  tray.add(extrude(dimpleFloor, Math.max(0.2, L.floor - L.pocketDepth), 0, trayMat, false));
+
+  // rim
+  const rim = roundedRect(-half, -half, half, half, L.cornerR);
+  rim.holes.push(roundedRect(-half + L.rimT, -half + L.rimT, half - L.rimT, half - L.rimT, Math.max(0.2, L.cornerR - L.rimT)));
+  tray.add(extrude(rim, L.wallH, L.floor, trayMat));
+
+  // corner bosses with the lid holes
+  for (const h of L.holes) {
+    const b = new THREE.Shape(); b.absarc(h.x, h.y, L.lid.bossR, 0, Math.PI * 2, false);
+    b.holes.push(circlePath(h.x, h.y, h.r));
+    tray.add(extrude(b, L.wallH - 0.03, L.floor, trayMat));
+  }
+
+  // inner walls
+  const wallGeoV = new THREE.BoxGeometry(L.wallT, 1, L.wallH);
+  for (const w of L.walls) {
+    const len = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+    const g = new THREE.BoxGeometry(w.dir === 'v' ? L.wallT : len, w.dir === 'v' ? len : L.wallT, L.wallH);
+    const m = new THREE.Mesh(g, trayMat);
+    m.position.set((w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2, L.floor + L.wallH / 2);
+    m.castShadow = true; m.receiveShadow = true;
+    tray.add(m);
+  }
+  wallGeoV.dispose();
+
+  // the letter, inlaid flush in the chamber floor
+  const lr = L.letterRect;
+  const tex = letterTexture(L, state.letter, state.font, state.weight, state.ink);
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(lr.x1 - lr.x0, lr.y1 - lr.y0), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2 }));
+  plane.position.set((lr.x0 + lr.x1) / 2, (lr.y0 + lr.y1) / 2, L.floor + 0.02);
+  plane.receiveShadow = true;
+  tray.add(plane);
+
+  // the ball
+  if (state.ball) {
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(L.ball / 2, 32, 24), new THREE.MeshStandardMaterial({ color: 0xd9dde3, metalness: 0.9, roughness: 0.25 }));
+    ball.position.set(L.startPocket.x, L.startPocket.y, L.floor - L.pocketDepth + L.ball / 2);
+    ball.castShadow = true;
+    tray.add(ball);
+  }
+
+  // the solution, floating just above the floor
+  if (state.path && L.solution.length > 1) {
+    const pts = L.solution.map((p) => new THREE.Vector3(p.x, p.y, L.floor + 1.2));
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, pts.length * 4, 0.6, 8, false), new THREE.MeshStandardMaterial({ color: 0xe9b929, roughness: 0.5 }));
+    tray.add(tube);
+  }
+
+  // the acrylic lid
+  if (state.lid) {
+    const lid = roundedRect(-half, -half, half, half, L.cornerR);
+    for (const h of L.holes) lid.holes.push(circlePath(h.x, h.y, h.r));
+    const acrylic = new THREE.MeshPhysicalMaterial({ color: 0xdff3ff, transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0, transmission: 0.4, thickness: 3, side: THREE.DoubleSide });
+    tray.add(extrude(lid, 3, L.floor + L.wallH + 0.1, acrylic, false));
+  }
+
+  world.add(tray);
+  stats(L);
+}
+
+function stats(L) {
+  const el = document.getElementById('stats');
+  const s = (k, v) => `<div class="stat"><b>${k}</b><span>${v}</span></div>`;
+  el.innerHTML = s('Tray', `${L.outer} mm`) + s('Corridor', `${L.corridor.toFixed(1)} mm`) + s('Rough print', `~${Math.round(L.rough.minutes)} min`) + s('Plastic', `~${Math.round(L.rough.grams)} g`);
+  document.getElementById('meta').textContent = `Maze ${state.i + 1} of ${LAYOUTS.length}, seed ${L.seed}. ${L.cells}×${L.cells} cells, ${L.chamber}×${L.chamber} chamber, walls ${L.wallT} mm × ${L.wallH} mm high on a ${L.floor} mm floor, ${L.layerH} mm layers. Chamber opens on the ${L.finishSide}. Estimate assumes ${L.rough.flow} mm³/s.`;
+}
+
+// ---- views & resize --------------------------------------------------------
+function view(kind) {
+  const L = LAYOUTS[state.i];
+  const d = L.outer;
+  if (kind === 'top') { camera.position.set(0, d * 2.1, 0.001); }
+  else { camera.position.set(-d * 0.9, d * 1.25, d * 1.35); }
+  controls.target.set(0, 3, 0);
+  controls.update();
+}
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  const w = Math.max(1, Math.floor(r.width)), h = Math.max(1, Math.floor(r.height));
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+resize();
+view('iso');
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+// ---- controls --------------------------------------------------------------
+const letterIn = document.getElementById('letter');
+letterIn.value = state.letter;
+letterIn.addEventListener('input', () => { state.letter = letterIn.value.toUpperCase().slice(0, 3) || ' '; letterIn.value = state.letter.trim(); save(); build(); });
+for (const o of fontSel.options) if (o.value === state.font) fontSel.value = o.value;
+fontSel.addEventListener('change', () => { const o = fontSel.selectedOptions[0]; state.font = o.value; state.weight = o.dataset.w; save(); build(); });
+document.getElementById('next').addEventListener('click', () => { state.i = (state.i + 1) % LAYOUTS.length; save(); build(); });
+document.getElementById('prev').addEventListener('click', () => { state.i = (state.i - 1 + LAYOUTS.length) % LAYOUTS.length; save(); build(); });
+function swatches(id, list, key) {
+  const el = document.getElementById(id);
+  el.innerHTML = '';
+  for (const c of list) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sw'; b.style.background = c; b.setAttribute('aria-label', c); b.setAttribute('aria-pressed', String(state[key] === c));
+    b.addEventListener('click', () => { state[key] = c; save(); swatches(id, list, key); build(); });
+    el.appendChild(b);
+  }
+}
+swatches('traySw', TRAYS, 'tray');
+swatches('inkSw', INKS, 'ink');
+for (const [id, key] of [['showLid', 'lid'], ['showBall', 'ball'], ['showPath', 'path']]) {
+  const cb = document.getElementById(id);
+  cb.checked = !!state[key];
+  cb.addEventListener('change', () => { state[key] = cb.checked; save(); build(); });
+}
+document.getElementById('viewTop').addEventListener('click', () => view('top'));
+document.getElementById('viewIso').addEventListener('click', () => view('iso'));
+
+document.fonts?.ready?.then(() => build());
+build();
+</script>

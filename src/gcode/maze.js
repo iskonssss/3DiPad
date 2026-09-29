@@ -447,3 +447,26 @@ export function mazeSvg(layout, { solution = true } = {}) {
   out.push('</svg>');
   return out.join('\n');
 }
+
+/**
+ * The layout as plain data for a preview page: every mm number it needs to
+ * draw the tray in 3D, none of the Sets and closures.
+ */
+export function mazeLayoutJson(layout, cfg = {}) {
+  const sp = layout.spec;
+  const t = mazeRoughMinutes(layout, cfg);
+  const c = (cell) => layout.cellCentre(cell.c, cell.r);
+  return {
+    letter: layout.letter, seed: layout.seed,
+    outer: sp.outer, cornerR: sp.cornerR, rimT: sp.rimT, wallT: sp.wallT, cells: sp.cells, chamber: sp.chamber, corridor: +sp.corridor.toFixed(3),
+    floor: sp.floor, wallH: sp.wallH, layerH: sp.layerH, ball: sp.ball,
+    pocketDepth: sp.pocketLayers * sp.layerH, colourLayers: sp.colourLayers,
+    lid: { ...sp.lid },
+    walls: layout.walls.map((w) => ({ a: w.a, b: w.b, dir: w.dir })),
+    chamberRect: layout.chamberRect, letterRect: letterRect(layout), holes: layout.holes, startPocket: layout.startPocket,
+    start: c(layout.start), finish: c(layout.finish), into: c(layout.finish.into), finishSide: layout.finish.side,
+    solution: [...layout.solution, layout.finish.into].map(c),
+    innerWallMm: Math.round(layout.innerWallLength),
+    rough: { minutes: +t.minutes.toFixed(1), floorMinutes: +t.floorMinutes.toFixed(1), wallMinutes: +t.wallMinutes.toFixed(1), grams: +t.grams.toFixed(1), flow: sp.maxFlow },
+  };
+}

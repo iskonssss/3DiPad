@@ -5,13 +5,16 @@
 //   node tools/maze-preview.mjs --name Kiara       # seed from the name
 //   node tools/maze-preview.mjs --size 100 --cells 9 --chamber 3
 //   node tools/maze-preview.mjs --sizes 80,100,120 # a table of rough times, no SVG
+//   node tools/maze-preview.mjs --html --seeds 1,2,3,4,5,6   # a 3D preview page too
 //
-// Writes output/maze_<letter>_<seed>.svg.
+// Writes output/maze_<letter>_<seed>.svg, and with --html a page
+// output/maze_<letter>_<seed>.html (from tools/maze-preview.html) that draws
+// the tray in 3D with the letter in a chosen font, one maze per listed seed.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, root } from '../src/config.js';
-import { mazeLayout, mazeSvg, mazeRoughMinutes, seedFrom } from '../src/gcode/maze.js';
+import { mazeLayout, mazeSvg, mazeRoughMinutes, mazeLayoutJson, seedFrom } from '../src/gcode/maze.js';
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0 && args[i + 1] != null ? args[i + 1] : dflt; };
@@ -55,3 +58,13 @@ console.log(JSON.stringify({
   rough: { minutes: +t.minutes.toFixed(1), floorMinutes: +t.floorMinutes.toFixed(1), wallMinutes: +t.wallMinutes.toFixed(1), grams: +t.grams.toFixed(1) },
 }, null, 2));
 console.log(`wrote ${path.relative(root, file)}`);
+
+if (args.includes('--html')) {
+  const seeds = opt('seeds', String(seed)).split(',').map((v) => parseInt(v, 10)).filter((v) => Number.isFinite(v));
+  const layouts = seeds.map((sd) => mazeLayoutJson(mazeLayout(cfg, { seed: sd, letter }), cfg));
+  const tpl = fs.readFileSync(path.join(root, 'tools', 'maze-preview.html'), 'utf8');
+  const page = tpl.replace('/*__LAYOUTS__*/null', JSON.stringify(layouts));
+  const html = path.join(outDir, `maze_${letter}_${seed}.html`);
+  fs.writeFileSync(html, page);
+  console.log(`wrote ${path.relative(root, html)}  (${layouts.length} maze${layouts.length === 1 ? '' : 's'})`);
+}
